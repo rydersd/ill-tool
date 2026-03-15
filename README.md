@@ -4,6 +4,9 @@
   <img src="https://img.shields.io/badge/Claude-Compatible-orange?style=for-the-badge&logo=anthropic&logoColor=white" alt="Claude Compatible"/>
   <img src="https://img.shields.io/badge/Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Windows"/>
   <img src="https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python"/>
+  <br/>
+  <a href="https://pypi.org/project/adobe-mcp/"><img src="https://img.shields.io/pypi/v/adobe-mcp?style=for-the-badge&logo=pypi&logoColor=white&label=PyPI" alt="PyPI"/></a>
+  <a href="https://www.npmjs.com/package/adobe-mcp"><img src="https://img.shields.io/npm/v/adobe-mcp?style=for-the-badge&logo=npm&logoColor=white&label=npm" alt="npm"/></a>
 </p>
 
 <h1 align="center">Adobe MCP Server</h1>
@@ -68,50 +71,105 @@
 
 ## Installation
 
-### Automatic (Recommended)
+### One-Command Install
 
-```powershell
-# 1. Clone the repo
-git clone https://github.com/VoidChecksum/adobe-mcp.git
-cd adobe-mcp
-
-# 2. Run the installer — auto-detects Python, configures both Claude clients
-powershell -ExecutionPolicy Bypass -File install.ps1
-```
-
-> **Restart** Claude Code CLI and/or Claude Desktop App after installation.
-
-### Manual Setup
-
-**Install Python dependencies:**
 ```bash
-pip install "mcp[cli]" pydantic httpx
+# pip (recommended)
+pip install adobe-mcp
+
+# or npx (zero install, auto-creates venv)
+npx adobe-mcp
+
+# or npm global
+npm install -g adobe-mcp
 ```
 
-**Claude Code CLI** — add to `~/.claude/settings.json`:
+### Auto-Configure CLI Tools
+
+After installing via pip, run the setup script to auto-configure all detected CLI tools:
+
+**Windows (PowerShell):**
+```powershell
+# Auto-detects and configures Claude Code, Codex CLI, and Gemini CLI
+powershell -ExecutionPolicy Bypass -File setup-cli.ps1
+```
+
+**Linux / macOS:**
+```bash
+./setup-cli.sh
+```
+
+Or configure each CLI manually:
+
+<details>
+<summary><b>Claude Code CLI</b></summary>
+
+```bash
+claude mcp add adobe-mcp -- python -m adobe_mcp
+```
+
+Or add to `~/.claude.json`:
 ```json
 {
   "mcpServers": {
-    "adobe_mcp": {
+    "adobe-mcp": {
       "command": "python",
-      "args": ["C:\\path\\to\\adobe-mcp\\adobe_mcp.py"]
+      "args": ["-m", "adobe_mcp"]
     }
   }
 }
 ```
+</details>
 
-**Claude Desktop App** — add to `%APPDATA%\Claude\claude_desktop_config.json`:
+<details>
+<summary><b>Claude Desktop App</b></summary>
+
+Add to `%APPDATA%\Claude\claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
-    "adobe_mcp": {
+    "adobe-mcp": {
       "command": "python",
-      "args": ["C:\\path\\to\\adobe-mcp\\adobe_mcp.py"],
-      "env": {}
+      "args": ["-m", "adobe_mcp"]
     }
   }
 }
 ```
+</details>
+
+<details>
+<summary><b>Codex CLI</b></summary>
+
+Add to `~/.codex/config.json`:
+```json
+{
+  "mcpServers": {
+    "adobe-mcp": {
+      "command": "python",
+      "args": ["-m", "adobe_mcp"]
+    }
+  }
+}
+```
+</details>
+
+<details>
+<summary><b>Gemini CLI</b></summary>
+
+Add to `~/.gemini/settings.json`:
+```json
+{
+  "mcpServers": {
+    "adobe-mcp": {
+      "command": "python",
+      "args": ["-m", "adobe_mcp"]
+    }
+  }
+}
+```
+</details>
+
+> **Restart** your CLI tool after configuration.
 
 ---
 

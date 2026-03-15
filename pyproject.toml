@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "adobe-mcp"
+version = "0.1.0"
+description = "Full Creative Cloud automation for Claude via the Model Context Protocol"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    { name = "VoidChecksum" },
+]
+keywords = ["mcp", "adobe", "creative-cloud", "photoshop", "illustrator", "premiere-pro", "claude"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+    "mcp>=1.0.0",
+    "pydantic>=2.0.0",
+    "httpx>=0.25.0",
+]
+
+[project.scripts]
+adobe-mcp = "adobe_mcp.server:main"
+
+[project.entry-points."mcp.servers"]
+adobe-mcp = "adobe_mcp.server"
+
+[project.urls]
+Homepage = "https://github.com/VoidChecksum/adobe-mcp"
+Repository = "https://github.com/VoidChecksum/adobe-mcp"
+
+[tool.setuptools.packages.find]
+where = ["src"]
