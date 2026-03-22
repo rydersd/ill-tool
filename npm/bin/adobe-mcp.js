@@ -25,7 +25,7 @@ const path = require("path");
 
 const CACHE_DIR = path.join(os.homedir(), ".cache", "adobe-mcp");
 const VENV_DIR = path.join(CACHE_DIR, "venv");
-const SERVER_PY = path.join(__dirname, "..", "server", "adobe_mcp.py");
+const SERVER_DIR = path.join(__dirname, "..", "server");
 const PIP_DEPS = ["mcp>=1.0.0", "pydantic>=2.0.0", "httpx>=0.25.0"];
 const MIN_PYTHON = [3, 10];
 
@@ -235,10 +235,11 @@ function main() {
     );
   }
 
-  // 2. Verify server script exists
-  if (!fs.existsSync(SERVER_PY)) {
+  // 2. Verify server package exists
+  const serverPkg = path.join(SERVER_DIR, "adobe_mcp", "__init__.py");
+  if (!fs.existsSync(serverPkg)) {
     die(
-      `bundled server not found at ${SERVER_PY}\n` +
+      `bundled server package not found at ${SERVER_DIR}/adobe_mcp/\n` +
         "The npm package may be corrupted. Try reinstalling: npm install -g adobe-mcp"
     );
   }
@@ -249,9 +250,9 @@ function main() {
   // 4. Launch the MCP server — inherit stdio so MCP transport works
   log(`starting server (Python ${py.major}.${py.minor}) ...`);
 
-  const child = spawn(vpython, [SERVER_PY], {
+  const child = spawn(vpython, ["-m", "adobe_mcp"], {
     stdio: "inherit",
-    env: { ...process.env },
+    env: { ...process.env, PYTHONPATH: SERVER_DIR },
     windowsHide: true,
   });
 
