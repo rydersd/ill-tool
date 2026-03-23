@@ -10,10 +10,10 @@
     Installation:
         Run scripts/install-cep-panels.sh to symlink into the CEP extensions directory.
 -->
-<ExtensionManifest Version="12.0"
+<ExtensionManifest Version="7.0"
                    ExtensionBundleId="com.adobemcp.ai"
                    ExtensionBundleVersion="1.0.0"
-                   ExtensionBundleName="Adobe MCP Illustrator"
+                   ExtensionBundleName="ill_tool Illustrator"
                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
 
     <ExtensionList>
@@ -22,13 +22,13 @@
 
     <ExecutionEnvironment>
         <HostList>
-            <Host Name="ILST" Version="[29.0,99.9]" />
+            <Host Name="ILST" Version="[25.0,99.9]" />
         </HostList>
         <LocaleList>
             <Locale Code="All" />
         </LocaleList>
         <RequiredRuntimeList>
-            <RequiredRuntime Name="CSXS" Version="12.0" />
+            <RequiredRuntime Name="CSXS" Version="11.0" />
         </RequiredRuntimeList>
     </ExecutionEnvironment>
 
@@ -37,7 +37,7 @@
             <DispatchInfo>
                 <Resources>
                     <MainPath>./index.html</MainPath>
-                    <ScriptPath>../../shared/host/polyfills.jsx</ScriptPath>
+                    <!-- ScriptPath omitted — polyfills loaded by relay-client.js at runtime -->
                     <CEFCommandLine>
                         <Parameter>--allow-file-access-from-files</Parameter>
                     </CEFCommandLine>
@@ -50,7 +50,7 @@
                 </Lifecycle>
                 <UI>
                     <Type>Panel</Type>
-                    <Menu>Adobe MCP</Menu>
+                    <Menu>ill_tool</Menu>
                     <Geometry>
                         <Size>
                             <Height>200</Height>

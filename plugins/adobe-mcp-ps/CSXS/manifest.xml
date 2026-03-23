@@ -10,10 +10,10 @@
     Installation:
         Run scripts/install-cep-panels.sh to symlink into the CEP extensions directory.
 -->
-<ExtensionManifest Version="12.0"
+<ExtensionManifest Version="7.0"
                    ExtensionBundleId="com.adobemcp.ps"
                    ExtensionBundleVersion="1.0.0"
-                   ExtensionBundleName="Adobe MCP Photoshop"
+                   ExtensionBundleName="ill_tool Photoshop"
                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
 
     <ExtensionList>
@@ -31,7 +31,7 @@
             <Locale Code="All" />
         </LocaleList>
         <RequiredRuntimeList>
-            <RequiredRuntime Name="CSXS" Version="12.0" />
+            <RequiredRuntime Name="CSXS" Version="11.0" />
         </RequiredRuntimeList>
     </ExecutionEnvironment>
 
@@ -40,7 +40,7 @@
             <DispatchInfo>
                 <Resources>
                     <MainPath>./index.html</MainPath>
-                    <ScriptPath>../../shared/host/polyfills.jsx</ScriptPath>
+                    <!-- ScriptPath omitted — polyfills loaded by relay-client.js at runtime -->
                     <CEFCommandLine>
                         <Parameter>--allow-file-access-from-files</Parameter>
                     </CEFCommandLine>
@@ -53,7 +53,7 @@
                 </Lifecycle>
                 <UI>
                     <Type>Panel</Type>
-                    <Menu>Adobe MCP</Menu>
+                    <Menu>ill_tool</Menu>
                     <Geometry>
                         <Size>
                             <Height>200</Height>
