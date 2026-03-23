@@ -1,7 +1,7 @@
-"""Illustrator tools — 49 tools split by feature.
+"""Illustrator tools — 69 tools split by feature.
 
 Registration chain:
-    apps/__init__.py -> illustrator/__init__.py -> {new_document, shapes, text, paths, export, layers, modify, inspect, image_trace, analyze_reference, reference_underlay, vtrace, anchor_edit, silhouette, auto_correct, proportion_grid, style_transfer, shape_recipes, contour_to_path, smart_shape, bezier_optimize, curve_fit, artboard_from_ref, path_boolean, symmetry, layer_auto_organize, group_and_name, color_sampler, stroke_profiles, path_offset, path_weld, snap_to_grid, undo_checkpoint, reference_crop, drawing_orchestrator, skeleton_annotate, body_part_label, skeleton_build, part_bind, joint_rotate, pose_snapshot, pose_interpolate, ik_solver, onion_skin, character_template, pose_from_image, keyframe_timeline, motion_path, storyboard_panel}.py
+    apps/__init__.py -> illustrator/__init__.py -> {new_document, shapes, text, paths, export, layers, modify, inspect, image_trace, analyze_reference, reference_underlay, vtrace, anchor_edit, silhouette, auto_correct, proportion_grid, style_transfer, shape_recipes, contour_to_path, smart_shape, bezier_optimize, curve_fit, artboard_from_ref, path_boolean, symmetry, layer_auto_organize, group_and_name, color_sampler, stroke_profiles, path_offset, path_weld, snap_to_grid, undo_checkpoint, reference_crop, drawing_orchestrator, skeleton_annotate, body_part_label, skeleton_build, part_bind, joint_rotate, pose_snapshot, pose_interpolate, ik_solver, onion_skin, character_template, pose_from_image, keyframe_timeline, motion_path, storyboard_panel, scene_manager, background_layer, multi_character, shot_list_gen, beat_sheet, production_notes, continuity_check, asset_registry, pdf_export, animatic_preview, prop_manager, lighting_notation, transition_planner, audio_sync, sequence_assembler, rig_controllers, storyboard_template, panel_text, camera_notation, character_turnaround}.py
 """
 
 from adobe_mcp.apps.illustrator.new_document import register as _reg_new_document
@@ -53,10 +53,30 @@ from adobe_mcp.apps.illustrator.pose_from_image import register as _reg_pose_fro
 from adobe_mcp.apps.illustrator.keyframe_timeline import register as _reg_keyframe_timeline
 from adobe_mcp.apps.illustrator.motion_path import register as _reg_motion_path
 from adobe_mcp.apps.illustrator.storyboard_panel import register as _reg_storyboard_panel
+from adobe_mcp.apps.illustrator.scene_manager import register as _reg_scene_manager
+from adobe_mcp.apps.illustrator.background_layer import register as _reg_background_layer
+from adobe_mcp.apps.illustrator.multi_character import register as _reg_multi_character
+from adobe_mcp.apps.illustrator.shot_list_gen import register as _reg_shot_list_gen
+from adobe_mcp.apps.illustrator.beat_sheet import register as _reg_beat_sheet
+from adobe_mcp.apps.illustrator.production_notes import register as _reg_production_notes
+from adobe_mcp.apps.illustrator.continuity_check import register as _reg_continuity_check
+from adobe_mcp.apps.illustrator.asset_registry import register as _reg_asset_registry
+from adobe_mcp.apps.illustrator.pdf_export import register as _reg_pdf_export
+from adobe_mcp.apps.illustrator.animatic_preview import register as _reg_animatic_preview
+from adobe_mcp.apps.illustrator.prop_manager import register as _reg_prop_manager
+from adobe_mcp.apps.illustrator.lighting_notation import register as _reg_lighting_notation
+from adobe_mcp.apps.illustrator.transition_planner import register as _reg_transition_planner
+from adobe_mcp.apps.illustrator.audio_sync import register as _reg_audio_sync
+from adobe_mcp.apps.illustrator.sequence_assembler import register as _reg_sequence_assembler
+from adobe_mcp.apps.illustrator.rig_controllers import register as _reg_rig_controllers
+from adobe_mcp.apps.illustrator.storyboard_template import register as _reg_storyboard_template
+from adobe_mcp.apps.illustrator.panel_text import register as _reg_panel_text
+from adobe_mcp.apps.illustrator.camera_notation import register as _reg_camera_notation
+from adobe_mcp.apps.illustrator.character_turnaround import register as _reg_character_turnaround
 
 
 def register_illustrator_tools(mcp):
-    """Register all 49 Illustrator tools."""
+    """Register all 69 Illustrator tools."""
     _reg_new_document(mcp)
     _reg_shapes(mcp)
     _reg_text(mcp)
@@ -106,3 +126,23 @@ def register_illustrator_tools(mcp):
     _reg_keyframe_timeline(mcp)
     _reg_motion_path(mcp)
     _reg_storyboard_panel(mcp)
+    _reg_scene_manager(mcp)
+    _reg_background_layer(mcp)
+    _reg_multi_character(mcp)
+    _reg_shot_list_gen(mcp)
+    _reg_beat_sheet(mcp)
+    _reg_production_notes(mcp)
+    _reg_continuity_check(mcp)
+    _reg_asset_registry(mcp)
+    _reg_pdf_export(mcp)
+    _reg_animatic_preview(mcp)
+    _reg_prop_manager(mcp)
+    _reg_lighting_notation(mcp)
+    _reg_transition_planner(mcp)
+    _reg_audio_sync(mcp)
+    _reg_sequence_assembler(mcp)
+    _reg_rig_controllers(mcp)
+    _reg_storyboard_template(mcp)
+    _reg_panel_text(mcp)
+    _reg_camera_notation(mcp)
+    _reg_character_turnaround(mcp)

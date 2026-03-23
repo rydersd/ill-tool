@@ -536,3 +536,217 @@ class AiStoryboardPanelInput(BaseModel):
     description: Optional[str] = Field(default=None, description="Action/dialogue description for the panel")
     duration_frames: int = Field(default=24, description="Panel duration in frames", ge=1)
     character_name: str = Field(default="character", description="Character identifier")
+
+
+# ── Rig Controllers & Storyboard Pipeline Models ──────────────
+
+
+class AiRigControllersInput(BaseModel):
+    """Create visual control handles on skeleton joints for intuitive posing."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    action: str = Field(default="create", description="Action: create (generate controllers), update (refresh positions), clear (remove), list")
+    character_name: str = Field(default="character", description="Character identifier")
+    controller_style: str = Field(default="circle", description="Handle shape: circle, diamond, square, arrow")
+    controller_size: float = Field(default=12, description="Controller handle size in points", ge=4, le=50)
+    color_r: int = Field(default=255, ge=0, le=255, description="Controller color red")
+    color_g: int = Field(default=100, ge=0, le=255, description="Controller color green")
+    color_b: int = Field(default=0, ge=0, le=255, description="Controller color orange/blue")
+    show_labels: bool = Field(default=True, description="Show joint name labels next to controllers")
+
+
+class AiStoryboardTemplateInput(BaseModel):
+    """Create a storyboard template with configurable panel grid layout."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    action: str = Field(default="create", description="Action: create, clear, list_presets")
+    preset: str = Field(default="standard", description="Preset: standard (2x3), widescreen (2x2), vertical (1x4), cinematic (3x3), custom")
+    columns: int = Field(default=2, description="Columns for custom preset", ge=1, le=6)
+    rows: int = Field(default=3, description="Rows for custom preset", ge=1, le=8)
+    page_width: float = Field(default=792, description="Page width in points (792=11in)", ge=100)
+    page_height: float = Field(default=612, description="Page height in points (612=8.5in)", ge=100)
+    panel_ratio: str = Field(default="16:9", description="Panel aspect ratio: 16:9, 4:3, 2.39:1, 1:1, custom")
+    gutter: float = Field(default=18, description="Space between panels in points", ge=0)
+    margin: float = Field(default=36, description="Page margin in points", ge=0)
+    title: Optional[str] = Field(default=None, description="Storyboard title (shown at top)")
+    include_fields: bool = Field(default=True, description="Add description/dialogue/duration fields below each panel")
+
+
+class AiPanelTextInput(BaseModel):
+    """Add dialogue, action descriptions, and SFX text to storyboard panels."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    action: str = Field(default="set", description="Action: set (add/update text), clear, list")
+    panel_number: int = Field(..., description="Target panel number", ge=1)
+    text_type: str = Field(default="dialogue", description="Text type: dialogue, action, sfx, note")
+    text: Optional[str] = Field(default=None, description="Text content")
+    speaker: Optional[str] = Field(default=None, description="Speaker name for dialogue")
+
+
+class AiCameraNotationInput(BaseModel):
+    """Add camera movement notation (pan, zoom, truck, dolly) to storyboard panels."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    panel_number: int = Field(..., description="Target panel number", ge=1)
+    movement: str = Field(..., description="Camera movement: pan_left, pan_right, tilt_up, tilt_down, zoom_in, zoom_out, truck_left, truck_right, dolly_in, dolly_out, crane_up, crane_down, static, handheld")
+    intensity: str = Field(default="medium", description="Movement intensity: subtle, medium, dramatic")
+
+
+class AiCharacterTurnaroundInput(BaseModel):
+    """Generate front/side/3-4/back views from a rigged character."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    character_name: str = Field(default="character", description="Character identifier")
+    views: str = Field(default="front,3-4,side,back", description="Comma-separated views to generate")
+    spacing: float = Field(default=100, description="Horizontal spacing between views in points")
+    include_guidelines: bool = Field(default=True, description="Add horizontal proportion guidelines across views")
+
+
+class AiSceneManagerInput(BaseModel):
+    """Group storyboard panels into numbered scenes with headers."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    action: str = Field(default="create", description="Action: create, add_panel, remove_panel, reorder, list, delete")
+    scene_number: Optional[int] = Field(default=None, description="Scene number")
+    scene_name: Optional[str] = Field(default=None, description="Scene name/description")
+    panel_numbers: Optional[str] = Field(default=None, description="Comma-separated panel numbers to include")
+    location: Optional[str] = Field(default=None, description="Scene location (INT/EXT)")
+    time_of_day: Optional[str] = Field(default=None, description="Time: DAY, NIGHT, DAWN, DUSK")
+
+
+class AiBackgroundLayerInput(BaseModel):
+    """Set up a background/environment for a storyboard panel or scene."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    panel_number: Optional[int] = Field(default=None, description="Target panel (None=active artboard)")
+    bg_type: str = Field(default="solid", description="Background type: solid, gradient, image, none")
+    color_r: int = Field(default=230, ge=0, le=255)
+    color_g: int = Field(default=230, ge=0, le=255)
+    color_b: int = Field(default=230, ge=0, le=255)
+    gradient_end_r: Optional[int] = Field(default=None, ge=0, le=255)
+    gradient_end_g: Optional[int] = Field(default=None, ge=0, le=255)
+    gradient_end_b: Optional[int] = Field(default=None, ge=0, le=255)
+    image_path: Optional[str] = Field(default=None, description="Background image path for image type")
+    opacity: float = Field(default=100, description="Background opacity 0-100", ge=0, le=100)
+
+
+class AiMultiCharacterInput(BaseModel):
+    """Place multiple rigged characters in one panel with independent poses."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    action: str = Field(default="place", description="Action: place, repose, remove, list")
+    panel_number: int = Field(..., description="Target panel number", ge=1)
+    character_name: str = Field(..., description="Character to place")
+    pose_name: Optional[str] = Field(default=None, description="Pose to apply")
+    position_x: Optional[float] = Field(default=None, description="X position in panel")
+    position_y: Optional[float] = Field(default=None, description="Y position in panel")
+    scale: float = Field(default=100, description="Character scale percentage", ge=10, le=500)
+
+
+class AiShotListInput(BaseModel):
+    """Generate a production shot list from storyboard data."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    action: str = Field(default="generate", description="Action: generate, export_csv, export_json")
+    include_timing: bool = Field(default=True, description="Include duration and cumulative time")
+    include_camera: bool = Field(default=True, description="Include camera framing and movement")
+    include_notes: bool = Field(default=True, description="Include production notes")
+
+
+class AiBeatSheetInput(BaseModel):
+    """Map story beats to panel timing for narrative structure."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    action: str = Field(default="add", description="Action: add, remove, list, auto_assign")
+    beat_name: Optional[str] = Field(default=None, description="Beat name: opening, inciting_incident, rising_action, climax, resolution, etc.")
+    panel_number: Optional[int] = Field(default=None, description="Panel where this beat occurs", ge=1)
+    description: Optional[str] = Field(default=None, description="Beat description")
+
+
+class AiProductionNotesInput(BaseModel):
+    """Per-panel director's notes, technical requirements, and VFX flags."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    action: str = Field(default="set", description="Action: set, clear, list, export")
+    panel_number: int = Field(..., description="Target panel number", ge=1)
+    note_type: str = Field(default="direction", description="Note type: direction, vfx, audio, technical, continuity")
+    note: Optional[str] = Field(default=None, description="Note content")
+    priority: str = Field(default="normal", description="Priority: low, normal, high, critical")
+
+
+class AiContinuityCheckInput(BaseModel):
+    """Verify character appearance consistency across storyboard panels."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    character_name: str = Field(default="character", description="Character to check")
+    check_type: str = Field(default="full", description="Check type: full, colors_only, proportions_only, costume_only")
+
+
+class AiAssetRegistryInput(BaseModel):
+    """Track all characters, props, and backgrounds used in each panel."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    action: str = Field(default="register", description="Action: register, remove, list, list_by_panel, list_by_asset, summary")
+    asset_type: Optional[str] = Field(default=None, description="Asset type: character, prop, background, effect")
+    asset_name: Optional[str] = Field(default=None, description="Asset name/identifier")
+    panel_number: Optional[int] = Field(default=None, description="Panel number for register/remove", ge=1)
+
+
+class AiPdfExportInput(BaseModel):
+    """Export storyboard as formatted PDF with all annotations."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    output_path: str = Field(..., description="Output PDF file path")
+    include_descriptions: bool = Field(default=True, description="Include panel descriptions")
+    include_dialogue: bool = Field(default=True, description="Include dialogue text")
+    include_camera: bool = Field(default=True, description="Include camera notation")
+    include_timing: bool = Field(default=True, description="Include timing information")
+    include_notes: bool = Field(default=True, description="Include production notes")
+    layout: str = Field(default="panels", description="Layout: panels (grid), list (sequential), presentation (one per page)")
+
+
+class AiAnimaticPreviewInput(BaseModel):
+    """Generate an HTML-based panel timing preview (animatic without AE)."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    output_path: str = Field(default="", description="Output HTML path (auto-generated if empty)")
+    auto_play: bool = Field(default=True, description="Auto-play on open")
+    show_timing: bool = Field(default=True, description="Show timing bar")
+    show_descriptions: bool = Field(default=True, description="Show panel descriptions during playback")
+
+
+class AiPropManagerInput(BaseModel):
+    """Create, place, and track props that characters interact with."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    action: str = Field(default="create", description="Action: create, place, remove, list, attach_to_joint")
+    prop_name: str = Field(default="prop", description="Prop identifier")
+    panel_number: Optional[int] = Field(default=None, description="Panel to place prop in", ge=1)
+    x: Optional[float] = Field(default=None, description="X position")
+    y: Optional[float] = Field(default=None, description="Y position")
+    joint_name: Optional[str] = Field(default=None, description="Joint to attach prop to (for attach_to_joint)")
+    character_name: Optional[str] = Field(default=None, description="Character for joint attachment")
+    prop_path: Optional[str] = Field(default=None, description="Path to prop AI/SVG file for create")
+
+
+class AiLightingNotationInput(BaseModel):
+    """Add key/fill/rim light direction indicators to storyboard panels."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    panel_number: int = Field(..., description="Target panel number", ge=1)
+    action: str = Field(default="set", description="Action: set, clear")
+    key_direction: Optional[str] = Field(default=None, description="Key light: top_left, top_right, left, right, front, back")
+    fill_direction: Optional[str] = Field(default=None, description="Fill light direction")
+    rim: bool = Field(default=False, description="Add rim/back light indicator")
+    mood: Optional[str] = Field(default=None, description="Lighting mood: bright, moody, dramatic, silhouette, noir")
+
+
+class AiTransitionPlannerInput(BaseModel):
+    """Visual indicators for panel-to-panel transitions."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    panel_number: int = Field(..., description="Source panel number", ge=1)
+    transition: str = Field(default="cut", description="Transition: cut, dissolve, wipe_left, wipe_right, wipe_up, wipe_down, match_cut, smash_cut, fade_in, fade_out, iris")
+    duration_frames: int = Field(default=12, description="Transition duration in frames", ge=1)
+
+
+class AiAudioSyncInput(BaseModel):
+    """Dialogue timing, music cues, and SFX placement per panel."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    action: str = Field(default="add", description="Action: add, remove, list, export_markers")
+    panel_number: int = Field(..., description="Target panel number", ge=1)
+    cue_type: str = Field(default="dialogue", description="Cue type: dialogue, music, sfx, ambience")
+    cue_name: Optional[str] = Field(default=None, description="Cue identifier or description")
+    start_frame: int = Field(default=0, description="Start frame within the panel", ge=0)
+    duration_frames: Optional[int] = Field(default=None, description="Cue duration in frames")
+
+
+class AiSequenceAssemblerInput(BaseModel):
+    """Combine scenes into acts and complete sequences."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    action: str = Field(default="create_act", description="Action: create_act, add_scene, reorder, list, summary, export_outline")
+    act_number: Optional[int] = Field(default=None, description="Act number")
+    act_name: Optional[str] = Field(default=None, description="Act name (e.g. 'Setup', 'Confrontation', 'Resolution')")
+    scene_numbers: Optional[str] = Field(default=None, description="Comma-separated scene numbers to include")
