@@ -5,7 +5,7 @@ Split apps (premiere, aftereffects, illustrator, photoshop) have per-feature fil
 Flat apps (common, indesign, animate, media_encoder) use a single tools.py.
 """
 
-from adobe_mcp.apps.common import register_common_tools, register_compare_tool
+from adobe_mcp.apps.common import register_common_tools, register_compare_tool, register_progress_tool
 from adobe_mcp.apps.photoshop import register_photoshop_tools
 from adobe_mcp.apps.illustrator import register_illustrator_tools
 from adobe_mcp.apps.premiere import register_premiere_tools
@@ -23,6 +23,7 @@ def register_all_tools(mcp):
     """
     register_common_tools(mcp)
     register_compare_tool(mcp)
+    register_progress_tool(mcp)
     register_photoshop_tools(mcp)
     register_illustrator_tools(mcp)
     register_premiere_tools(mcp)

@@ -151,6 +151,8 @@ class AiAnalyzeReferenceInput(BaseModel):
     max_contours: int = Field(default=20, description="Maximum number of shapes to return", ge=1, le=100)
     canny_low: int = Field(default=50, description="Canny edge detection low threshold", ge=1, le=255)
     canny_high: int = Field(default=150, description="Canny edge detection high threshold", ge=1, le=255)
+    multi_scale: bool = Field(default=False, description="Run at 3 Canny thresholds and merge results with scale tags (bold/medium/fine)")
+    decompose: bool = Field(default=False, description="Use RETR_TREE to detect parent-child nesting, suggest layer structure and z-order")
 
 
 class AiReferenceUnderlayInput(BaseModel):
@@ -173,3 +175,60 @@ class AiVtraceInput(BaseModel):
     path_precision: int = Field(default=3, description="Decimal places in SVG path coordinates", ge=1, le=8)
     place_in_ai: bool = Field(default=False, description="Place resulting paths directly in Illustrator")
     layer_name: str = Field(default="vtrace", description="Layer name when placing in Illustrator")
+
+
+class AiAutoCorrectInput(BaseModel):
+    """Closed-loop correction: compare drawing vs reference and apply anchor point adjustments automatically."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    reference_path: str = Field(..., description="Absolute path to reference PNG/JPG image")
+    drawing_layer: str = Field(default="Drawing", description="Layer containing the drawing to correct")
+    max_iterations: int = Field(default=1, description="Number of correction passes per call", ge=1, le=5)
+    convergence_target: float = Field(default=0.85, description="Stop correcting when convergence exceeds this", ge=0, le=1)
+    min_area_pct: float = Field(default=0.5, description="Ignore contours smaller than this % of image area", ge=0.01, le=50)
+    correction_strength: float = Field(default=0.5, description="Damping factor 0-1 (1=full correction, 0.5=half step to avoid overshoot)", ge=0.1, le=1.0)
+
+
+class AiAnchorEditInput(BaseModel):
+    """Get or set individual anchor points and bezier handles on pathItems."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    action: str = Field(..., description="Action: get_points, set_point, set_handles, add_point, remove_point, simplify")
+    name: Optional[str] = Field(default=None, description="Target pathItem name (uses getByName)")
+    index: Optional[int] = Field(default=None, description="Target pathItem index (0-based, for unnamed items)")
+    point_index: Optional[int] = Field(default=None, description="Anchor point index for set_point/set_handles/remove_point (0-based)")
+    x: Optional[float] = Field(default=None, description="New X coordinate for set_point or add_point")
+    y: Optional[float] = Field(default=None, description="New Y coordinate for set_point or add_point")
+    left_x: Optional[float] = Field(default=None, description="Left bezier handle X for set_handles")
+    left_y: Optional[float] = Field(default=None, description="Left bezier handle Y for set_handles")
+    right_x: Optional[float] = Field(default=None, description="Right bezier handle X for set_handles")
+    right_y: Optional[float] = Field(default=None, description="Right bezier handle Y for set_handles")
+    tolerance: Optional[float] = Field(default=2.0, description="Simplification tolerance in points (for simplify action)", ge=0.1, le=50)
+
+
+class AiProportionGridInput(BaseModel):
+    """Place a measurement grid on the artboard based on reference analysis or manual key positions."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    action: str = Field(default="from_manifest", description="Action: from_manifest (auto from shape data), manual (from positions), clear (remove grid)")
+    shape_manifest: Optional[str] = Field(default=None, description="JSON shape manifest from analyze_reference (for from_manifest action)")
+    h_positions: Optional[str] = Field(default=None, description="JSON array of Y positions as % of artboard height for manual horizontal guides")
+    v_positions: Optional[str] = Field(default=None, description="JSON array of X positions as % of artboard width for manual vertical guides")
+    show_bounding_boxes: bool = Field(default=True, description="Draw bounding rectangles for each shape in the manifest")
+    grid_opacity: float = Field(default=30, description="Grid layer opacity 0-100", ge=0, le=100)
+
+
+class AiSilhouetteInput(BaseModel):
+    """Extract the overall silhouette from a reference image as a single clean closed path."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    image_path: str = Field(..., description="Absolute path to reference PNG/JPG image")
+    simplification: float = Field(default=0.01, description="approxPolyDP epsilon as fraction of arc length (lower=more points, higher=simpler)", ge=0.001, le=0.1)
+    place_in_ai: bool = Field(default=True, description="Place the silhouette path in Illustrator")
+    layer_name: str = Field(default="Drawing", description="Layer to place the silhouette on")
+    stroke_width: float = Field(default=2.0, description="Stroke width for the placed path", ge=0.1)
+
+
+class AiStyleTransferInput(BaseModel):
+    """Copy visual style (stroke, fill, opacity, effects) from one pathItem to others."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    action: str = Field(default="transfer", description="Action: transfer (copy style), extract (get style JSON), apply (apply style JSON)")
+    source_name: Optional[str] = Field(default=None, description="Source pathItem name to extract style from (for transfer/extract)")
+    target_names: Optional[str] = Field(default=None, description="Comma-separated target pathItem names (for transfer/apply)")
+    style_json: Optional[str] = Field(default=None, description="JSON style spec for apply action")
