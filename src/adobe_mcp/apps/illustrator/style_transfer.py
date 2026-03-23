@@ -30,10 +30,19 @@ def register(mcp):
             escaped_source = escape_jsx_string(params.source_name)
             jsx = f"""(function() {{
     var doc = app.activeDocument;
-    var item = null;
-    for (var l = 0; l < doc.layers.length; l++) {{
-        try {{ item = doc.layers[l].pathItems.getByName("{escaped_source}"); break; }} catch(e) {{}}
+
+    // Helper: find pathItem by name across all layers and groups
+    function findPath(n) {{
+        for (var l = 0; l < doc.layers.length; l++) {{
+            try {{ return doc.layers[l].pathItems.getByName(n); }} catch(e) {{}}
+            for (var g = 0; g < doc.layers[l].groupItems.length; g++) {{
+                try {{ return doc.layers[l].groupItems[g].pathItems.getByName(n); }} catch(e) {{}}
+            }}
+        }}
+        return null;
     }}
+
+    var item = findPath("{escaped_source}");
     if (!item) return JSON.stringify({{error: "Item not found: {escaped_source}"}});
 
     var style = {{
@@ -79,10 +88,19 @@ def register(mcp):
             escaped_targets = escape_jsx_string(params.target_names)
             jsx = f"""(function() {{
     var doc = app.activeDocument;
-    var source = null;
-    for (var l = 0; l < doc.layers.length; l++) {{
-        try {{ source = doc.layers[l].pathItems.getByName("{escaped_source}"); break; }} catch(e) {{}}
+
+    // Helper: find pathItem by name across all layers and groups
+    function findPath(n) {{
+        for (var l = 0; l < doc.layers.length; l++) {{
+            try {{ return doc.layers[l].pathItems.getByName(n); }} catch(e) {{}}
+            for (var g = 0; g < doc.layers[l].groupItems.length; g++) {{
+                try {{ return doc.layers[l].groupItems[g].pathItems.getByName(n); }} catch(e) {{}}
+            }}
+        }}
+        return null;
     }}
+
+    var source = findPath("{escaped_source}");
     if (!source) return JSON.stringify({{error: "Source not found: {escaped_source}"}});
 
     var targets = "{escaped_targets}".split(",");
@@ -91,10 +109,7 @@ def register(mcp):
 
     for (var t = 0; t < targets.length; t++) {{
         var targetName = targets[t].replace(/^\\s+|\\s+$/g, '');
-        var target = null;
-        for (var l = 0; l < doc.layers.length; l++) {{
-            try {{ target = doc.layers[l].pathItems.getByName(targetName); break; }} catch(e) {{}}
-        }}
+        var target = findPath(targetName);
         if (!target) {{ errors.push(targetName); continue; }}
 
         // Copy fill
@@ -138,6 +153,18 @@ def register(mcp):
             style_json_literal = params.style_json
             jsx = f"""(function() {{
     var doc = app.activeDocument;
+
+    // Helper: find pathItem by name across all layers and groups
+    function findPath(n) {{
+        for (var l = 0; l < doc.layers.length; l++) {{
+            try {{ return doc.layers[l].pathItems.getByName(n); }} catch(e) {{}}
+            for (var g = 0; g < doc.layers[l].groupItems.length; g++) {{
+                try {{ return doc.layers[l].groupItems[g].pathItems.getByName(n); }} catch(e) {{}}
+            }}
+        }}
+        return null;
+    }}
+
     var style = {style_json_literal};
     var targets = "{escaped_targets}".split(",");
     var applied = 0;
@@ -145,10 +172,7 @@ def register(mcp):
 
     for (var t = 0; t < targets.length; t++) {{
         var targetName = targets[t].replace(/^\\s+|\\s+$/g, '');
-        var target = null;
-        for (var l = 0; l < doc.layers.length; l++) {{
-            try {{ target = doc.layers[l].pathItems.getByName(targetName); break; }} catch(e) {{}}
-        }}
+        var target = findPath(targetName);
         if (!target) {{ errors.push(targetName); continue; }}
 
         // Apply fill

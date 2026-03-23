@@ -245,25 +245,38 @@ def _run_osascript(script: str, timeout: int = 120) -> dict:
 
 # ── AppleScript JSX Builders ──────────────────────────────────────────
 
-def _build_applescript_for_jsx(app: str, jsx_file_path: str) -> str:
+def _build_applescript_for_jsx(app: str, jsx_file_path: str, timeout: int = 120) -> str:
     """Build the correct AppleScript invocation for running a JSX file in a given Adobe app.
 
     Each Adobe app has a different AppleScript scripting dictionary for executing scripts.
+    Wraps the command in a 'with timeout' block so long-running JSX (e.g. pathfinder
+    operations, image embedding) doesn't hit the default 120s AppleEvent limit.
     """
     app_info = ADOBE_APPS[app]
     proc = app_info.get("mac_process", app_info["display"])
     bundle_id = app_info.get("bundle_id")
 
     if app == "photoshop":
-        return f'tell application "{proc}" to do javascript of file "{jsx_file_path}"'
+        cmd = f'do javascript of file "{jsx_file_path}"'
     elif app == "illustrator":
-        return f'tell application "{proc}" to do javascript file "{jsx_file_path}"'
+        cmd = f'do javascript file "{jsx_file_path}"'
     elif app == "indesign":
-        return f'tell application id "{bundle_id}" to do script (POSIX file "{jsx_file_path}") language javascript'
+        # InDesign uses bundle_id addressing
+        return (
+            f'with timeout of {timeout} seconds\n'
+            f'  tell application id "{bundle_id}" to do script (POSIX file "{jsx_file_path}") language javascript\n'
+            f'end timeout'
+        )
     elif app == "aftereffects":
-        return f'tell application "{proc}" to DoScriptFile "{jsx_file_path}"'
+        cmd = f'DoScriptFile "{jsx_file_path}"'
     else:
-        return f'tell application "{proc}" to do script (POSIX file "{jsx_file_path}")'
+        cmd = f'do script (POSIX file "{jsx_file_path}")'
+
+    return (
+        f'with timeout of {timeout} seconds\n'
+        f'  tell application "{proc}" to {cmd}\n'
+        f'end timeout'
+    )
 
 
 # ── JSX Execution (macOS) ────────────────────────────────────────────
@@ -288,7 +301,7 @@ def _run_jsx_mac(app: str, jsx_code: str, timeout: int = 120) -> dict:
         tmp_file.close()
         temp_path = tmp_file.name
 
-        applescript = _build_applescript_for_jsx(app, temp_path)
+        applescript = _build_applescript_for_jsx(app, temp_path, timeout)
         return _run_osascript(applescript, timeout)
     except Exception as e:
         return {"success": False, "stdout": "", "stderr": str(e), "returncode": -1}
@@ -310,7 +323,7 @@ def _run_jsx_file_mac(app: str, jsx_path: str, timeout: int = 120) -> dict:
     if mac_cmd is None:
         return {"success": False, "stdout": "", "stderr": f"App '{app_info['display']}' does not support AppleScript scripting on macOS. Use file-based execution or direct app CLI."}
 
-    applescript = _build_applescript_for_jsx(app, jsx_path)
+    applescript = _build_applescript_for_jsx(app, jsx_path, timeout)
     return _run_osascript(applescript, timeout)
 
 

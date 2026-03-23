@@ -127,7 +127,7 @@ def register(mcp):
 }})();
 """
 
-        result = await _async_run_jsx("illustrator", jsx)
+        result = await _async_run_jsx("illustrator", jsx, timeout=300)
         if not result["success"]:
             return f"Error: {result['stderr']}"
 

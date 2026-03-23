@@ -16,10 +16,18 @@ _TARGET_RESOLVER_JSX = """
 function getTargetItem(doc, name, index) {
     if (name !== null && name !== "") {
         for (var l = 0; l < doc.layers.length; l++) {
-            for (var s = 0; s < doc.layers[l].pathItems.length; s++) {
-                if (doc.layers[l].pathItems[s].name === name) {
-                    return doc.layers[l].pathItems[s];
+            var lyr = doc.layers[l];
+            for (var s = 0; s < lyr.pathItems.length; s++) {
+                if (lyr.pathItems[s].name === name) {
+                    return lyr.pathItems[s];
                 }
+            }
+            // Also search inside groups on each layer
+            for (var g = 0; g < lyr.groupItems.length; g++) {
+                try {
+                    var found = lyr.groupItems[g].pathItems.getByName(name);
+                    if (found) return found;
+                } catch(e) {}
             }
         }
         return null;
@@ -96,7 +104,7 @@ def register(mcp):
     {target_call}
 
     if (item === null) {{
-        JSON.stringify({{"error": "No target pathItem found. Specify name, index, or select a path."}});
+        return JSON.stringify({{"error": "No target pathItem found. Specify name, index, or select a path."}});
     }} else {{
         var pts = item.pathPoints;
         var n = pts.length;
@@ -198,7 +206,7 @@ def register(mcp):
             pointsSmoothed++;
         }}
 
-        JSON.stringify({{
+        return JSON.stringify({{
             name: item.name || "(unnamed)",
             point_count: n,
             corners_preserved: cornersPreserved,

@@ -205,7 +205,7 @@ async def test_compare_drawing(gir_ref):
     data = json.loads(result) if isinstance(result, str) else result
     assert "error" not in str(data).lower(), f"Compare failed: {data}"
     # Should have a convergence score (0..1)
-    score = data.get("convergence", data.get("overall_convergence", -1))
+    score = data.get("convergence_score", data.get("convergence", data.get("overall_convergence", -1)))
     assert score >= 0, f"Expected convergence score >= 0, got: {data}"
 
 

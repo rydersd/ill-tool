@@ -38,10 +38,17 @@ def register(mcp):
         if params.name:
             escaped_name = escape_jsx_string(params.name)
             find_item_js = f"""
-    // Search all layers for the named pathItem
+    // Search all layers and groups for the named pathItem
     var item = null;
     for (var l = 0; l < doc.layers.length; l++) {{
-        try {{ item = doc.layers[l].pathItems.getByName("{escaped_name}"); break; }} catch(e) {{}}
+        try {{ item = doc.layers[l].pathItems.getByName("{escaped_name}"); }} catch(e) {{}}
+        if (item) break;
+        // Also search inside groups on each layer
+        for (var g = 0; g < doc.layers[l].groupItems.length; g++) {{
+            try {{ item = doc.layers[l].groupItems[g].pathItems.getByName("{escaped_name}"); }} catch(e) {{}}
+            if (item) break;
+        }}
+        if (item) break;
     }}
     if (!item) return JSON.stringify({{error: "PathItem not found: {escaped_name}"}});
 """

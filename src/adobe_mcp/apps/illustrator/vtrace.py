@@ -38,11 +38,15 @@ def register(mcp):
             return f"Error: Image not found at {params.image_path}"
 
         # ------------------------------------------------------------------
-        # Step 1: Run vtracer to convert raster -> SVG string
+        # Step 1: Run vtracer to convert raster -> SVG file
         # ------------------------------------------------------------------
+        # vtracer.convert_image_to_svg_py() requires out_path as a positional
+        # argument and writes SVG to disk (no return value).
+        svg_path = tempfile.mktemp(suffix=".svg", prefix="vtrace_")
         try:
-            svg_str = vtracer.convert_image_to_svg_py(
+            vtracer.convert_image_to_svg_py(
                 image_path=params.image_path,
+                out_path=svg_path,
                 colormode="color",
                 hierarchical="stacked",
                 mode=params.mode,
@@ -59,21 +63,17 @@ def register(mcp):
             return f"Error: vtracer failed: {exc}"
 
         # ------------------------------------------------------------------
-        # Step 2: Parse SVG to extract path data and metadata
+        # Step 2: Read SVG from disk and parse metadata
         # ------------------------------------------------------------------
+        with open(svg_path, "r") as f:
+            svg_str = f.read()
+
         viewbox_match = re.search(r'viewBox="([^"]*)"', svg_str)
         viewbox = viewbox_match.group(1) if viewbox_match else ""
 
         path_matches = re.findall(r'<path[^>]*d="([^"]*)"[^>]*/>', svg_str)
         fill_matches = re.findall(r'<path[^>]*fill="([^"]*)"[^>]*/>', svg_str)
         path_count = len(path_matches)
-
-        # ------------------------------------------------------------------
-        # Step 3: Save SVG to a temp file
-        # ------------------------------------------------------------------
-        svg_path = tempfile.mktemp(suffix=".svg", prefix="vtrace_")
-        with open(svg_path, "w") as f:
-            f.write(svg_str)
 
         # ------------------------------------------------------------------
         # Step 4: Optionally place in Illustrator

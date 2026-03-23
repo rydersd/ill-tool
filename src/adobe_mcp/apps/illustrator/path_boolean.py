@@ -63,12 +63,18 @@ def register(mcp):
         jsx = f"""(function() {{
     var doc = app.activeDocument;
 
-    // --- Locate both pathItems by name across all layers ---
+    // --- Locate both pathItems by name across all layers and groups ---
     function findPathItem(targetName) {{
         for (var l = 0; l < doc.layers.length; l++) {{
             try {{
                 return doc.layers[l].pathItems.getByName(targetName);
             }} catch(e) {{}}
+            // Also search inside groups on each layer
+            for (var g = 0; g < doc.layers[l].groupItems.length; g++) {{
+                try {{
+                    return doc.layers[l].groupItems[g].pathItems.getByName(targetName);
+                }} catch(e) {{}}
+            }}
         }}
         return null;
     }}
@@ -137,7 +143,8 @@ def register(mcp):
     }});
 }})();"""
 
-        result = await _async_run_jsx("illustrator", jsx)
+        # Pathfinder menu commands + expandStyle can be slow — use extended timeout
+        result = await _async_run_jsx("illustrator", jsx, timeout=300)
         if not result["success"]:
             return json.dumps({"error": result["stderr"]})
 

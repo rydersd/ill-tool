@@ -207,7 +207,7 @@ def register(mcp):
         pointCount: path.pathPoints.length,
         bounds: path.geometricBounds,
         shapeType: "ellipse",
-        native: true
+        isNative: true
     }});
 }})();
 """
@@ -317,7 +317,7 @@ def register(mcp):
         pointCount: path.pathPoints.length,
         bounds: path.geometricBounds,
         shapeType: "{escape_jsx_string(shape)}",
-        native: false
+        isNative: false
     }});
 }})();
 """
