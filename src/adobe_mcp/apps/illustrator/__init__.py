@@ -1,7 +1,7 @@
-"""Illustrator tools — 130 tools split by feature.
+"""Illustrator tools — 150 tools split by feature.
 
 Registration chain:
-    apps/__init__.py -> illustrator/__init__.py -> {new_document, shapes, text, paths, export, layers, modify, inspect, image_trace, analyze_reference, reference_underlay, vtrace, anchor_edit, silhouette, auto_correct, proportion_grid, style_transfer, shape_recipes, contour_to_path, smart_shape, bezier_optimize, curve_fit, artboard_from_ref, path_boolean, symmetry, layer_auto_organize, group_and_name, color_sampler, stroke_profiles, path_offset, path_weld, snap_to_grid, undo_checkpoint, reference_crop, drawing_orchestrator, skeleton_annotate, body_part_label, skeleton_build, part_bind, joint_rotate, pose_snapshot, pose_interpolate, ik_solver, onion_skin, character_template, pose_from_image, keyframe_timeline, motion_path, storyboard_panel, scene_manager, background_layer, multi_character, shot_list_gen, beat_sheet, production_notes, continuity_check, asset_registry, pdf_export, animatic_preview, prop_manager, lighting_notation, transition_planner, audio_sync, sequence_assembler, rig_controllers, storyboard_template, panel_text, camera_notation, character_turnaround, landmark_axis, construction_draw, gesture_line, proportion_check, negative_space, line_weight, form_volume, thumbnail_grid, scene_composition, character_expression, batch_pose, staging_system, revision_tracker, edl_export, thumbnail_promote, environment, continuity_enhanced, director_markup, audio_sync_enhanced, cross_section, shading_inference, color_region_cluster, contour_nesting, symmetry_detector, part_size_ranker, joint_geometry, object_classifier, template_inheritance, template_scaling, template_export, template_library_search, scene_graph, interaction_zones, lod_system, asset_versioning, batch_rig, cv_confidence, correction_learning, cross_object_patterns, failure_detection, active_learning, object_hierarchy, part_segmenter, part_questioner, connection_detector, hierarchy_builder, relationship_types, constraint_system, chain_detector, hierarchy_templates, template_matcher, ik_chain_auto, motion_range_from_shape, deformation_zones, secondary_motion, weight_zones, pose_library_generic, physics_hints, timing_curves, anticipation_markers, motion_path_from_hierarchy}.py
+    apps/__init__.py -> illustrator/__init__.py -> {new_document, shapes, text, paths, export, layers, modify, inspect, image_trace, analyze_reference, reference_underlay, vtrace, anchor_edit, silhouette, auto_correct, proportion_grid, style_transfer, shape_recipes, contour_to_path, smart_shape, bezier_optimize, curve_fit, artboard_from_ref, path_boolean, symmetry, layer_auto_organize, group_and_name, color_sampler, stroke_profiles, path_offset, path_weld, snap_to_grid, undo_checkpoint, reference_crop, drawing_orchestrator, skeleton_annotate, body_part_label, skeleton_build, part_bind, joint_rotate, pose_snapshot, pose_interpolate, ik_solver, onion_skin, character_template, pose_from_image, keyframe_timeline, motion_path, storyboard_panel, scene_manager, background_layer, multi_character, shot_list_gen, beat_sheet, production_notes, continuity_check, asset_registry, pdf_export, animatic_preview, prop_manager, lighting_notation, transition_planner, audio_sync, sequence_assembler, rig_controllers, storyboard_template, panel_text, camera_notation, character_turnaround, landmark_axis, construction_draw, gesture_line, proportion_check, negative_space, line_weight, form_volume, thumbnail_grid, scene_composition, character_expression, batch_pose, staging_system, revision_tracker, edl_export, thumbnail_promote, environment, continuity_enhanced, director_markup, audio_sync_enhanced, cross_section, shading_inference, color_region_cluster, contour_nesting, symmetry_detector, part_size_ranker, joint_geometry, object_classifier, template_inheritance, template_scaling, template_export, template_library_search, scene_graph, interaction_zones, lod_system, asset_versioning, batch_rig, cv_confidence, correction_learning, cross_object_patterns, failure_detection, active_learning, object_hierarchy, part_segmenter, part_questioner, connection_detector, hierarchy_builder, relationship_types, constraint_system, chain_detector, hierarchy_templates, template_matcher, ik_chain_auto, motion_range_from_shape, deformation_zones, secondary_motion, weight_zones, pose_library_generic, physics_hints, timing_curves, anticipation_markers, motion_path_from_hierarchy, dialogue_layout, action_lines, camera_expressions, color_script, aspect_adapter, character_sheet_gen, transition_validator, batch_export_all, project_dashboard, drawing_session, character_wizard, pipeline_runner, quick_pose, panel_composer, storyboard_from_script, visual_debugger, animation_flipbook, smart_export, reference_library, style_guide}.py
 """
 
 from adobe_mcp.apps.illustrator.new_document import register as _reg_new_document
@@ -134,10 +134,30 @@ from adobe_mcp.apps.illustrator.physics_hints import register as _reg_physics_hi
 from adobe_mcp.apps.illustrator.timing_curves import register as _reg_timing_curves
 from adobe_mcp.apps.illustrator.anticipation_markers import register as _reg_anticipation_markers
 from adobe_mcp.apps.illustrator.motion_path_from_hierarchy import register as _reg_motion_path_from_hierarchy
+from adobe_mcp.apps.illustrator.dialogue_layout import register as _reg_dialogue_layout
+from adobe_mcp.apps.illustrator.action_lines import register as _reg_action_lines
+from adobe_mcp.apps.illustrator.camera_expressions import register as _reg_camera_expressions
+from adobe_mcp.apps.illustrator.color_script import register as _reg_color_script
+from adobe_mcp.apps.illustrator.aspect_adapter import register as _reg_aspect_adapter
+from adobe_mcp.apps.illustrator.character_sheet_gen import register as _reg_character_sheet_gen
+from adobe_mcp.apps.illustrator.transition_validator import register as _reg_transition_validator
+from adobe_mcp.apps.illustrator.batch_export_all import register as _reg_batch_export_all
+from adobe_mcp.apps.illustrator.project_dashboard import register as _reg_project_dashboard
+from adobe_mcp.apps.illustrator.drawing_session import register as _reg_drawing_session
+from adobe_mcp.apps.illustrator.character_wizard import register as _reg_character_wizard
+from adobe_mcp.apps.illustrator.pipeline_runner import register as _reg_pipeline_runner
+from adobe_mcp.apps.illustrator.quick_pose import register as _reg_quick_pose
+from adobe_mcp.apps.illustrator.panel_composer import register as _reg_panel_composer
+from adobe_mcp.apps.illustrator.storyboard_from_script import register as _reg_storyboard_from_script
+from adobe_mcp.apps.illustrator.visual_debugger import register as _reg_visual_debugger
+from adobe_mcp.apps.illustrator.animation_flipbook import register as _reg_animation_flipbook
+from adobe_mcp.apps.illustrator.smart_export import register as _reg_smart_export
+from adobe_mcp.apps.illustrator.reference_library import register as _reg_reference_library
+from adobe_mcp.apps.illustrator.style_guide import register as _reg_style_guide
 
 
 def register_illustrator_tools(mcp):
-    """Register all 130 Illustrator tools."""
+    """Register all 150 Illustrator tools."""
     _reg_new_document(mcp)
     _reg_shapes(mcp)
     _reg_text(mcp)
@@ -268,3 +288,23 @@ def register_illustrator_tools(mcp):
     _reg_timing_curves(mcp)
     _reg_anticipation_markers(mcp)
     _reg_motion_path_from_hierarchy(mcp)
+    _reg_dialogue_layout(mcp)
+    _reg_action_lines(mcp)
+    _reg_camera_expressions(mcp)
+    _reg_color_script(mcp)
+    _reg_aspect_adapter(mcp)
+    _reg_character_sheet_gen(mcp)
+    _reg_transition_validator(mcp)
+    _reg_batch_export_all(mcp)
+    _reg_project_dashboard(mcp)
+    _reg_drawing_session(mcp)
+    _reg_character_wizard(mcp)
+    _reg_pipeline_runner(mcp)
+    _reg_quick_pose(mcp)
+    _reg_panel_composer(mcp)
+    _reg_storyboard_from_script(mcp)
+    _reg_visual_debugger(mcp)
+    _reg_animation_flipbook(mcp)
+    _reg_smart_export(mcp)
+    _reg_reference_library(mcp)
+    _reg_style_guide(mcp)
