@@ -1,7 +1,7 @@
 """Illustrator tools — 69 tools split by feature.
 
 Registration chain:
-    apps/__init__.py -> illustrator/__init__.py -> {new_document, shapes, text, paths, export, layers, modify, inspect, image_trace, analyze_reference, reference_underlay, vtrace, anchor_edit, silhouette, auto_correct, proportion_grid, style_transfer, shape_recipes, contour_to_path, smart_shape, bezier_optimize, curve_fit, artboard_from_ref, path_boolean, symmetry, layer_auto_organize, group_and_name, color_sampler, stroke_profiles, path_offset, path_weld, snap_to_grid, undo_checkpoint, reference_crop, drawing_orchestrator, skeleton_annotate, body_part_label, skeleton_build, part_bind, joint_rotate, pose_snapshot, pose_interpolate, ik_solver, onion_skin, character_template, pose_from_image, keyframe_timeline, motion_path, storyboard_panel, scene_manager, background_layer, multi_character, shot_list_gen, beat_sheet, production_notes, continuity_check, asset_registry, pdf_export, animatic_preview, prop_manager, lighting_notation, transition_planner, audio_sync, sequence_assembler, rig_controllers, storyboard_template, panel_text, camera_notation, character_turnaround}.py
+    apps/__init__.py -> illustrator/__init__.py -> {new_document, shapes, text, paths, export, layers, modify, inspect, image_trace, analyze_reference, reference_underlay, vtrace, anchor_edit, silhouette, auto_correct, proportion_grid, style_transfer, shape_recipes, contour_to_path, smart_shape, bezier_optimize, curve_fit, artboard_from_ref, path_boolean, symmetry, layer_auto_organize, group_and_name, color_sampler, stroke_profiles, path_offset, path_weld, snap_to_grid, undo_checkpoint, reference_crop, drawing_orchestrator, skeleton_annotate, body_part_label, skeleton_build, part_bind, joint_rotate, pose_snapshot, pose_interpolate, ik_solver, onion_skin, character_template, pose_from_image, keyframe_timeline, motion_path, storyboard_panel, scene_manager, background_layer, multi_character, shot_list_gen, beat_sheet, production_notes, continuity_check, asset_registry, pdf_export, animatic_preview, prop_manager, lighting_notation, transition_planner, audio_sync, sequence_assembler, rig_controllers, storyboard_template, panel_text, camera_notation, character_turnaround, landmark_axis}.py
 """
 
 from adobe_mcp.apps.illustrator.new_document import register as _reg_new_document
@@ -73,10 +73,11 @@ from adobe_mcp.apps.illustrator.storyboard_template import register as _reg_stor
 from adobe_mcp.apps.illustrator.panel_text import register as _reg_panel_text
 from adobe_mcp.apps.illustrator.camera_notation import register as _reg_camera_notation
 from adobe_mcp.apps.illustrator.character_turnaround import register as _reg_character_turnaround
+from adobe_mcp.apps.illustrator.landmark_axis import register as _reg_landmark_axis
 
 
 def register_illustrator_tools(mcp):
-    """Register all 69 Illustrator tools."""
+    """Register all 70 Illustrator tools."""
     _reg_new_document(mcp)
     _reg_shapes(mcp)
     _reg_text(mcp)
@@ -146,3 +147,4 @@ def register_illustrator_tools(mcp):
     _reg_panel_text(mcp)
     _reg_camera_notation(mcp)
     _reg_character_turnaround(mcp)
+    _reg_landmark_axis(mcp)

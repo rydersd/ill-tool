@@ -27,6 +27,13 @@ def _load_rig(character_name: str) -> dict:
         "bindings": {},
         "body_part_labels": {},
         "poses": {},
+        "landmarks": {},
+        "axes": {},
+        "transform": None,
+        "image_source": None,
+        "image_size": None,
+        "view_angle": 0,
+        "light_direction": None,
     }
 
 

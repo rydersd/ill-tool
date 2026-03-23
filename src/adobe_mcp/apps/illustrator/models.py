@@ -750,3 +750,36 @@ class AiSequenceAssemblerInput(BaseModel):
     act_number: Optional[int] = Field(default=None, description="Act number")
     act_name: Optional[str] = Field(default=None, description="Act name (e.g. 'Setup', 'Confrontation', 'Resolution')")
     scene_numbers: Optional[str] = Field(default=None, description="Comma-separated scene numbers to include")
+
+
+# ── Landmark-Axis Drawing Model ──────────────────────────────
+
+
+class AiLandmarkAxisInput(BaseModel):
+    """Landmark-and-axis-first drawing: detect landmarks, compute axes, draw in axis-relative coordinates."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    action: str = Field(..., description="Action: detect_landmarks, add_landmark, compute_axis, draw_on_axis, validate_placement, infer_occluded")
+    character_name: str = Field(default="character", description="Character identifier")
+    image_path: Optional[str] = Field(default=None, description="Reference image path (for detect_landmarks)")
+    landmark_name: Optional[str] = Field(default=None, description="Landmark name")
+    landmark_type: Optional[str] = Field(default="structural", description="Landmark type: structural or feature")
+    x: Optional[float] = Field(default=None, description="X position in AI coordinates")
+    y: Optional[float] = Field(default=None, description="Y position in AI coordinates")
+    px_x: Optional[float] = Field(default=None, description="X in pixel coordinates")
+    px_y: Optional[float] = Field(default=None, description="Y in pixel coordinates")
+    axis_name: Optional[str] = Field(default=None, description="Name for the axis")
+    from_landmark: Optional[str] = Field(default=None, description="Start landmark for axis")
+    to_landmark: Optional[str] = Field(default=None, description="End landmark for axis")
+    points_json: Optional[str] = Field(default=None, description="JSON array of [along_pct, across_pct] for shape points")
+    cross_width: Optional[float] = Field(default=None, description="Cross-axis width in AI points")
+    near_cross_width: Optional[float] = Field(default=None, description="Near-side cross width for perspective")
+    far_cross_width: Optional[float] = Field(default=None, description="Far-side cross width for perspective")
+    path_name: str = Field(default="axis_shape", description="Name for created path")
+    layer_name: str = Field(default="Drawing", description="Target layer")
+    closed: bool = Field(default=True, description="Close the path")
+    stroke_width: float = Field(default=2.0, ge=0.1)
+    placed_name: Optional[str] = Field(default=None, description="Name of placed path to validate")
+    tolerance: float = Field(default=2.0, ge=0.1, description="Validation tolerance in AI points")
+    visible_landmarks: Optional[str] = Field(default=None, description="JSON array of visible landmark names")
+    view_angle: Optional[float] = Field(default=None, description="View rotation degrees (0=front, 90=side)")
+    symmetric: bool = Field(default=True, description="Assume bilateral symmetry for inference")
