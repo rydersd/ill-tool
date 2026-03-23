@@ -48,5 +48,18 @@ adobe-mcp = "adobe_mcp.server"
 Homepage = "https://github.com/VoidChecksum/adobe-mcp"
 Repository = "https://github.com/VoidChecksum/adobe-mcp"
 
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+markers = [
+    "ai: requires live Adobe Illustrator",
+    "ae: requires live Adobe After Effects",
+]
+
 [tool.setuptools.packages.find]
 where = ["src"]
