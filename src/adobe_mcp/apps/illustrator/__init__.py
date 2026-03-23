@@ -1,7 +1,7 @@
-"""Illustrator tools — 69 tools split by feature.
+"""Illustrator tools — 90 tools split by feature.
 
 Registration chain:
-    apps/__init__.py -> illustrator/__init__.py -> {new_document, shapes, text, paths, export, layers, modify, inspect, image_trace, analyze_reference, reference_underlay, vtrace, anchor_edit, silhouette, auto_correct, proportion_grid, style_transfer, shape_recipes, contour_to_path, smart_shape, bezier_optimize, curve_fit, artboard_from_ref, path_boolean, symmetry, layer_auto_organize, group_and_name, color_sampler, stroke_profiles, path_offset, path_weld, snap_to_grid, undo_checkpoint, reference_crop, drawing_orchestrator, skeleton_annotate, body_part_label, skeleton_build, part_bind, joint_rotate, pose_snapshot, pose_interpolate, ik_solver, onion_skin, character_template, pose_from_image, keyframe_timeline, motion_path, storyboard_panel, scene_manager, background_layer, multi_character, shot_list_gen, beat_sheet, production_notes, continuity_check, asset_registry, pdf_export, animatic_preview, prop_manager, lighting_notation, transition_planner, audio_sync, sequence_assembler, rig_controllers, storyboard_template, panel_text, camera_notation, character_turnaround, landmark_axis}.py
+    apps/__init__.py -> illustrator/__init__.py -> {new_document, shapes, text, paths, export, layers, modify, inspect, image_trace, analyze_reference, reference_underlay, vtrace, anchor_edit, silhouette, auto_correct, proportion_grid, style_transfer, shape_recipes, contour_to_path, smart_shape, bezier_optimize, curve_fit, artboard_from_ref, path_boolean, symmetry, layer_auto_organize, group_and_name, color_sampler, stroke_profiles, path_offset, path_weld, snap_to_grid, undo_checkpoint, reference_crop, drawing_orchestrator, skeleton_annotate, body_part_label, skeleton_build, part_bind, joint_rotate, pose_snapshot, pose_interpolate, ik_solver, onion_skin, character_template, pose_from_image, keyframe_timeline, motion_path, storyboard_panel, scene_manager, background_layer, multi_character, shot_list_gen, beat_sheet, production_notes, continuity_check, asset_registry, pdf_export, animatic_preview, prop_manager, lighting_notation, transition_planner, audio_sync, sequence_assembler, rig_controllers, storyboard_template, panel_text, camera_notation, character_turnaround, landmark_axis, construction_draw, gesture_line, proportion_check, negative_space, line_weight, form_volume, thumbnail_grid, scene_composition, character_expression, batch_pose, staging_system, revision_tracker, edl_export, thumbnail_promote, environment, continuity_enhanced, director_markup, audio_sync_enhanced, cross_section, shading_inference}.py
 """
 
 from adobe_mcp.apps.illustrator.new_document import register as _reg_new_document
@@ -74,10 +74,30 @@ from adobe_mcp.apps.illustrator.panel_text import register as _reg_panel_text
 from adobe_mcp.apps.illustrator.camera_notation import register as _reg_camera_notation
 from adobe_mcp.apps.illustrator.character_turnaround import register as _reg_character_turnaround
 from adobe_mcp.apps.illustrator.landmark_axis import register as _reg_landmark_axis
+from adobe_mcp.apps.illustrator.construction_draw import register as _reg_construction_draw
+from adobe_mcp.apps.illustrator.gesture_line import register as _reg_gesture_line
+from adobe_mcp.apps.illustrator.proportion_check import register as _reg_proportion_check
+from adobe_mcp.apps.illustrator.negative_space import register as _reg_negative_space
+from adobe_mcp.apps.illustrator.line_weight import register as _reg_line_weight
+from adobe_mcp.apps.illustrator.form_volume import register as _reg_form_volume
+from adobe_mcp.apps.illustrator.thumbnail_grid import register as _reg_thumbnail_grid
+from adobe_mcp.apps.illustrator.scene_composition import register as _reg_scene_composition
+from adobe_mcp.apps.illustrator.character_expression import register as _reg_character_expression
+from adobe_mcp.apps.illustrator.batch_pose import register as _reg_batch_pose
+from adobe_mcp.apps.illustrator.staging_system import register as _reg_staging_system
+from adobe_mcp.apps.illustrator.revision_tracker import register as _reg_revision_tracker
+from adobe_mcp.apps.illustrator.edl_export import register as _reg_edl_export
+from adobe_mcp.apps.illustrator.thumbnail_promote import register as _reg_thumbnail_promote
+from adobe_mcp.apps.illustrator.environment import register as _reg_environment
+from adobe_mcp.apps.illustrator.continuity_enhanced import register as _reg_continuity_enhanced
+from adobe_mcp.apps.illustrator.director_markup import register as _reg_director_markup
+from adobe_mcp.apps.illustrator.audio_sync_enhanced import register as _reg_audio_sync_enhanced
+from adobe_mcp.apps.illustrator.cross_section import register as _reg_cross_section
+from adobe_mcp.apps.illustrator.shading_inference import register as _reg_shading_inference
 
 
 def register_illustrator_tools(mcp):
-    """Register all 70 Illustrator tools."""
+    """Register all 90 Illustrator tools."""
     _reg_new_document(mcp)
     _reg_shapes(mcp)
     _reg_text(mcp)
@@ -148,3 +168,23 @@ def register_illustrator_tools(mcp):
     _reg_camera_notation(mcp)
     _reg_character_turnaround(mcp)
     _reg_landmark_axis(mcp)
+    _reg_construction_draw(mcp)
+    _reg_gesture_line(mcp)
+    _reg_proportion_check(mcp)
+    _reg_negative_space(mcp)
+    _reg_line_weight(mcp)
+    _reg_form_volume(mcp)
+    _reg_thumbnail_grid(mcp)
+    _reg_scene_composition(mcp)
+    _reg_character_expression(mcp)
+    _reg_batch_pose(mcp)
+    _reg_staging_system(mcp)
+    _reg_revision_tracker(mcp)
+    _reg_edl_export(mcp)
+    _reg_thumbnail_promote(mcp)
+    _reg_environment(mcp)
+    _reg_continuity_enhanced(mcp)
+    _reg_director_markup(mcp)
+    _reg_audio_sync_enhanced(mcp)
+    _reg_cross_section(mcp)
+    _reg_shading_inference(mcp)
