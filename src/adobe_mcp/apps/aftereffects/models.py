@@ -128,3 +128,53 @@ class AeGenRenderInput(BaseModel):
         default="mp4",
         description="Output format: mp4, mov, gif",
     )
+
+
+# ── Character Animation Pipeline Models ────────────────────────
+
+
+class AeCompFromCharacterInput(BaseModel):
+    """Create an AE composition from a posable Illustrator character with separated layers."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    ai_file_path: str = Field(..., description="Path to the Illustrator file containing the character")
+    character_name: str = Field(default="character", description="Character identifier matching the AI skeleton")
+    comp_name: Optional[str] = Field(default=None, description="Composition name (auto from character if None)")
+    width: int = Field(default=1920, description="Comp width", ge=100)
+    height: int = Field(default=1080, description="Comp height", ge=100)
+    fps: float = Field(default=24, description="Frame rate", ge=1)
+    duration: float = Field(default=5, description="Duration in seconds", ge=0.1)
+
+
+class AePuppetPinsInput(BaseModel):
+    """Map skeleton joint positions to After Effects puppet pin positions on character layers."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    character_name: str = Field(default="character", description="Character identifier")
+    comp_name: Optional[str] = Field(default=None, description="Target composition name")
+    pin_stiffness: float = Field(default=50, description="Puppet pin stiffness 0-100", ge=0, le=100)
+
+
+class AeKeyframeExportInput(BaseModel):
+    """Export a keyframe timeline as After Effects keyframe data."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    character_name: str = Field(default="character", description="Character whose timeline to export")
+    comp_name: Optional[str] = Field(default=None, description="Target AE composition")
+    method: str = Field(default="puppet", description="Animation method: puppet (puppet pins), transform (layer transforms), expression")
+
+
+class AeExpressionGenInput(BaseModel):
+    """Generate After Effects expressions for bone-driven animation."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    character_name: str = Field(default="character", description="Character identifier")
+    joint_name: Optional[str] = Field(default=None, description="Specific joint (None=all joints)")
+    expression_type: str = Field(default="rotation", description="Expression type: rotation, position, wiggle, loopOut")
+    comp_name: Optional[str] = Field(default=None, description="Target composition")
+
+
+class AeAnimaticExportInput(BaseModel):
+    """Export storyboard panels as a timed After Effects sequence (animatic)."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    character_name: str = Field(default="character", description="Character identifier")
+    comp_name: str = Field(default="animatic", description="Animatic composition name")
+    panel_transition: str = Field(default="cut", description="Transition between panels: cut, dissolve, wipe")
+    transition_frames: int = Field(default=6, description="Transition duration in frames", ge=0)
+    add_audio_markers: bool = Field(default=True, description="Add markers at panel boundaries for audio sync")

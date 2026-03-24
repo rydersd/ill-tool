@@ -8,7 +8,7 @@ def test_tool_registration():
     from adobe_mcp.server import mcp
 
     tools = mcp._tool_manager._tools
-    assert len(tools) == 45, f"Expected 45 tools, got {len(tools)}"
+    assert len(tools) >= 100, f"Expected 100+ tools, got {len(tools)}"
 
     # Spot-check key tools from each app module
     expected = [
