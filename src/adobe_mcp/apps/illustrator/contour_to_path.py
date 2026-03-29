@@ -13,6 +13,71 @@ from adobe_mcp.jsx.templates import escape_jsx_string
 from adobe_mcp.apps.illustrator.models import AiContourToPathInput
 
 
+def _from_face_group_boundary(
+    boundary_polygon: list[tuple[float, float]],
+    group_label: str,
+    artboard_dims: dict,
+) -> dict:
+    """Convert mesh_face_grouper boundary output to contour_to_path shape dict.
+
+    Transforms a 2D boundary polygon (already projected from 3D) into the
+    shape dict format expected by _create_path_jsx() and the contour_to_path
+    tool -- specifically the "approx_points" key in pixel/AI coordinates.
+
+    The boundary polygon comes from orthographic projection (raw world units),
+    so we normalize it into the artboard coordinate space:
+    1. Compute bounding box of all boundary points
+    2. Scale points to fit within artboard dimensions (maintaining aspect ratio)
+    3. Center on artboard
+    4. Flip Y axis (AI coordinates: Y increases upward)
+
+    Args:
+        boundary_polygon: List of (x, y) tuples in projected 2D coordinates.
+        group_label: Label string like "front_face", "top_face".
+        artboard_dims: Dict with 'width' and 'height' keys (artboard size in points).
+
+    Returns:
+        Shape dict with "name", "approx_points" (list of [x, y] in AI
+        coordinate space), and "point_count" -- compatible with the existing
+        contour_to_path tool's shape_json format.
+    """
+    if not boundary_polygon:
+        return {"name": group_label, "approx_points": [], "point_count": 0}
+
+    ab_w = artboard_dims["width"]
+    ab_h = artboard_dims["height"]
+
+    # Convert tuples to lists and compute bounding box of projected polygon
+    xs = [p[0] for p in boundary_polygon]
+    ys = [p[1] for p in boundary_polygon]
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+
+    poly_w = max_x - min_x if max_x > min_x else 1.0
+    poly_h = max_y - min_y if max_y > min_y else 1.0
+
+    # Scale to fit artboard (with 10% margin), maintain aspect ratio
+    margin = 0.9
+    scale = min((ab_w * margin) / poly_w, (ab_h * margin) / poly_h)
+
+    # Center offset
+    cx = (ab_w - poly_w * scale) / 2.0
+    cy = (ab_h - poly_h * scale) / 2.0
+
+    # Transform: scale, center, and flip Y for AI coordinates
+    points_ai = []
+    for px, py in boundary_polygon:
+        ai_x = (px - min_x) * scale + cx
+        ai_y = ab_h - ((py - min_y) * scale + cy)  # Y-flip for AI space
+        points_ai.append([round(ai_x, 2), round(ai_y, 2)])
+
+    return {
+        "name": group_label,
+        "approx_points": points_ai,
+        "point_count": len(points_ai),
+    }
+
+
 def register(mcp):
     """Register the adobe_ai_contour_to_path tool."""
 

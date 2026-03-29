@@ -13,6 +13,7 @@ import json
 import math
 import os
 import tempfile
+from typing import Optional
 
 import cv2
 import numpy as np
@@ -48,11 +49,30 @@ class DrawingOrchestratorInput(BaseModel):
 
     reference_path: str = Field(..., description="Absolute path to the reference image")
     shape_index: int = Field(default=0, description="Index of the shape in the manifest to draw")
-    shape_manifest: str = Field(..., description="Full JSON manifest from analyze_reference")
-    image_size: str = Field(..., description="JSON [width, height] of the source image")
+    shape_manifest: str = Field(default="{}", description="Full JSON manifest from analyze_reference")
+    image_size: str = Field(default="[800,600]", description="JSON [width, height] of the source image")
     layer_name: str = Field(default="Drawing", description="Target layer for the path")
     auto_correct_passes: int = Field(default=2, description="Max correction iterations", ge=0, le=5)
     convergence_target: float = Field(default=0.85, description="Stop when convergence exceeds this", ge=0, le=1)
+    source: str = Field(
+        default="manifest",
+        description=(
+            "Pipeline source: 'manifest' (default) uses shape manifest + auto_correct. "
+            "'3d_pipeline' delegates to FeedbackLoop3D for 3D-to-2D feedback correction."
+        ),
+    )
+    mesh_path: Optional[str] = Field(
+        default=None,
+        description="OBJ mesh path (required when source='3d_pipeline')",
+    )
+    max_rounds: int = Field(
+        default=5,
+        description="Max feedback loop rounds (only used with source='3d_pipeline')",
+    )
+    damping: float = Field(
+        default=0.3,
+        description="Damping factor for 3D pipeline corrections (0-1)",
+    )
 
 
 def register(mcp):
@@ -75,6 +95,23 @@ def register(mcp):
         until convergence reaches the target or passes are exhausted.
         Returns the final convergence score and shape metadata.
         """
+        # ── 0. Route to 3D pipeline if source="3d_pipeline" ──────────
+        if params.source == "3d_pipeline":
+            from adobe_mcp.apps.illustrator.feedback_loop_3d import FeedbackLoop3D
+
+            if not params.mesh_path:
+                return json.dumps({"error": "mesh_path is required when source='3d_pipeline'"})
+
+            loop = FeedbackLoop3D()
+            result = loop.run_cycle(
+                reference_path=params.reference_path,
+                mesh_path=params.mesh_path,
+                max_rounds=params.max_rounds,
+                convergence_target=params.convergence_target,
+                damping=params.damping,
+            )
+            return json.dumps(result, indent=2)
+
         # ── 1. Validate inputs ──────────────────────────────────────────
         if not os.path.isfile(params.reference_path):
             return json.dumps({"error": f"Reference image not found: {params.reference_path}"})

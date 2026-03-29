@@ -29,6 +29,10 @@ from adobe_mcp.apps.common.compare import (
     _contour_centroid,
     _resample_contour,
 )
+from adobe_mcp.apps.illustrator.pixel_deviation_scorer import (
+    load_calibration,
+    score_pixel_deviation,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -342,13 +346,32 @@ def _score_convergence(
 ) -> tuple[float, int, int, int]:
     """Compute convergence score between reference and drawing images.
 
+    If calibration data exists (from pixel_deviation_scorer), uses
+    Hausdorff-based mean contour distance for more accurate scoring.
+    Falls back to the original pixel-similarity + match-ratio blend
+    when no calibration file is present.
+
     Returns (convergence, matched_count, ref_count, draw_count).
     """
     ref_contours = _extract_contours(ref_img, min_area)
     draw_contours = _extract_contours(draw_img, min_area)
     matched_pairs = _match_contours(ref_contours, draw_contours)
 
-    # Pixel-level similarity
+    # Check for calibration data — if present, use Hausdorff-based scoring
+    calibration = load_calibration()
+    if calibration is not None:
+        # Convert OpenCV contours (Nx1x2) to Nx2 arrays for the scorer
+        ref_arrays = [c.reshape(-1, 2).astype(np.float64) for c in ref_contours]
+        draw_arrays = [c.reshape(-1, 2).astype(np.float64) for c in draw_contours]
+
+        # Use calibrated reference_scale if stored, otherwise auto-compute
+        cal_scale = calibration.get("reference_scale")
+        result = score_pixel_deviation(ref_arrays, draw_arrays, reference_scale=cal_scale)
+
+        convergence = result["score"]
+        return convergence, result["matched_pairs"], len(ref_contours), len(draw_contours)
+
+    # Fallback: original pixel-similarity + match-ratio scoring
     gray_ref = cv2.cvtColor(ref_img, cv2.COLOR_BGR2GRAY)
     gray_draw = cv2.cvtColor(draw_img, cv2.COLOR_BGR2GRAY)
     diff = cv2.absdiff(gray_ref, gray_draw)

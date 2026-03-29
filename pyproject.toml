@@ -58,16 +58,23 @@ ml = [
     "torchvision>=0.15",
     "transformers>=4.40",
 ]
+ml-diffvg = [
+    "torch>=2.0",
+]
 ml-3d = [
     "torch>=2.0",
     "trimesh>=4.0",
     "open3d>=0.18",
 ]
+ml-trellis = [
+    "torch>=2.0",
+    "trimesh>=4.0",
+]
 timeline = [
     "opentimelineio>=0.17",
 ]
 all = [
-    "ill-tool[test,ml,ml-3d,timeline]",
+    "ill-tool[test,ml,ml-diffvg,ml-3d,timeline]",
 ]
 
 [tool.pytest.ini_options]

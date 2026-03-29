@@ -63,7 +63,7 @@ class AiCorrectionLearningInput(BaseModel):
 # Storage
 # ---------------------------------------------------------------------------
 
-VALID_CORRECTION_TYPES = {"part_label", "connection", "hierarchy", "joint_type"}
+VALID_CORRECTION_TYPES = {"part_label", "connection", "hierarchy", "joint_type", "projection_delta"}
 
 
 def _default_corrections_path() -> str:
@@ -360,6 +360,174 @@ def pre_correct_dwpose(
             corrected[jname] = pos
 
     return corrected
+
+
+# ---------------------------------------------------------------------------
+# Projection delta learning (Phase 4 feedback loop)
+# ---------------------------------------------------------------------------
+
+PROJECTION_CORRECTIONS_PATH = os.path.expanduser(
+    "~/.claude/memory/illustration/projection_corrections.json"
+)
+
+
+def _load_projection_corrections(path: str | None = None) -> list[dict]:
+    """Load projection correction deltas from disk."""
+    p = path or PROJECTION_CORRECTIONS_PATH
+    if os.path.exists(p):
+        with open(p) as f:
+            return json.load(f)
+    return []
+
+
+def _save_projection_corrections(
+    corrections: list[dict], path: str | None = None
+) -> None:
+    """Save projection correction deltas to disk."""
+    p = path or PROJECTION_CORRECTIONS_PATH
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p, "w") as f:
+        json.dump(corrections, f, indent=2)
+
+
+def store_projection_delta(
+    face_group_label: str,
+    projected_contour: list,
+    reference_contour: list,
+    displacement_vectors: list,
+    mesh_source: str,
+    image_hash: str,
+    score_before: float,
+    score_after: float,
+    path: str | None = None,
+) -> dict:
+    """Store a projection delta for a face group.
+
+    Appends to projection_corrections.json.
+    Each entry follows the schema:
+    {
+        "correction_type": "projection_delta",
+        "face_group_label": "front_face",
+        "projected_contour": [[x,y], ...],
+        "reference_contour": [[x,y], ...],
+        "displacement_vectors": [[dx,dy], ...],
+        "mesh_source": "trellis_v2",
+        "image_hash": "abc123",
+        "score_before": 0.3,
+        "score_after": 0.6,
+    }
+
+    Args:
+        face_group_label: Which face group this correction applies to.
+        projected_contour: Where the mesh projected to, as [[x,y], ...].
+        reference_contour: Where it should have been, as [[x,y], ...].
+        displacement_vectors: Per-point correction vectors [[dx,dy], ...].
+        mesh_source: Which reconstructor produced the mesh.
+        image_hash: Identity hash of the reference image.
+        score_before: Pixel deviation score before correction.
+        score_after: Pixel deviation score after correction.
+        path: Optional custom storage path.
+
+    Returns:
+        The stored correction entry dict.
+    """
+    entry = {
+        "correction_type": "projection_delta",
+        "face_group_label": face_group_label,
+        "projected_contour": projected_contour,
+        "reference_contour": reference_contour,
+        "displacement_vectors": displacement_vectors,
+        "mesh_source": mesh_source,
+        "image_hash": image_hash,
+        "score_before": score_before,
+        "score_after": score_after,
+    }
+
+    corrections = _load_projection_corrections(path)
+    corrections.append(entry)
+    _save_projection_corrections(corrections, path)
+
+    return entry
+
+
+def pre_correct_projection(
+    projected_contours: list,
+    face_group_labels: list[str],
+    image_hash: str | None = None,
+    path: str | None = None,
+) -> list:
+    """Apply stored projection deltas to new projected contours.
+
+    For each face group label, find matching stored deltas.
+    Compute mean displacement vector across all matching entries.
+    Weight: 1.0 for same image_hash, 0.3 for different image.
+    Apply weighted mean displacement to each point in the contour.
+
+    Args:
+        projected_contours: List of contour arrays, each [[x,y], ...].
+        face_group_labels: List of face group label strings, one per contour.
+        image_hash: Optional hash of the current reference image for
+            weighting stored deltas (exact match = 1.0, different = 0.3).
+        path: Optional custom storage path.
+
+    Returns:
+        List of corrected contour arrays, same structure as input.
+        Contours with no matching stored deltas are returned unchanged.
+    """
+    stored = _load_projection_corrections(path)
+    if not stored:
+        return list(projected_contours)
+
+    corrected_contours = []
+    for contour, label in zip(projected_contours, face_group_labels):
+        # Find all stored deltas matching this face group label
+        matching = [s for s in stored if s.get("face_group_label") == label]
+
+        if not matching:
+            corrected_contours.append(contour)
+            continue
+
+        # Compute weighted mean displacement vectors across all matches.
+        # Each matching entry has displacement_vectors [[dx,dy], ...].
+        # We need to average them, weighted by image hash similarity.
+        num_points = len(contour)
+
+        # Accumulate weighted sums
+        weighted_dx = [0.0] * num_points
+        weighted_dy = [0.0] * num_points
+        total_weight = 0.0
+
+        for entry in matching:
+            disp = entry.get("displacement_vectors", [])
+            # Only use entries whose displacement vector length matches
+            if len(disp) != num_points:
+                continue
+
+            # Weight: 1.0 for same image_hash, 0.3 for different
+            if image_hash and entry.get("image_hash") == image_hash:
+                w = 1.0
+            else:
+                w = 0.3
+
+            for i in range(num_points):
+                weighted_dx[i] += w * disp[i][0]
+                weighted_dy[i] += w * disp[i][1]
+            total_weight += w
+
+        if total_weight == 0.0:
+            corrected_contours.append(contour)
+            continue
+
+        # Apply weighted mean displacement
+        corrected = []
+        for i, pt in enumerate(contour):
+            mean_dx = weighted_dx[i] / total_weight
+            mean_dy = weighted_dy[i] / total_weight
+            corrected.append([pt[0] + mean_dx, pt[1] + mean_dy])
+
+        corrected_contours.append(corrected)
+
+    return corrected_contours
 
 
 def compare_corrections(
