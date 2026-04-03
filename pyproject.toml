@@ -73,6 +73,7 @@ ml-trellis = [
 ml-form-edge = [
     "torch>=2.0",
     "torchvision>=0.15",
+    "onnxruntime>=1.16",
 ]
 timeline = [
     "opentimelineio>=0.17",
