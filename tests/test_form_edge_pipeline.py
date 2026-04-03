@@ -17,6 +17,8 @@ from adobe_mcp.apps.illustrator.form_edge_pipeline import (
     edge_mask_to_contours,
     extract_form_edges,
     heuristic_form_edges,
+    informative_form_edges,
+    rindnet_form_edges,
     subtract_shadow_mask,
 )
 
@@ -222,10 +224,12 @@ class TestExtractFormEdges:
     """Verify the main dispatcher selects the correct backend."""
 
     def test_auto_selects_heuristic_when_no_ml(self, rect_image_path, monkeypatch):
-        """Auto mode should fall back to heuristic when DSINE unavailable."""
+        """Auto mode should fall back to heuristic when all ML backends unavailable."""
         import adobe_mcp.apps.illustrator.form_edge_pipeline as fep
 
         monkeypatch.setattr(fep, "DSINE_AVAILABLE", False)
+        monkeypatch.setattr(fep, "RINDNET_AVAILABLE", False)
+        monkeypatch.setattr(fep, "INFORMATIVE_AVAILABLE", False)
         result = extract_form_edges(rect_image_path, backend="auto")
         assert "error" not in result
         assert result["backend"] == "heuristic"
@@ -252,6 +256,255 @@ class TestExtractFormEdges:
         """None image path should return error."""
         result = extract_form_edges(None, backend="heuristic")
         assert "error" in result
+
+    def test_auto_priority_heuristic_when_no_ml(self, rect_image_path, monkeypatch):
+        """Auto should fall back to heuristic when all ML backends unavailable."""
+        import adobe_mcp.apps.illustrator.form_edge_pipeline as fep
+
+        monkeypatch.setattr(fep, "DSINE_AVAILABLE", False)
+        monkeypatch.setattr(fep, "RINDNET_AVAILABLE", False)
+        monkeypatch.setattr(fep, "INFORMATIVE_AVAILABLE", False)
+        result = extract_form_edges(rect_image_path, backend="auto")
+        assert "error" not in result
+        assert result["backend"] == "heuristic"
+
+    def test_valid_backends_list_includes_new_backends(self, rect_image_path):
+        """Unknown backend error should list all valid backends including new ones."""
+        result = extract_form_edges(rect_image_path, backend="nonexistent")
+        assert "valid_backends" in result
+        valid = result["valid_backends"]
+        assert "rindnet" in valid
+        assert "informative" in valid
+        assert "dsine" in valid
+        assert "heuristic" in valid
+        assert "auto" in valid
+
+    def test_rindnet_backend_explicit(self, rect_image_path, monkeypatch):
+        """Explicit rindnet backend should call rindnet_form_edges."""
+        result = extract_form_edges(rect_image_path, backend="rindnet")
+        # RINDNet falls back to heuristic when not installed
+        assert "error" not in result
+        # The backend field reflects what actually ran (rindnet or heuristic)
+        assert result["backend"] in ("rindnet", "heuristic")
+
+    def test_informative_backend_when_unavailable(self, rect_image_path, monkeypatch):
+        """Explicit informative backend should return error when onnxruntime missing."""
+        import adobe_mcp.apps.illustrator.form_edge_pipeline as fep
+
+        monkeypatch.setattr(fep, "INFORMATIVE_AVAILABLE", False)
+        result = extract_form_edges(rect_image_path, backend="informative")
+        assert "error" in result
+
+
+# ---------------------------------------------------------------------------
+# 3b. RINDNet form edges backend
+# ---------------------------------------------------------------------------
+
+
+class TestRindnetFormEdges:
+    """Verify RINDNet++ form edge extraction backend."""
+
+    def test_rindnet_returns_form_edges(self, rect_image_path):
+        """rindnet_form_edges should return form_edges mask."""
+        result = rindnet_form_edges(rect_image_path)
+        assert "error" not in result
+        assert "form_edges" in result
+        assert result["form_edges"].dtype == np.uint8
+        assert result["form_edges"].ndim == 2
+
+    def test_rindnet_returns_shadow_edges(self, rect_image_path):
+        """rindnet_form_edges should return shadow_edges mask."""
+        result = rindnet_form_edges(rect_image_path)
+        assert "error" not in result
+        assert "shadow_edges" in result
+
+    def test_rindnet_returns_metadata(self, rect_image_path):
+        """rindnet_form_edges should include metadata dict."""
+        result = rindnet_form_edges(rect_image_path)
+        assert "error" not in result
+        assert "metadata" in result
+        assert "model" in result["metadata"]
+        assert "time_seconds" in result["metadata"]
+        assert "edge_pixel_count" in result["metadata"]
+
+    def test_rindnet_backend_field(self, rect_image_path):
+        """Backend field should indicate what model actually ran."""
+        result = rindnet_form_edges(rect_image_path)
+        assert "error" not in result
+        # Falls back to heuristic when rindnet not installed
+        assert result["backend"] in ("rindnet", "heuristic")
+
+
+# ---------------------------------------------------------------------------
+# 3c. Informative Drawings form edges backend
+# ---------------------------------------------------------------------------
+
+
+class TestInformativeFormEdges:
+    """Verify Informative Drawings form edge extraction backend."""
+
+    def test_returns_error_when_unavailable(self, rect_image_path, monkeypatch):
+        """Should return error when onnxruntime is not installed."""
+        import adobe_mcp.apps.illustrator.form_edge_pipeline as fep
+
+        monkeypatch.setattr(fep, "INFORMATIVE_AVAILABLE", False)
+        result = informative_form_edges(rect_image_path)
+        assert "error" in result
+        assert "install_hint" in result
+
+    def test_returns_form_edges_when_available(self, rect_image_path, monkeypatch):
+        """When available and model loads, should return form_edges mask."""
+        import adobe_mcp.apps.illustrator.form_edge_pipeline as fep
+
+        # Mock informative_drawings to return a valid result
+        def fake_informative(image_path, threshold=0.5):
+            return {
+                "line_drawing": np.zeros((100, 100), dtype=np.uint8),
+                "model": "informative_drawings",
+                "time_seconds": 0.001,
+                "height": 100,
+                "width": 100,
+                "threshold": threshold,
+            }
+
+        monkeypatch.setattr(fep, "INFORMATIVE_AVAILABLE", True)
+        monkeypatch.setattr(fep, "informative_drawings", fake_informative)
+
+        result = informative_form_edges(rect_image_path)
+        assert "error" not in result
+        assert result["backend"] == "informative"
+        assert "form_edges" in result
+        assert "metadata" in result
+        assert result["metadata"]["model"] == "informative_drawings"
+
+    def test_passes_threshold(self, rect_image_path, monkeypatch):
+        """Threshold parameter should be passed to informative_drawings."""
+        import adobe_mcp.apps.illustrator.form_edge_pipeline as fep
+
+        captured_threshold = []
+
+        def fake_informative(image_path, threshold=0.5):
+            captured_threshold.append(threshold)
+            return {
+                "line_drawing": np.zeros((100, 100), dtype=np.uint8),
+                "model": "informative_drawings",
+                "time_seconds": 0.001,
+                "height": 100,
+                "width": 100,
+                "threshold": threshold,
+            }
+
+        monkeypatch.setattr(fep, "INFORMATIVE_AVAILABLE", True)
+        monkeypatch.setattr(fep, "informative_drawings", fake_informative)
+
+        informative_form_edges(rect_image_path, threshold=0.7)
+        assert captured_threshold == [0.7]
+
+
+# ---------------------------------------------------------------------------
+# 3d. Auto-selection priority
+# ---------------------------------------------------------------------------
+
+
+class TestAutoSelectionPriority:
+    """Verify auto-selection follows rindnet > dsine > informative > heuristic."""
+
+    def test_auto_prefers_rindnet_over_dsine(self, rect_image_path, monkeypatch):
+        """When both rindnet and dsine available, auto should pick rindnet."""
+        import adobe_mcp.apps.illustrator.form_edge_pipeline as fep
+
+        rindnet_called = []
+        dsine_called = []
+
+        def fake_rindnet(img_path, threshold=0.5):
+            rindnet_called.append(True)
+            return {
+                "form_edges": np.zeros((100, 100), dtype=np.uint8),
+                "shadow_edges": np.zeros((100, 100), dtype=np.uint8),
+                "backend": "rindnet",
+                "metadata": {"model": "rindnet", "device": "cpu",
+                             "threshold": threshold,
+                             "form_edge_pixel_count": 0,
+                             "shadow_edge_pixel_count": 0,
+                             "edge_pixel_count": 0,
+                             "time_seconds": 0.001},
+            }
+
+        def fake_dsine(img_path, threshold=0.5):
+            dsine_called.append(True)
+            return {"form_edges": np.zeros((100, 100), dtype=np.uint8),
+                    "backend": "dsine", "metadata": {}}
+
+        monkeypatch.setattr(fep, "RINDNET_AVAILABLE", True)
+        monkeypatch.setattr(fep, "DSINE_AVAILABLE", True)
+        monkeypatch.setattr(fep, "INFORMATIVE_AVAILABLE", False)
+        monkeypatch.setattr(fep, "rindnet_form_edges", fake_rindnet)
+        monkeypatch.setattr(fep, "dsine_form_edges", fake_dsine)
+
+        extract_form_edges(rect_image_path, backend="auto")
+        assert len(rindnet_called) == 1
+        assert len(dsine_called) == 0
+
+    def test_auto_prefers_dsine_over_informative(self, rect_image_path, monkeypatch):
+        """When dsine and informative available but not rindnet, auto picks dsine."""
+        import adobe_mcp.apps.illustrator.form_edge_pipeline as fep
+
+        dsine_called = []
+        informative_called = []
+
+        def fake_dsine(img_path, threshold=0.5):
+            dsine_called.append(True)
+            return {
+                "form_edges": np.zeros((100, 100), dtype=np.uint8),
+                "normal_map": np.zeros((100, 100, 3), dtype=np.float32),
+                "backend": "dsine",
+                "metadata": {"model": "dsine", "device": "cpu",
+                             "height": 100, "width": 100,
+                             "threshold": threshold,
+                             "edge_pixel_count": 0,
+                             "time_seconds": 0.001},
+            }
+
+        def fake_informative(img_path, threshold=0.5):
+            informative_called.append(True)
+            return {"form_edges": np.zeros((100, 100), dtype=np.uint8),
+                    "backend": "informative", "metadata": {}}
+
+        monkeypatch.setattr(fep, "RINDNET_AVAILABLE", False)
+        monkeypatch.setattr(fep, "DSINE_AVAILABLE", True)
+        monkeypatch.setattr(fep, "INFORMATIVE_AVAILABLE", True)
+        monkeypatch.setattr(fep, "dsine_form_edges", fake_dsine)
+        monkeypatch.setattr(fep, "informative_form_edges", fake_informative)
+
+        extract_form_edges(rect_image_path, backend="auto")
+        assert len(dsine_called) == 1
+        assert len(informative_called) == 0
+
+    def test_auto_prefers_informative_over_heuristic(self, rect_image_path, monkeypatch):
+        """When only informative available, auto picks informative over heuristic."""
+        import adobe_mcp.apps.illustrator.form_edge_pipeline as fep
+
+        informative_called = []
+
+        def fake_informative(img_path, threshold=0.5):
+            informative_called.append(True)
+            return {
+                "form_edges": np.zeros((100, 100), dtype=np.uint8),
+                "backend": "informative",
+                "metadata": {"model": "informative_drawings",
+                             "threshold": threshold,
+                             "edge_pixel_count": 0,
+                             "height": 100, "width": 100,
+                             "time_seconds": 0.001},
+            }
+
+        monkeypatch.setattr(fep, "RINDNET_AVAILABLE", False)
+        monkeypatch.setattr(fep, "DSINE_AVAILABLE", False)
+        monkeypatch.setattr(fep, "INFORMATIVE_AVAILABLE", True)
+        monkeypatch.setattr(fep, "informative_form_edges", fake_informative)
+
+        extract_form_edges(rect_image_path, backend="auto")
+        assert len(informative_called) == 1
 
 
 # ---------------------------------------------------------------------------

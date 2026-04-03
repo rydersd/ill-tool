@@ -71,19 +71,37 @@ def _write_reference_image(path: str, size: int = 64) -> None:
     cv2.imwrite(path, img)
 
 
+def _write_reference_image_large(path: str, size: int = 256) -> None:
+    """Write a larger reference image suitable for form edge extraction.
+
+    Uses a gradient circle on white background to produce strong form
+    edges that survive multi-exposure voting.  The filled shape creates
+    contours with arc lengths well above the default min_length=30.
+    """
+    img = np.ones((size, size), dtype=np.uint8) * 255
+    # Large filled gray circle — produces strong edge contours
+    cv2.circle(img, (size // 2, size // 2), size // 3, 80, -1)
+    # Smaller white circle inside — creates an inner edge
+    cv2.circle(img, (size // 2, size // 2), size // 6, 240, -1)
+    cv2.imwrite(path, img)
+
+
 @pytest.fixture
 def test_env(tmp_path):
     """Create a temporary test environment with mesh and reference image."""
     mesh_path = str(tmp_path / "cube.obj")
     ref_path = str(tmp_path / "reference.png")
+    ref_large_path = str(tmp_path / "reference_large.png")
     delta_path = str(tmp_path / "deltas.json")
 
     _write_cube_obj(mesh_path)
     _write_reference_image(ref_path, size=64)
+    _write_reference_image_large(ref_large_path, size=256)
 
     return {
         "mesh_path": mesh_path,
         "ref_path": ref_path,
+        "ref_large_path": ref_large_path,
         "delta_path": delta_path,
         "tmp_path": tmp_path,
     }
@@ -527,7 +545,7 @@ class TestHelperFunctions:
         h1 = _compute_image_hash(test_env["ref_path"])
         h2 = _compute_image_hash(test_env["ref_path"])
         assert h1 == h2
-        assert len(h1) == 32  # MD5 hex digest length
+        assert len(h1) == 64  # SHA-256 hex digest length
 
     def test_compute_displacements_shape(self):
         """Displacement array has same shape as projected contour."""
@@ -573,6 +591,124 @@ class TestHelperFunctions:
 
 
 # ---------------------------------------------------------------------------
+# 13. Form edge scoring method
+# ---------------------------------------------------------------------------
+
+
+class TestFormEdgeScoring:
+    """Test the form_edge scoring method alternative.
+
+    Uses a larger reference image (256x256) because the heuristic form
+    edge extractor needs sufficient edge pixels to produce contours
+    above the minimum arc length threshold.
+    """
+
+    def test_form_edge_cycle_returns_valid_structure(self, test_env):
+        """Form edge scoring returns the expected result keys."""
+        loop = FeedbackLoop3D(delta_storage_path=test_env["delta_path"])
+        result = loop.run_cycle(
+            reference_path=test_env["ref_large_path"],
+            mesh_path=None,
+            max_rounds=2,
+            scoring_method="form_edge",
+        )
+
+        assert "error" not in result, f"Unexpected error: {result.get('error')}"
+        assert "rounds_run" in result
+        assert "scores_per_round" in result
+        assert "best_score" in result
+        assert "convergence_reason" in result
+        assert result.get("scoring_method") == "form_edge"
+        assert result.get("backend") in {"heuristic", "dsine"}
+
+    def test_form_edge_cycle_no_mesh_needed(self, test_env):
+        """Form edge scoring works without a mesh file."""
+        loop = FeedbackLoop3D()
+        result = loop.run_cycle(
+            reference_path=test_env["ref_large_path"],
+            mesh_path=None,
+            max_rounds=1,
+            scoring_method="form_edge",
+        )
+        assert "error" not in result
+        assert result["rounds_run"] >= 1
+
+    def test_form_edge_target_zero_stops_immediately(self, test_env):
+        """Form edge scoring with target=0.0 stops at round 1."""
+        loop = FeedbackLoop3D()
+        result = loop.run_cycle(
+            reference_path=test_env["ref_large_path"],
+            mesh_path=None,
+            max_rounds=5,
+            convergence_target=0.0,
+            scoring_method="form_edge",
+        )
+        assert "error" not in result
+        assert result["convergence_reason"] == "target"
+        assert result["rounds_run"] == 1
+
+    def test_form_edge_deltas_not_stored(self, test_env):
+        """Form edge scoring does not store projection deltas (no mesh)."""
+        loop = FeedbackLoop3D(delta_storage_path=test_env["delta_path"])
+        result = loop.run_cycle(
+            reference_path=test_env["ref_large_path"],
+            mesh_path=None,
+            max_rounds=2,
+            scoring_method="form_edge",
+        )
+        assert "error" not in result
+        assert result["deltas_stored"] is False
+
+
+class TestScoringMethodResolution:
+    """Test _resolve_scoring_method logic."""
+
+    def test_explicit_mesh_projection(self, test_env):
+        """Explicit mesh_projection returns mesh_projection."""
+        method = FeedbackLoop3D._resolve_scoring_method(
+            "mesh_projection", test_env["mesh_path"], test_env["ref_path"]
+        )
+        assert method == "mesh_projection"
+
+    def test_explicit_form_edge(self, test_env):
+        """Explicit form_edge returns form_edge."""
+        method = FeedbackLoop3D._resolve_scoring_method(
+            "form_edge", None, test_env["ref_path"]
+        )
+        assert method == "form_edge"
+
+    def test_auto_with_mesh_and_no_dsine(self, test_env):
+        """Auto resolves to mesh_projection when DSINE unavailable but mesh exists."""
+        # DSINE is likely not installed in test env, so auto should
+        # prefer mesh_projection when mesh_path is valid
+        method = FeedbackLoop3D._resolve_scoring_method(
+            "auto", test_env["mesh_path"], test_env["ref_path"]
+        )
+        # Either form_edge (if DSINE happens to be installed) or mesh_projection
+        assert method in {"form_edge", "mesh_projection"}
+
+    def test_auto_without_mesh(self, test_env):
+        """Auto without a mesh falls back to form_edge (heuristic)."""
+        method = FeedbackLoop3D._resolve_scoring_method(
+            "auto", None, test_env["ref_path"]
+        )
+        assert method == "form_edge"
+
+
+class TestStatusIncludesFormEdge:
+    """Test that status reports form_edge availability."""
+
+    def test_status_reports_scoring_methods(self):
+        """Status includes scoring_methods with form_edge info."""
+        status = FeedbackLoop3D.status()
+        assert "scoring_methods" in status
+        assert "form_edge" in status["scoring_methods"]
+        assert "mesh_projection" in status["scoring_methods"]
+        assert "auto" in status["scoring_methods"]
+        assert "form_edge_pipeline" in status["modules"]
+
+
+# ---------------------------------------------------------------------------
 # Error handling
 # ---------------------------------------------------------------------------
 
@@ -580,12 +716,13 @@ class TestHelperFunctions:
 class TestErrorHandling:
     """Test error cases for the feedback loop."""
 
-    def test_missing_mesh_path(self, test_env):
-        """run_cycle with no mesh_path returns error."""
+    def test_missing_mesh_path_mesh_projection(self, test_env):
+        """run_cycle with mesh_projection and no mesh_path returns error."""
         loop = FeedbackLoop3D()
         result = loop.run_cycle(
             reference_path=test_env["ref_path"],
             mesh_path=None,
+            scoring_method="mesh_projection",
         )
         assert "error" in result
 
@@ -599,11 +736,12 @@ class TestErrorHandling:
         assert "error" in result
 
     def test_nonexistent_mesh(self, test_env):
-        """run_cycle with nonexistent mesh file returns error."""
+        """run_cycle with mesh_projection and nonexistent mesh returns error."""
         loop = FeedbackLoop3D()
         result = loop.run_cycle(
             reference_path=test_env["ref_path"],
             mesh_path="/tmp/does_not_exist_mesh.obj",
+            scoring_method="mesh_projection",
         )
         assert "error" in result
 
@@ -613,5 +751,15 @@ class TestErrorHandling:
         result = loop.run_cycle(
             reference_path="/tmp/does_not_exist_ref.png",
             mesh_path=test_env["mesh_path"],
+        )
+        assert "error" in result
+
+    def test_missing_reference_form_edge(self, test_env):
+        """run_cycle with form_edge and no reference_path returns error."""
+        loop = FeedbackLoop3D()
+        result = loop.run_cycle(
+            reference_path=None,
+            mesh_path=None,
+            scoring_method="form_edge",
         )
         assert "error" in result

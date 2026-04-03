@@ -9,11 +9,23 @@ Actions:
 - generate: Predict normals, generate renderings, save PNGs.  No Illustrator.
 - place: Run generate (if needed), then place renderings as locked hidden
   reference layers in the active Illustrator document.
+
+Integration with existing tools:
+- form_lines rendering feeds into adobe_ai_contour_scanner as shadow-free
+  edge reference for contour labeling.
+- flat_planes rendering feeds into adobe_ai_tonal_analyzer as a clean
+  plane-segmentation reference for tonal region analysis.
+- Extracted form edges (via form_edge_extract) can be placed as vector
+  paths using adobe_ai_contour_to_path.
+- The normal map saved by this tool (normal_map.png / normal_map.npy) can
+  be reused by adobe_ai_form_edge_extract to skip redundant DSINE inference.
 """
 
 import json
 import os
+import tempfile
 import time
+from collections.abc import Sequence
 from typing import Optional
 
 import cv2
@@ -23,6 +35,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from adobe_mcp.apps.illustrator.ml_backends.normal_estimator import (
     estimate_normals,
     ml_status,
+)
+from adobe_mcp.apps.illustrator.path_validation import (
+    validate_image_path_size,
+    validate_image_size,
+    validate_safe_path,
 )
 from adobe_mcp.apps.illustrator.normal_renderings import (
     curvature_map,
@@ -37,7 +54,7 @@ from adobe_mcp.apps.illustrator.normal_renderings import (
 # Constants
 # ---------------------------------------------------------------------------
 
-OUTPUT_DIR = "/tmp/ai_normal_ref"
+OUTPUT_DIR = os.path.join(tempfile.gettempdir(), f"ai_normal_ref_{os.getuid()}")
 
 # Mapping from user-facing name to rendering function + description
 RENDERING_REGISTRY = {
@@ -153,6 +170,11 @@ def _status() -> dict:
         "renderings": rendering_info,
         "available_actions": ["status", "generate", "place"],
         "output_dir": OUTPUT_DIR,
+        "recommended_next_tools": [
+            "adobe_ai_contour_scanner — use form_lines rendering as reference",
+            "adobe_ai_tonal_analyzer — use flat_planes rendering as reference",
+            "adobe_ai_contour_to_path — place extracted form edges as paths",
+        ],
     }
 
 
@@ -166,7 +188,7 @@ def _generate(
     model: str = "auto",
     renderings: list[str] | None = None,
     k_planes: int = 6,
-    light_dir: tuple[float, float, float] = (0.0, 0.0, 1.0),
+    light_dir: Sequence[float] = (0.0, 0.0, 1.0),
 ) -> dict:
     """Predict normals from image, generate requested renderings, save as PNGs.
 
@@ -186,6 +208,19 @@ def _generate(
 
     if not os.path.isfile(image_path):
         return {"error": f"Image file not found: {image_path}"}
+
+    # Validate path and image dimensions before expensive inference
+    try:
+        image_path = validate_safe_path(image_path)
+    except ValueError as exc:
+        return {"error": f"Path validation failed: {exc}"}
+
+    try:
+        validate_image_path_size(image_path)
+    except ValueError as exc:
+        return {"error": str(exc)}
+    except Exception:
+        pass  # PIL may not recognize all formats; let estimator try
 
     if renderings is None:
         renderings = ALL_RENDERING_NAMES
@@ -217,6 +252,10 @@ def _generate(
         original_image = cv2.imread(image_path)
         if original_image is None:
             return {"error": f"Failed to read image for relighting: {image_path}"}
+        try:
+            validate_image_size(original_image)
+        except ValueError as exc:
+            return {"error": str(exc)}
         # Resize to match normal map if needed
         if original_image.shape[:2] != (h, w):
             original_image = cv2.resize(original_image, (w, h))
@@ -225,10 +264,12 @@ def _generate(
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     # Save the normal map itself as a PNG (useful for debugging)
-    # Remap from [-1, 1] to [0, 255]
+    # Remap from [-1, 1] to [0, 255].  The model outputs RGB (x,y,z = R,G,B)
+    # but cv2.imwrite expects BGR, so convert before saving.
     normal_vis = ((normal_map + 1.0) * 0.5 * 255.0).clip(0, 255).astype(np.uint8)
+    normal_vis_bgr = cv2.cvtColor(normal_vis, cv2.COLOR_RGB2BGR)
     normal_map_path = os.path.join(OUTPUT_DIR, "normal_map.png")
-    cv2.imwrite(normal_map_path, normal_vis)
+    cv2.imwrite(normal_map_path, normal_vis_bgr)
 
     # --- Step 4: Generate each requested rendering ---
     rendering_paths = {}
@@ -319,27 +360,65 @@ def _build_place_jsx(
 
         place_blocks.append(f"""
         (function() {{
-            var layerName = "{layer_name}";
+            var baseName = "{layer_name}";
             var filePath = "{escaped_path}";
 
-            // Find or create the layer
+            // Find existing layer by name — if it has items that don't
+            // belong to this tool, create a new layer with a numbered suffix
+            // instead of destructively clearing user content.
             var lyr = null;
+            var existingLyr = null;
             for (var i = 0; i < doc.layers.length; i++) {{
-                if (doc.layers[i].name === layerName) {{
-                    lyr = doc.layers[i];
+                if (doc.layers[i].name === baseName) {{
+                    existingLyr = doc.layers[i];
                     break;
                 }}
             }}
-            if (!lyr) {{
-                lyr = doc.layers.add();
-                lyr.name = layerName;
+
+            if (existingLyr) {{
+                // Check if all existing items belong to this tool (name
+                // starts with "{escaped_prefix}:")
+                var hasUserContent = false;
+                existingLyr.locked = false;
+                existingLyr.visible = true;
+                for (var j = 0; j < existingLyr.pageItems.length; j++) {{
+                    var itemName = existingLyr.pageItems[j].name;
+                    if (itemName.indexOf("{escaped_prefix}:") !== 0) {{
+                        hasUserContent = true;
+                        break;
+                    }}
+                }}
+
+                if (hasUserContent) {{
+                    // Layer has user content — create a new numbered layer
+                    var suffix = 2;
+                    var newName = baseName + " " + suffix;
+                    var nameExists = true;
+                    while (nameExists) {{
+                        nameExists = false;
+                        for (var k = 0; k < doc.layers.length; k++) {{
+                            if (doc.layers[k].name === newName) {{
+                                nameExists = true;
+                                suffix++;
+                                newName = baseName + " " + suffix;
+                                break;
+                            }}
+                        }}
+                    }}
+                    lyr = doc.layers.add();
+                    lyr.name = newName;
+                }} else {{
+                    // Layer only has our tool's items — safe to clear and reuse
+                    lyr = existingLyr;
+                    while (lyr.pageItems.length > 0) {{
+                        lyr.pageItems[0].remove();
+                    }}
+                }}
             }}
 
-            // Unlock and clear existing items
-            lyr.locked = false;
-            lyr.visible = true;
-            while (lyr.pageItems.length > 0) {{
-                lyr.pageItems[0].remove();
+            if (!lyr) {{
+                lyr = doc.layers.add();
+                lyr.name = baseName;
             }}
 
             // Move layer to bottom of stack
@@ -347,14 +426,16 @@ def _build_place_jsx(
                 lyr.move(doc.layers[doc.layers.length - 1], ElementPlacement.PLACEAFTER);
             }}
 
-            // Place image
+            // Place image and embed.  After embed() the placed item becomes
+            // a rasterItem — use lyr.rasterItems to get a reliable reference.
             doc.activeLayer = lyr;
             var placed = lyr.placedItems.add();
             placed.file = new File(filePath);
             placed.embed();
 
-            // Re-acquire after embed
-            var imgItem = lyr.pageItems[lyr.pageItems.length - 1];
+            // After embed, the placed item is converted to a rasterItem.
+            // Grab the last rasterItem which is the one we just embedded.
+            var imgItem = lyr.rasterItems[lyr.rasterItems.length - 1];
 
             // Scale to fit artboard
             var abRect = doc.artboards[doc.artboards.getActiveArtboardIndex()].artboardRect;
@@ -371,13 +452,16 @@ def _build_place_jsx(
                 abRect[1] - (abH - imgItem.height) / 2
             ];
 
+            // Name the item for future identification
+            imgItem.name = "{escaped_prefix}: {display_name}";
+
             // Lock and hide the layer
             lyr.opacity = 50;
             lyr.locked = true;
             lyr.visible = false;
 
             placed_layers.push({{
-                name: layerName,
+                name: lyr.name,
                 scale: Math.round(scale * 100) / 100,
                 locked: true,
                 visible: false

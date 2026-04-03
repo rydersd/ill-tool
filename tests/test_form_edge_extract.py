@@ -13,6 +13,8 @@ import pytest
 
 from adobe_mcp.apps.illustrator.form_edge_extract import (
     DSINE_AVAILABLE,
+    INFORMATIVE_AVAILABLE,
+    RINDNET_AVAILABLE,
     OUTPUT_DIR,
     FormEdgeExtractInput,
     _build_place_jsx,
@@ -103,6 +105,39 @@ class TestStatus:
             assert dsine["install_hint"] is not None
         else:
             assert dsine["install_hint"] is None
+
+    def test_status_reports_rindnet_availability(self):
+        """RINDNet++ availability should match actual import check."""
+        status = _status()
+        assert "rindnet" in status["backends"]
+        assert status["backends"]["rindnet"]["available"] == RINDNET_AVAILABLE
+
+    def test_status_reports_informative_availability(self):
+        """Informative Drawings availability should match actual import check."""
+        status = _status()
+        assert "informative" in status["backends"]
+        assert status["backends"]["informative"]["available"] == INFORMATIVE_AVAILABLE
+
+    def test_status_has_auto_priority(self):
+        """Status should include auto-selection priority order."""
+        status = _status()
+        assert "auto_priority" in status
+        assert status["auto_priority"] == ["rindnet", "dsine", "informative", "heuristic"]
+
+    def test_status_rindnet_has_install_hint_when_unavailable(self):
+        """RINDNet++ should have install_hint with GitHub URL when not available."""
+        status = _status()
+        rindnet = status["backends"]["rindnet"]
+        if not rindnet["available"]:
+            assert rindnet["install_hint"] is not None
+            assert "github" in rindnet["install_hint"].lower()
+
+    def test_status_informative_has_install_hint_when_unavailable(self):
+        """Informative Drawings should have install_hint when not available."""
+        status = _status()
+        informative = status["backends"]["informative"]
+        if not informative["available"]:
+            assert informative["install_hint"] is not None
 
 
 # ---------------------------------------------------------------------------
@@ -454,10 +489,12 @@ class TestBackendSelection:
     """Verify auto-selection and explicit backend usage."""
 
     def test_auto_selects_heuristic_without_ml(self, form_edge_image_a, monkeypatch):
-        """Auto backend should use heuristic when DSINE is unavailable."""
+        """Auto backend should use heuristic when all ML backends unavailable."""
         import adobe_mcp.apps.illustrator.form_edge_pipeline as fep
 
         monkeypatch.setattr(fep, "DSINE_AVAILABLE", False)
+        monkeypatch.setattr(fep, "RINDNET_AVAILABLE", False)
+        monkeypatch.setattr(fep, "INFORMATIVE_AVAILABLE", False)
         result = _extract(form_edge_image_a, backend="auto")
         assert "error" not in result
         assert result["backend"] == "heuristic"

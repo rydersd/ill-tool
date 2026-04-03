@@ -39,6 +39,7 @@ from adobe_mcp.apps.illustrator.correction_learning import (
     _load_projection_corrections,
     PROJECTION_CORRECTIONS_PATH,
 )
+from adobe_mcp.apps.illustrator.path_validation import validate_safe_path
 
 
 # ---------------------------------------------------------------------------
@@ -96,6 +97,15 @@ class FeedbackLoop3DInput(BaseModel):
         default=0.0,
         description="Camera pitch angle in degrees for 2D projection",
     )
+    scoring_method: str = Field(
+        default="auto",
+        description=(
+            "Scoring method: 'mesh_projection' (3D mesh → 2D, requires OBJ), "
+            "'form_edge' (normal-map form edges as ground truth, requires reference image), "
+            "'auto' (selects best available: form_edge if DSINE available, "
+            "mesh_projection if mesh provided, heuristic otherwise)."
+        ),
+    )
     delta_storage_path: Optional[str] = Field(
         default=None,
         description="Custom path for projection delta storage (testing)",
@@ -108,12 +118,13 @@ class FeedbackLoop3DInput(BaseModel):
 
 
 def _compute_image_hash(image_path: str) -> str:
-    """Compute MD5 hash of a reference image file for cross-image weighting."""
-    md5 = hashlib.md5()
-    with open(image_path, "rb") as f:
+    """Compute SHA-256 hash of a reference image file for cross-image weighting."""
+    safe_path = validate_safe_path(image_path)
+    sha256 = hashlib.sha256()
+    with open(safe_path, "rb") as f:
         for chunk in iter(lambda: f.read(8192), b""):
-            md5.update(chunk)
-    return md5.hexdigest()
+            sha256.update(chunk)
+    return sha256.hexdigest()
 
 
 def _extract_reference_contours(reference_gray: np.ndarray) -> list[np.ndarray]:
@@ -246,6 +257,7 @@ class FeedbackLoop3D:
         angle_threshold: float = 15.0,
         camera_yaw: float = 0.0,
         camera_pitch: float = 0.0,
+        scoring_method: str = "auto",
     ) -> dict:
         """Run the complete feedback cycle.
 
@@ -284,11 +296,33 @@ class FeedbackLoop3D:
                 rounds_run, scores_per_round, best_score, best_round,
                 deltas_stored, face_groups_corrected, convergence_reason
         """
-        # Validate inputs
+        # Resolve scoring method
+        resolved_method = self._resolve_scoring_method(
+            scoring_method, mesh_path, reference_path,
+        )
+
+        # Route to form_edge scoring if selected
+        if resolved_method == "form_edge":
+            return self._run_form_edge_cycle(
+                reference_path=reference_path,
+                max_rounds=max_rounds,
+                convergence_target=convergence_target,
+                min_improvement=min_improvement,
+                damping=damping,
+            )
+
+        # Validate inputs for mesh_projection path
         if not mesh_path or not os.path.isfile(mesh_path):
             return {"error": f"mesh_path is required and must exist: {mesh_path}"}
         if not reference_path or not os.path.isfile(reference_path):
             return {"error": f"reference_path is required and must exist: {reference_path}"}
+
+        # Path traversal validation
+        try:
+            mesh_path = validate_safe_path(mesh_path)
+            reference_path = validate_safe_path(reference_path)
+        except ValueError as exc:
+            return {"error": f"Path validation failed: {exc}"}
 
         # Load mesh
         try:
@@ -481,6 +515,218 @@ class FeedbackLoop3D:
             "convergence_reason": convergence_reason,
         }
 
+    @staticmethod
+    def _resolve_scoring_method(
+        scoring_method: str,
+        mesh_path: str | None,
+        reference_path: str | None,
+    ) -> str:
+        """Resolve 'auto' scoring method to a concrete method.
+
+        Selection priority for 'auto':
+        1. mesh_projection if mesh_path is provided (user explicitly supplied mesh)
+        2. form_edge if only reference_path is available (mesh-free alternative)
+
+        The explicit method names ('mesh_projection', 'form_edge') bypass
+        auto-selection entirely.
+
+        Args:
+            scoring_method: User-specified method or 'auto'.
+            mesh_path: Path to OBJ mesh (may be None).
+            reference_path: Path to reference image (may be None).
+
+        Returns:
+            Resolved method string: 'form_edge' or 'mesh_projection'.
+        """
+        if scoring_method == "mesh_projection":
+            return "mesh_projection"
+        if scoring_method == "form_edge":
+            return "form_edge"
+
+        # auto: prefer mesh_projection when mesh is provided (user intent),
+        # fall back to form_edge when no mesh is available
+        if mesh_path and os.path.isfile(mesh_path):
+            return "mesh_projection"
+
+        # No mesh available — use form_edge (heuristic always available)
+        return "form_edge"
+
+    def _run_form_edge_cycle(
+        self,
+        reference_path: str,
+        max_rounds: int = 5,
+        convergence_target: float = 0.7,
+        min_improvement: float = 0.02,
+        damping: float = 0.3,
+    ) -> dict:
+        """Run feedback cycle using form edge extraction as ground truth.
+
+        Instead of 3D mesh projection, uses form edge extraction on the
+        reference image to produce ground-truth contours.  Then runs the
+        same iterative correction loop (match, displace, optimize, score).
+
+        This path does NOT require a mesh file -- only the reference image.
+
+        Args:
+            reference_path: Path to reference image.
+            max_rounds: Maximum correction rounds.
+            convergence_target: Stop when score >= this.
+            min_improvement: Stop on plateau.
+            damping: Correction damping factor.
+
+        Returns:
+            Same result dict structure as run_cycle.
+        """
+        from adobe_mcp.apps.illustrator.form_edge_pipeline import (
+            extract_form_edges,
+            edge_mask_to_contours,
+        )
+
+        # Validate reference
+        if not reference_path or not os.path.isfile(reference_path):
+            return {"error": f"reference_path is required and must exist: {reference_path}"}
+
+        try:
+            reference_path = validate_safe_path(reference_path)
+        except ValueError as exc:
+            return {"error": f"Path validation failed: {exc}"}
+
+        # Extract form edges as ground truth
+        edge_result = extract_form_edges(reference_path, backend="auto")
+        if "error" in edge_result:
+            return {"error": f"Form edge extraction failed: {edge_result['error']}"}
+
+        form_mask = edge_result["form_edges"]
+        backend_used = edge_result.get("backend", "auto")
+
+        # Load reference image as grayscale float32 for scoring
+        ref_img = cv2.imread(reference_path, cv2.IMREAD_GRAYSCALE)
+        if ref_img is None:
+            return {"error": f"Could not read reference image: {reference_path}"}
+        reference_float = ref_img.astype(np.float32) / 255.0
+        canvas_size = reference_float.shape[:2]  # (H, W)
+
+        # Convert form edge mask directly to contours using edge_mask_to_contours
+        # (the mask is already edges -- don't run Canny again via _extract_reference_contours)
+        contour_dicts = edge_mask_to_contours(
+            form_mask, simplify_tolerance=1.0, min_length=5, max_contours=50,
+        )
+
+        # Also try standard contour extraction from the reference image itself
+        # as a fallback when the form edge mask has too few pixels for contouring
+        ref_contours: list[np.ndarray] = []
+        for cd in contour_dicts:
+            pts = np.array(cd["points"], dtype=np.float64)
+            if pts.ndim == 2 and pts.shape[0] >= 3:
+                ref_contours.append(pts)
+
+        if not ref_contours:
+            # Fallback: extract from the reference image directly
+            ref_contours = _extract_reference_contours(reference_float)
+
+        if not ref_contours:
+            return {
+                "error": "No reference contours found from form edges or reference image.",
+                "backend": backend_used,
+            }
+
+        # Initial projected contours = reference contours (starting point)
+        projected_contours = [c.copy() for c in ref_contours]
+
+        # Rasterize initial state for scoring
+        rasterized = rasterize_contours(
+            [c.astype(np.int32) for c in projected_contours],
+            canvas_size,
+        )
+        initial_score = 1.0 - compute_loss(rasterized, reference_float)
+
+        scores_per_round = [initial_score]
+        best_score = initial_score
+        best_round = 0
+        convergence_reason = "max_rounds"
+
+        if initial_score >= convergence_target:
+            convergence_reason = "target"
+            return {
+                "rounds_run": 1,
+                "scores_per_round": [round(s, 6) for s in scores_per_round],
+                "best_score": round(best_score, 6),
+                "best_round": best_round,
+                "deltas_stored": False,
+                "face_groups_corrected": len(projected_contours),
+                "convergence_reason": convergence_reason,
+                "scoring_method": "form_edge",
+                "backend": backend_used,
+            }
+
+        # Correction loop
+        current_contours = [c.copy() for c in projected_contours]
+        prev_score = initial_score
+
+        for round_num in range(1, max_rounds):
+            # Match current contours to reference
+            matches = _match_by_centroid(current_contours, ref_contours)
+
+            if matches:
+                for pi, ri in matches:
+                    displacements = _compute_displacements(
+                        current_contours[pi], ref_contours[ri]
+                    )
+                    current_contours[pi] = (
+                        current_contours[pi] + damping * displacements
+                    )
+
+            # Optimize paths
+            optimized, _ = optimize_paths_approx(
+                current_contours,
+                reference_float,
+                iterations=20,
+                lr=1.0,
+                epsilon=0.5,
+            )
+            current_contours = optimized
+
+            # Re-score
+            rasterized = rasterize_contours(
+                [c.astype(np.int32) for c in current_contours],
+                canvas_size,
+            )
+            current_score = 1.0 - compute_loss(rasterized, reference_float)
+            scores_per_round.append(current_score)
+
+            if current_score > best_score:
+                best_score = current_score
+                best_round = round_num
+
+            # Check termination
+            improvement = current_score - prev_score
+
+            if current_score >= convergence_target:
+                convergence_reason = "target"
+                break
+
+            if improvement < min_improvement and improvement >= 0:
+                convergence_reason = "plateau"
+                break
+
+            if current_score < prev_score:
+                convergence_reason = "diverging"
+                break
+
+            prev_score = current_score
+
+        return {
+            "rounds_run": len(scores_per_round),
+            "scores_per_round": [round(s, 6) for s in scores_per_round],
+            "best_score": round(best_score, 6),
+            "best_round": best_round,
+            "deltas_stored": False,
+            "face_groups_corrected": len(projected_contours),
+            "convergence_reason": convergence_reason,
+            "scoring_method": "form_edge",
+            "backend": backend_used,
+        }
+
     def _normalize_to_canvas(
         self,
         contours: list[np.ndarray],
@@ -544,7 +790,7 @@ class FeedbackLoop3D:
             original_contours: Pre-correction contours (Nx2 arrays).
             corrected_contours: Post-correction contours (same shape).
             labels: Face group labels corresponding to each contour.
-            image_hash: Reference image MD5 hash.
+            image_hash: Reference image SHA-256 hash.
             score_before: Score before correction.
             score_after: Score after correction.
 
@@ -614,6 +860,17 @@ class FeedbackLoop3D:
         except ImportError:
             correction_available = False
 
+        # Check form_edge_pipeline (always available — heuristic backend)
+        form_edge_available = True
+        dsine_available = False
+        try:
+            from adobe_mcp.apps.illustrator.form_edge_pipeline import (
+                DSINE_AVAILABLE as _dsine,
+            )
+            dsine_available = _dsine
+        except ImportError:
+            form_edge_available = False
+
         return {
             "feedback_loop_3d": "available",
             "modules": {
@@ -621,11 +878,30 @@ class FeedbackLoop3D:
                 "diffvg": diffvg_available,
                 "mesh_face_grouper": face_grouper_available,
                 "correction_learning": correction_available,
+                "form_edge_pipeline": form_edge_available,
+                "dsine": dsine_available,
+            },
+            "scoring_methods": {
+                "mesh_projection": {
+                    "available": face_grouper_available,
+                    "description": "3D mesh → 2D projection + Hausdorff scoring",
+                },
+                "form_edge": {
+                    "available": form_edge_available,
+                    "description": (
+                        "Normal-map form edges as ground truth "
+                        f"({'DSINE' if dsine_available else 'heuristic'} backend)"
+                    ),
+                },
+                "auto": {
+                    "description": "Selects best available method automatically",
+                },
             },
             "description": (
                 "Closed-loop 3D-to-2D feedback system. "
                 "Projects mesh -> scores against reference -> "
-                "corrects iteratively -> stores learned deltas."
+                "corrects iteratively -> stores learned deltas. "
+                "Supports form_edge scoring as mesh-free alternative."
             ),
         }
 
@@ -640,6 +916,13 @@ class FeedbackLoop3D:
             Dict with status and number of entries cleared.
         """
         target = path or PROJECTION_CORRECTIONS_PATH
+
+        # Validate path before any file operations to prevent arbitrary deletion
+        try:
+            target = validate_safe_path(target)
+        except ValueError as exc:
+            return {"cleared": 0, "message": f"Path validation failed: {exc}"}
+
         if not os.path.isfile(target):
             return {"cleared": 0, "message": "No delta file found"}
 
@@ -698,7 +981,11 @@ def register(mcp):
         elif action == "run_cycle":
             if not params.reference_path:
                 return json.dumps({"error": "reference_path is required for run_cycle"})
-            if not params.mesh_path:
+            # mesh_path is only required for mesh_projection scoring
+            if params.scoring_method == "mesh_projection" and not params.mesh_path:
+                return json.dumps({"error": "mesh_path is required when scoring_method='mesh_projection'"})
+            # For auto/form_edge, mesh_path is optional
+            if params.scoring_method not in ("form_edge", "auto") and not params.mesh_path:
                 return json.dumps({"error": "mesh_path is required for run_cycle"})
 
             loop = FeedbackLoop3D(delta_storage_path=params.delta_storage_path)
@@ -712,6 +999,7 @@ def register(mcp):
                 angle_threshold=params.angle_threshold,
                 camera_yaw=params.camera_yaw,
                 camera_pitch=params.camera_pitch,
+                scoring_method=params.scoring_method,
             )
             return json.dumps(result, indent=2)
 

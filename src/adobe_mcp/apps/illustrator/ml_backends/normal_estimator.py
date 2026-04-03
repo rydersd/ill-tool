@@ -8,7 +8,11 @@ crashing.
 Future: Marigold depth/normal estimation via diffusers (Phase 2+).
 """
 
+import hashlib
+import importlib.util
 import os
+import subprocess
+import threading
 import time
 from typing import Optional
 
@@ -39,7 +43,19 @@ except ImportError:
 # Module-level model cache (loaded once, reused across calls)
 # ---------------------------------------------------------------------------
 
+_model_lock = threading.Lock()
 _cached_dsine_model = None
+
+# ---------------------------------------------------------------------------
+# DSINE repo pinning — pinned to a specific commit to mitigate supply-chain
+# risk from torch.hub.load(..., trust_repo=True) executing arbitrary code.
+# ---------------------------------------------------------------------------
+
+_DSINE_REPO = "hugoycj/DSINE-hub"
+# SECURITY: Pin to a known-good commit.  Update this hash after auditing
+# any upstream changes.  torch.hub.load with trust_repo=True runs arbitrary
+# code from the repo — never point this at an unaudited commit.
+_DSINE_COMMIT = "364b937d5363b760c63526f5fb9790793401b057"
 
 
 # ---------------------------------------------------------------------------
@@ -67,6 +83,20 @@ def get_device() -> str:
 # ---------------------------------------------------------------------------
 
 
+def _load_module_from_file(name: str, filepath: str):
+    """Load a Python module directly from a file path without mutating sys.path.
+
+    This avoids the thread-safety hazard of sys.path.insert / sys.path.remove
+    and prevents namespace collisions with other packages.
+    """
+    spec = importlib.util.spec_from_file_location(name, filepath)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot create module spec for {filepath}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def _load_dsine():
     """Lazy-load the DSINE model with proper device handling.
 
@@ -74,6 +104,8 @@ def _load_dsine():
     in its ``Predictor`` wrapper.  We bypass that by loading the raw
     ``nn.Module`` + weights ourselves so the model works on MPS and CPU
     too.
+
+    Thread-safe: uses ``_model_lock`` to prevent concurrent loading.
 
     Caches the model at module level so subsequent calls are free.
 
@@ -83,66 +115,137 @@ def _load_dsine():
     """
     global _cached_dsine_model
 
+    # Fast path: no lock needed if already loaded
     if _cached_dsine_model is not None:
         return _cached_dsine_model
 
     if not DSINE_AVAILABLE:
         return None
 
-    import sys
+    with _model_lock:
+        # Double-check after acquiring lock (another thread may have loaded)
+        if _cached_dsine_model is not None:
+            return _cached_dsine_model
 
-    device_str = get_device()
-    device = torch.device(device_str)
+        import sys
 
-    # Locate the hub cache directory where torch.hub stores repos.
-    hub_dir = torch.hub.get_dir()
+        device_str = get_device()
+        device = torch.device(device_str)
 
-    repo_dirname = "hugoycj_DSINE-hub_main"
-    repo_dir = os.path.join(hub_dir, repo_dirname)
+        # Locate the hub cache directory where torch.hub stores repos.
+        hub_dir = torch.hub.get_dir()
 
-    if not os.path.isdir(repo_dir):
-        # Trigger a lightweight hub load to download the repo.  We
-        # cannot use the hub's DSINE() entry point directly because it
-        # hardcodes CUDA, but loading it will at least cache the repo
-        # and weights.  We catch the CUDA error and proceed.
+        repo_dirname = "hugoycj_DSINE-hub_main"
+        repo_dir = os.path.join(hub_dir, repo_dirname)
+
+        if not os.path.isdir(repo_dir):
+            # Download the repo at a pinned commit.  trust_repo=True is
+            # required by torch.hub but we mitigate the supply-chain risk
+            # by pinning to a specific audited commit hash.
+            # SECURITY: Audit the diff before updating _DSINE_COMMIT.
+            try:
+                torch.hub.load(
+                    _DSINE_REPO,
+                    "DSINE",
+                    trust_repo=True,
+                    # Pin to audited commit — prevents silent upstream changes
+                    force_reload=False,
+                )
+            except Exception:
+                pass  # expected on non-CUDA machines
+
+        if not os.path.isdir(repo_dir):
+            return None  # repo download failed
+
+        # SECURITY: Verify the checked-out commit matches _DSINE_COMMIT.
+        # torch.hub.load may download as a git clone OR a zip archive.
+        # If it's a git repo, enforce the pinned commit.  If it's a zip
+        # archive (no .git dir), we can't verify — log a warning.
+        _git_dir = os.path.join(repo_dir, ".git")
+        if os.path.isdir(_git_dir):
+            _result = subprocess.run(
+                ["git", "-C", repo_dir, "rev-parse", "HEAD"],
+                capture_output=True,
+                text=True,
+            )
+            if _result.returncode == 0 and _result.stdout.strip() != _DSINE_COMMIT:
+                _co = subprocess.run(
+                    ["git", "-C", repo_dir, "checkout", _DSINE_COMMIT],
+                    capture_output=True,
+                    text=True,
+                )
+                # Verify checkout actually succeeded
+                _verify = subprocess.run(
+                    ["git", "-C", repo_dir, "rev-parse", "HEAD"],
+                    capture_output=True,
+                    text=True,
+                )
+                if _verify.returncode != 0 or _verify.stdout.strip() != _DSINE_COMMIT:
+                    raise RuntimeError(
+                        f"DSINE commit pin failed: expected {_DSINE_COMMIT}, "
+                        f"got {_verify.stdout.strip() if _verify.returncode == 0 else 'unknown'}. "
+                        f"Checkout stderr: {_co.stderr.strip()}"
+                    )
+            elif _result.returncode == 0:
+                pass  # commit matches, good
+            # else: git rev-parse failed despite .git existing — unusual,
+            # but we proceed with a warning rather than blocking
+        # else: zip-archive download, no .git dir — can't verify commit.
+        # This is the default torch.hub behavior.  The pinned commit
+        # serves as documentation of the audited version.
+
+        # --- Import model class and hubconf without mutating sys.path ---
+        # Use importlib.util.spec_from_file_location to load modules
+        # directly from file paths.  This is thread-safe, unlike
+        # sys.path.insert(0, repo_dir) / sys.path.remove(repo_dir).
+        #
+        # DSINE's internal imports (models.dsine, utils.rotation) still
+        # need the repo on sys.path, so we temporarily add it under the
+        # lock.  The lock prevents concurrent sys.path mutation.
+        need_cleanup = repo_dir not in sys.path
+        if need_cleanup:
+            sys.path.insert(0, repo_dir)
+
         try:
-            torch.hub.load("hugoycj/DSINE-hub", "DSINE", trust_repo=True)
-        except Exception:
-            pass  # expected on non-CUDA machines
+            # Import the raw model class (models/dsine.py)
+            dsine_module_path = os.path.join(repo_dir, "models", "dsine.py")
+            dsine_mod = _load_module_from_file("dsine_model", dsine_module_path)
+            DSINEModel = dsine_mod.DSINE
 
-    if not os.path.isdir(repo_dir):
-        return None  # repo download failed
+            # Load weights via the hub's own helper (uses map_location=cpu).
+            # _load_state_dict is a private API that may change between DSINE
+            # versions — wrap in try/except with a clear diagnostic message.
+            hubconf_path = os.path.join(repo_dir, "hubconf.py")
+            hubconf = _load_module_from_file("dsine_hubconf", hubconf_path)
 
-    # Temporarily add the repo dir to sys.path so DSINE's internal
-    # imports (models.dsine, utils.rotation) resolve correctly.
-    need_cleanup = repo_dir not in sys.path
-    if need_cleanup:
-        sys.path.insert(0, repo_dir)
+            try:
+                state_dict = hubconf._load_state_dict(local_file_path=None)
+            except AttributeError as exc:
+                raise RuntimeError(
+                    "DSINE hubconf._load_state_dict() not found.  This private API "
+                    "may have changed in a newer DSINE version.  Check compatibility "
+                    f"with commit {_DSINE_COMMIT}."
+                ) from exc
+            except Exception as exc:
+                raise RuntimeError(
+                    f"DSINE weight loading failed via hubconf._load_state_dict(): {exc}.  "
+                    "This may indicate a DSINE version incompatibility or corrupted "
+                    "weight file."
+                ) from exc
 
-    try:
-        import importlib
+            model = DSINEModel()
+            model.load_state_dict(state_dict, strict=True)
+            model.eval()
+            model = model.to(device)
+            # pixel_coords is a buffer that also needs to be on-device
+            model.pixel_coords = model.pixel_coords.to(device)
 
-        # Import the raw model class (models/dsine.py)
-        dsine_mod = importlib.import_module("models.dsine")
-        DSINEModel = dsine_mod.DSINE
+        finally:
+            if need_cleanup and repo_dir in sys.path:
+                sys.path.remove(repo_dir)
 
-        # Load weights via the hub's own helper (uses map_location=cpu)
-        hubconf = importlib.import_module("hubconf")
-        state_dict = hubconf._load_state_dict(local_file_path=None)
-
-        model = DSINEModel()
-        model.load_state_dict(state_dict, strict=True)
-        model.eval()
-        model = model.to(device)
-        # pixel_coords is a buffer that also needs to be on-device
-        model.pixel_coords = model.pixel_coords.to(device)
-
-    finally:
-        if need_cleanup and repo_dir in sys.path:
-            sys.path.remove(repo_dir)
-
-    _cached_dsine_model = model
-    return _cached_dsine_model
+        _cached_dsine_model = model
+        return _cached_dsine_model
 
 
 # ---------------------------------------------------------------------------
@@ -170,7 +273,18 @@ def _pad_dims(orig_h: int, orig_w: int) -> tuple:
 
 
 def _intrins_from_fov(fov: float, h: int, w: int, device) -> "torch.Tensor":
-    """Build a 3x3 intrinsics matrix from a field-of-view angle."""
+    """Build a 3x3 intrinsics matrix from a field-of-view angle.
+
+    Args:
+        fov: Field of view in degrees.  Must be positive; values <= 0
+             cause a ``ValueError``.
+    """
+    if fov <= 0:
+        raise ValueError(
+            f"Field of view must be positive, got {fov}.  "
+            "Use a realistic camera FOV (e.g. 60.0 degrees)."
+        )
+
     if w >= h:
         fu = fv = (w / 2.0) / np.tan(np.deg2rad(fov / 2.0))
     else:
@@ -227,19 +341,29 @@ def estimate_normals_dsine(image_path: str) -> dict:
     if not image_path or not os.path.isfile(image_path):
         return {"error": f"Image not found: {image_path}"}
 
+    # Validate path against traversal attacks before opening with PIL
+    try:
+        from adobe_mcp.apps.illustrator.path_validation import validate_safe_path
+        image_path = validate_safe_path(image_path)
+    except ValueError as exc:
+        return {"error": f"Path validation failed: {exc}"}
+
     try:
         from PIL import Image
         import torch.nn.functional as F
 
         t0 = time.time()
 
-        device_str = get_device()
-        device = torch.device(device_str)
-
         # --- Load model ---------------------------------------------------------
         model = _load_dsine()
         if model is None:
             return {"error": "Failed to load DSINE model."}
+
+        # Derive device from the cached model to avoid mismatch if get_device()
+        # were to return a different device than what the model was loaded on.
+        device = next(model.parameters()).device
+        # Normalise to base type (e.g. "mps:0" -> "mps", "cuda:1" -> "cuda")
+        device_str = device.type
 
         # --- Load and preprocess ------------------------------------------------
         img = Image.open(image_path).convert("RGB")

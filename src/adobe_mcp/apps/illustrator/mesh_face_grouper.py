@@ -13,6 +13,8 @@ from typing import Optional
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 
+from adobe_mcp.apps.illustrator.path_validation import validate_safe_path
+
 # Reuse 3D math from existing module — do NOT reimplement
 from adobe_mcp.apps.illustrator.form_3d_projection import (
     orthographic_project,
@@ -116,6 +118,7 @@ def load_mesh_from_obj(obj_path: str) -> tuple[np.ndarray, np.ndarray]:
     vertices = []
     faces = []
 
+    obj_path = validate_safe_path(obj_path)
     with open(obj_path, "r") as f:
         for line in f:
             stripped = line.strip()
@@ -132,12 +135,18 @@ def load_mesh_from_obj(obj_path: str) -> tuple[np.ndarray, np.ndarray]:
                 # Face line: f v1 v2 v3 ... (possibly with /vt/vn)
                 # Extract vertex indices (first number before any /)
                 face_verts = []
+                valid_face = True
                 for token in parts[1:4]:
                     # Handle v, v/vt, v/vt/vn, v//vn formats
                     idx_str = token.split("/")[0]
                     # OBJ indices are 1-based, convert to 0-based
-                    face_verts.append(int(idx_str) - 1)
-                faces.append(face_verts)
+                    idx = int(idx_str) - 1
+                    if idx < 0 or idx >= len(vertices):
+                        valid_face = False
+                        break
+                    face_verts.append(idx)
+                if valid_face:
+                    faces.append(face_verts)
 
     verts_array = np.array(vertices, dtype=np.float64) if vertices else np.empty((0, 3), dtype=np.float64)
     faces_array = np.array(faces, dtype=np.int32) if faces else np.empty((0, 3), dtype=np.int32)
@@ -315,8 +324,8 @@ def _merge_small_groups(
                     best_target = j
 
             if best_target is not None:
-                groups = _merge_pair(groups, i, best_target if best_target < i else best_target - 0)
-                # Adjust: _merge_pair removes index i, which may shift best_target
+                groups = _merge_pair(groups, i, best_target if best_target < i else best_target - 1)
+                # Adjust: _merge_pair removes index i, which shifts indices above i down by 1
                 changed = True
                 break  # restart loop after structural change
 

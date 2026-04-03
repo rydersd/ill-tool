@@ -37,6 +37,14 @@ def flat_planes(normal_map: np.ndarray, k: int = 6) -> np.ndarray:
     # Reshape to (N, 3) float32 for cv2.kmeans
     pixels = normal_map.reshape(-1, 3).astype(np.float32)
 
+    # Guard against k > unique pixels or empty input — cv2.kmeans crashes
+    if len(pixels) == 0:
+        return np.zeros((h, w, 3), dtype=np.uint8)
+    n_unique = len(np.unique(pixels, axis=0))
+    k = min(k, n_unique, len(pixels))
+    if k < 1:
+        return np.zeros((h, w, 3), dtype=np.uint8)
+
     # cv2.kmeans criteria: stop after 20 iterations or 0.5 epsilon
     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 20, 0.5)
     _, labels, _ = cv2.kmeans(
@@ -117,25 +125,23 @@ def curvature_map(normal_map: np.ndarray) -> np.ndarray:
     # np.gradient returns (dy, dx) for a 2D array
     nx = normal_map[:, :, 0].astype(np.float64)
     ny = normal_map[:, :, 1].astype(np.float64)
-    nz = normal_map[:, :, 2].astype(np.float64)
 
     # dnx/dy, dnx/dx
     dnx_dy, dnx_dx = np.gradient(nx)
     dny_dy, dny_dx = np.gradient(ny)
-    dnz_dy, dnz_dx = np.gradient(nz)
 
-    # Shape operator approximation:
+    # Shape operator (Weingarten map) approximation from the predicted
+    # normal field.  The 2x2 shape operator for a surface parameterized
+    # by image (x, y) is:
     #   S = [[dnx/dx, dnx/dy],
     #        [dny/dx, dny/dy]]
     # Gaussian curvature K = det(S) = (dnx/dx)(dny/dy) - (dnx/dy)(dny/dx)
     #
-    # We also incorporate the z-channel derivatives for a more robust estimate
-    # by summing the pairwise determinants across all channel combinations.
-    k_xy = dnx_dx * dny_dy - dnx_dy * dny_dx
-    k_xz = dnx_dx * dnz_dy - dnx_dy * dnz_dx
-    k_yz = dny_dx * dnz_dy - dny_dy * dnz_dx
-
-    curvature = k_xy + k_xz + k_yz
+    # Only the xy pair is used — this is the actual determinant from
+    # differential geometry.  The nz channel is redundant for unit normals
+    # on a surface embedded in 3D (nz is determined by nx, ny via the
+    # unit-length constraint).
+    curvature = dnx_dx * dny_dy - dnx_dy * dny_dx
     return curvature.astype(np.float32)
 
 
@@ -208,6 +214,13 @@ def depth_discontinuities(
         HxW uint8 binary edge mask (255 = discontinuity, 0 = smooth).
     """
     normals = normal_map.astype(np.float64)
+
+    # Normalize normal vectors before computing dot products so that
+    # non-unit inputs (e.g. from noisy predictions) don't skew results.
+    norm = np.linalg.norm(normals, axis=2, keepdims=True)
+    norm = np.maximum(norm, 1e-8)  # avoid division by zero
+    normals = normals / norm
+
     h, w = normals.shape[:2]
 
     # Compute dot product with right and bottom neighbors

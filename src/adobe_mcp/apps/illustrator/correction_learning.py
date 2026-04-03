@@ -21,6 +21,8 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from adobe_mcp.apps.illustrator.path_validation import validate_safe_path
+
 from adobe_mcp.apps.illustrator.rig_data import _load_rig, _save_rig
 
 
@@ -75,6 +77,7 @@ def _default_corrections_path() -> str:
 def _load_corrections(storage_path: str | None = None) -> list[dict]:
     """Load corrections from disk."""
     path = storage_path or _default_corrections_path()
+    path = validate_safe_path(path)
     if os.path.exists(path):
         with open(path) as f:
             return json.load(f)
@@ -84,6 +87,7 @@ def _load_corrections(storage_path: str | None = None) -> list[dict]:
 def _save_corrections(corrections: list[dict], storage_path: str | None = None) -> None:
     """Save corrections to disk."""
     path = storage_path or _default_corrections_path()
+    path = validate_safe_path(path)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as f:
         json.dump(corrections, f, indent=2)
@@ -131,6 +135,9 @@ def record_correction(
 
     corrections = _load_corrections(storage_path)
     corrections.append(correction)
+    # Cap to most recent 1000 entries to prevent unbounded file growth
+    if len(corrections) > 1000:
+        corrections = corrections[-1000:]
     _save_corrections(corrections, storage_path)
 
     return correction
@@ -205,8 +212,17 @@ _DWPOSE_CORRECTIONS_DIR = "/tmp/ai_rigs"
 
 
 def _dwpose_corrections_path(character_name: str) -> str:
-    """Return storage path for a character's DWPose corrections."""
-    return os.path.join(_DWPOSE_CORRECTIONS_DIR, f"{character_name}_corrections.json")
+    """Return storage path for a character's DWPose corrections.
+
+    Sanitizes character_name by removing path traversal characters
+    (``/``, ``\\``, ``..``) to prevent directory traversal attacks.
+    """
+    # Strip path traversal components from character_name
+    sanitized = character_name.replace("/", "").replace("\\", "").replace("..", "")
+    if not sanitized:
+        raise ValueError(f"Invalid character_name after sanitization: {character_name!r}")
+    path = os.path.join(_DWPOSE_CORRECTIONS_DIR, f"{sanitized}_corrections.json")
+    return validate_safe_path(path)
 
 
 def _load_dwpose_corrections(character_name: str) -> list[dict]:
@@ -374,6 +390,7 @@ PROJECTION_CORRECTIONS_PATH = os.path.expanduser(
 def _load_projection_corrections(path: str | None = None) -> list[dict]:
     """Load projection correction deltas from disk."""
     p = path or PROJECTION_CORRECTIONS_PATH
+    p = validate_safe_path(p)
     if os.path.exists(p):
         with open(p) as f:
             return json.load(f)
@@ -385,6 +402,7 @@ def _save_projection_corrections(
 ) -> None:
     """Save projection correction deltas to disk."""
     p = path or PROJECTION_CORRECTIONS_PATH
+    p = validate_safe_path(p)
     os.makedirs(os.path.dirname(p), exist_ok=True)
     with open(p, "w") as f:
         json.dump(corrections, f, indent=2)
@@ -445,6 +463,9 @@ def store_projection_delta(
 
     corrections = _load_projection_corrections(path)
     corrections.append(entry)
+    # Cap to most recent 1000 entries to prevent unbounded file growth
+    if len(corrections) > 1000:
+        corrections = corrections[-1000:]
     _save_projection_corrections(corrections, path)
 
     return entry

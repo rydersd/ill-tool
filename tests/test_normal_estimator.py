@@ -1,12 +1,14 @@
 """Tests for DSINE surface normal estimation ML backend.
 
 Tests work both WITH and WITHOUT ML dependencies (torch, torchvision).
-Validates graceful fallback, status reporting, device selection, and
-(when DSINE is available) output shape and dtype correctness.
+Validates graceful fallback, status reporting, device selection, thread
+safety, FOV validation, and (when DSINE is available) output shape and
+dtype correctness.
 """
 
 import os
-from unittest.mock import patch
+import threading
+from unittest.mock import patch, MagicMock
 
 import numpy as np
 import pytest
@@ -14,6 +16,9 @@ import pytest
 from adobe_mcp.apps.illustrator.ml_backends.normal_estimator import (
     DSINE_AVAILABLE,
     MARIGOLD_AVAILABLE,
+    _intrins_from_fov,
+    _load_module_from_file,
+    _model_lock,
     estimate_normals,
     estimate_normals_dsine,
     get_device,
@@ -190,6 +195,82 @@ class TestInputValidation:
         ):
             result = estimate_normals_dsine(None)
         assert "error" in result
+
+
+# ---------------------------------------------------------------------------
+# FOV validation (fix #6)
+# ---------------------------------------------------------------------------
+
+
+class TestFOVValidation:
+    """_intrins_from_fov rejects invalid FOV values."""
+
+    @pytest.mark.skipif(not DSINE_AVAILABLE, reason="torch not installed")
+    def test_zero_fov_raises(self):
+        """FOV of 0 raises ValueError."""
+        import torch
+
+        with pytest.raises(ValueError, match="must be positive"):
+            _intrins_from_fov(0.0, 64, 64, torch.device("cpu"))
+
+    @pytest.mark.skipif(not DSINE_AVAILABLE, reason="torch not installed")
+    def test_negative_fov_raises(self):
+        """Negative FOV raises ValueError."""
+        import torch
+
+        with pytest.raises(ValueError, match="must be positive"):
+            _intrins_from_fov(-30.0, 64, 64, torch.device("cpu"))
+
+    @pytest.mark.skipif(not DSINE_AVAILABLE, reason="torch not installed")
+    def test_valid_fov_succeeds(self):
+        """Positive FOV produces a 3x3 intrinsics matrix."""
+        import torch
+
+        result = _intrins_from_fov(60.0, 64, 64, torch.device("cpu"))
+        assert result.shape == (3, 3)
+        assert result.dtype == torch.float32
+
+
+# ---------------------------------------------------------------------------
+# Thread safety (fix #2)
+# ---------------------------------------------------------------------------
+
+
+class TestThreadSafety:
+    """Model loading lock exists and is a threading.Lock."""
+
+    def test_model_lock_exists(self):
+        """Module-level _model_lock is a Lock instance."""
+        assert isinstance(_model_lock, type(threading.Lock()))
+
+    def test_lock_is_reentrant_safe(self):
+        """Lock can be acquired and released without deadlock."""
+        # Just verify the lock is functional
+        acquired = _model_lock.acquire(timeout=1)
+        if acquired:
+            _model_lock.release()
+        assert acquired
+
+
+# ---------------------------------------------------------------------------
+# Module loader helper (fix #3)
+# ---------------------------------------------------------------------------
+
+
+class TestLoadModuleFromFile:
+    """_load_module_from_file loads modules without sys.path mutation."""
+
+    def test_load_nonexistent_file_raises(self):
+        """Attempting to load a nonexistent file raises ImportError."""
+        with pytest.raises((ImportError, FileNotFoundError)):
+            _load_module_from_file("fake_mod", "/nonexistent/path/fake.py")
+
+    def test_load_real_module(self, tmp_path):
+        """Can load a simple Python module from a file path."""
+        mod_file = tmp_path / "test_mod.py"
+        mod_file.write_text("VALUE = 42\n")
+        mod = _load_module_from_file("test_mod", str(mod_file))
+        assert mod.VALUE == 42
 
 
 # ---------------------------------------------------------------------------

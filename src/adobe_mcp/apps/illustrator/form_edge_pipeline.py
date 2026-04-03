@@ -1,8 +1,11 @@
 """Pure Python form edge extraction pipeline.
 
 Extracts form edges (ignoring shadow edges) from reference images using
-either heuristic multi-exposure voting (always available) or DSINE
-normal-based edge detection (requires ML backend).
+one of several backends:
+- heuristic: multi-exposure Canny voting (always available)
+- dsine: Sobel on DSINE normal map (requires torch)
+- rindnet: RINDNet++ 4-class edge classification (requires rindnet research repo)
+- informative: Informative Drawings artist-like line extraction (requires onnxruntime)
 
 This module has NO MCP registration and NO Illustrator interaction --
 it is pure image processing logic consumed by form_edge_extract.py.
@@ -11,7 +14,8 @@ Key insight: shadow edges move when lighting changes; form edges don't.
 Multi-exposure voting exploits this by detecting edges that persist
 across multiple contrast levels.  Normal-based extraction avoids
 shadows entirely by operating on surface orientation rather than
-brightness.
+brightness.  RINDNet++ directly classifies each edge pixel into one of
+four types.  Informative Drawings produces artist-style line drawings.
 """
 
 import time
@@ -19,6 +23,12 @@ from typing import Optional
 
 import cv2
 import numpy as np
+
+from adobe_mcp.apps.illustrator.path_validation import (
+    validate_image_path_size,
+    validate_image_size,
+    validate_safe_path,
+)
 
 # ---------------------------------------------------------------------------
 # Graceful ML dependency imports (module-level for monkeypatch testability)
@@ -36,6 +46,39 @@ except ImportError:
         """Stub when ML backend is not importable."""
         return {
             "error": "ml_backends.normal_estimator not available.",
+            "install_hint": 'Install with: uv pip install -e ".[ml-form-edge]"',
+        }
+
+try:
+    from adobe_mcp.apps.illustrator.ml_backends.edge_classifier import (
+        classify_edges_rindnet,
+        RINDNET_AVAILABLE,
+    )
+except ImportError:
+    RINDNET_AVAILABLE = False
+
+    def classify_edges_rindnet(image_path: str) -> dict:
+        """Stub when edge classifier backend is not importable."""
+        return {
+            "error": "ml_backends.edge_classifier not available.",
+            "install_hint": (
+                "RINDNet++ requires manual install from: "
+                "https://github.com/MengyangPu/RINDNet-plusplus"
+            ),
+        }
+
+try:
+    from adobe_mcp.apps.illustrator.ml_backends.informative_draw import (
+        informative_drawings,
+        INFORMATIVE_AVAILABLE,
+    )
+except ImportError:
+    INFORMATIVE_AVAILABLE = False
+
+    def informative_drawings(image_path: str, threshold: float = 0.5) -> dict:
+        """Stub when informative drawings backend is not importable."""
+        return {
+            "error": "ml_backends.informative_draw not available.",
             "install_hint": 'Install with: uv pip install -e ".[ml-form-edge]"',
         }
 
@@ -76,6 +119,12 @@ def heuristic_form_edges(
     """
     t0 = time.time()
 
+    # Reject oversized images to prevent resource exhaustion
+    try:
+        validate_image_size(image)
+    except ValueError as exc:
+        return {"error": str(exc)}
+
     num_exposures = max(2, num_exposures)
     vote_threshold = max(1, min(vote_threshold, num_exposures))
 
@@ -87,7 +136,8 @@ def heuristic_form_edges(
 
     h, w = gray.shape[:2]
     max_val = float(gray.max())
-    if max_val < 1.0:
+    if max_val == 0:
+        # All-black image, no edges to detect
         # All-black image -- no edges to find
         return {
             "form_edges": np.zeros((h, w), dtype=np.uint8),
@@ -185,23 +235,10 @@ def dsine_form_edges(
 
     normal_map = result["normal_map"]  # HxWx3 float32
 
-    # Sobel edge detection on each normal channel (same as form_lines in
-    # normal_renderings.py but self-contained to avoid coupling)
-    mag_sq = np.zeros(normal_map.shape[:2], dtype=np.float64)
-    for ch in range(3):
-        channel = normal_map[:, :, ch].astype(np.float64)
-        gx = cv2.Sobel(channel, cv2.CV_64F, 1, 0, ksize=3)
-        gy = cv2.Sobel(channel, cv2.CV_64F, 0, 1, ksize=3)
-        mag_sq += gx * gx + gy * gy
+    # Reuse the canonical Sobel-on-normals implementation from normal_renderings
+    from adobe_mcp.apps.illustrator.normal_renderings import form_lines
 
-    magnitude = np.sqrt(mag_sq)
-
-    # Threshold to binary mask
-    max_mag = magnitude.max()
-    if max_mag > 0:
-        form_mask = (magnitude >= threshold * max_mag).astype(np.uint8) * 255
-    else:
-        form_mask = np.zeros_like(magnitude, dtype=np.uint8)
+    form_mask = form_lines(normal_map, threshold=threshold)
 
     edge_count = int(np.count_nonzero(form_mask))
     t1 = time.time()
@@ -223,6 +260,122 @@ def dsine_form_edges(
 
 
 # ---------------------------------------------------------------------------
+# RINDNet++ form edge extraction
+# ---------------------------------------------------------------------------
+
+
+def rindnet_form_edges(
+    image_path: str,
+    threshold: float = 0.5,
+) -> dict:
+    """Form edges via RINDNet++ four-class edge classification.
+
+    Calls ``classify_edges_rindnet`` to get per-pixel edge type
+    classification, then returns the ``form_edges`` mask (normal | depth).
+
+    Falls back to heuristic classification when RINDNet++ is not
+    installed (the classifier handles this internally).
+
+    Args:
+        image_path: Absolute path to input image (PNG/JPG).
+        threshold: Not used by RINDNet++ directly (reserved for
+            consistency with other backends).
+
+    Returns:
+        Dict with keys:
+        - ``form_edges``: HxW uint8 mask (255 = form edge, 0 = background).
+        - ``shadow_edges``: HxW uint8 mask (255 = shadow edge).
+        - ``backend``: ``"rindnet"`` or ``"heuristic"`` (if fallback).
+        - ``metadata``: Dict with model, device, time_seconds, edge counts.
+    """
+    t0 = time.time()
+
+    result = classify_edges_rindnet(image_path)
+    if "error" in result:
+        return result
+
+    form_edges = result["form_edges"]
+    shadow_edges = result["shadow_edges"]
+    model_used = result.get("model", "rindnet")
+
+    form_count = int(np.count_nonzero(form_edges))
+    shadow_count = int(np.count_nonzero(shadow_edges))
+    t1 = time.time()
+
+    return {
+        "form_edges": form_edges,
+        "shadow_edges": shadow_edges,
+        "backend": model_used,
+        "metadata": {
+            "model": model_used,
+            "device": result.get("device", "cpu"),
+            "threshold": threshold,
+            "form_edge_pixel_count": form_count,
+            "shadow_edge_pixel_count": shadow_count,
+            "edge_pixel_count": form_count,
+            "time_seconds": round(t1 - t0, 4),
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Informative Drawings form edge extraction
+# ---------------------------------------------------------------------------
+
+
+def informative_form_edges(
+    image_path: str,
+    threshold: float = 0.5,
+) -> dict:
+    """Form edges via Informative Drawings artist-like line extraction.
+
+    Calls ``informative_drawings`` to extract a line drawing, then
+    returns the thresholded result as a form edge mask.
+
+    Requires onnxruntime and huggingface_hub.
+
+    Args:
+        image_path: Absolute path to input image (PNG/JPG).
+        threshold: Binarization threshold for the line drawing output
+            (0.0 = keep all lines, 1.0 = keep nothing).
+
+    Returns:
+        Dict with keys:
+        - ``form_edges``: HxW uint8 mask (255 = form edge, 0 = background).
+        - ``backend``: ``"informative"``.
+        - ``metadata``: Dict with model, time_seconds, edge counts.
+    """
+    t0 = time.time()
+
+    if not INFORMATIVE_AVAILABLE:
+        return {
+            "error": "onnxruntime not installed for Informative Drawings.",
+            "install_hint": 'Install with: uv pip install -e ".[ml-form-edge]"',
+        }
+
+    result = informative_drawings(image_path, threshold=threshold)
+    if "error" in result:
+        return result
+
+    form_edges = result["line_drawing"]
+    edge_count = int(np.count_nonzero(form_edges))
+    t1 = time.time()
+
+    return {
+        "form_edges": form_edges,
+        "backend": "informative",
+        "metadata": {
+            "model": "informative_drawings",
+            "threshold": threshold,
+            "edge_pixel_count": edge_count,
+            "height": result.get("height", form_edges.shape[0]),
+            "width": result.get("width", form_edges.shape[1]),
+            "time_seconds": round(t1 - t0, 4),
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
 # Dispatcher
 # ---------------------------------------------------------------------------
 
@@ -234,12 +387,14 @@ def extract_form_edges(
 ) -> dict:
     """Main dispatcher for form edge extraction.
 
-    Selects the best available backend: dsine > heuristic.
+    Selects the best available backend:
+    rindnet > dsine > informative > heuristic.
 
     Args:
         image_path: Absolute path to input image.
-        backend: ``"auto"`` (best available), ``"dsine"``, or ``"heuristic"``.
-        threshold: Edge detection threshold (used by dsine backend).
+        backend: ``"auto"`` (best available), ``"rindnet"``, ``"dsine"``,
+            ``"informative"``, or ``"heuristic"``.
+        threshold: Edge detection threshold (interpretation varies by backend).
 
     Returns:
         Dict with ``form_edges`` mask, ``backend`` name, and ``metadata``.
@@ -250,8 +405,28 @@ def extract_form_edges(
     if not image_path or not os.path.isfile(image_path):
         return {"error": f"Image not found: {image_path}"}
 
+    # Validate path against traversal attacks before any I/O
+    try:
+        image_path = validate_safe_path(image_path)
+    except ValueError as exc:
+        return {"error": f"Path validation failed: {exc}"}
+
+    # Check image dimensions from header before full decode
+    try:
+        validate_image_path_size(image_path)
+    except ValueError as exc:
+        return {"error": str(exc)}
+    except Exception:
+        pass  # PIL may not recognize all formats; let cv2 try
+
+    if backend == "rindnet":
+        return rindnet_form_edges(image_path, threshold=threshold)
+
     if backend == "dsine":
         return dsine_form_edges(image_path, threshold=threshold)
+
+    if backend == "informative":
+        return informative_form_edges(image_path, threshold=threshold)
 
     if backend == "heuristic":
         image = cv2.imread(image_path)
@@ -260,11 +435,17 @@ def extract_form_edges(
         return heuristic_form_edges(image)
 
     if backend == "auto":
-        # Try dsine first, fall back to heuristic
+        # Priority: rindnet > dsine > informative > heuristic
+        if RINDNET_AVAILABLE:
+            return rindnet_form_edges(image_path, threshold=threshold)
+
         if DSINE_AVAILABLE:
             return dsine_form_edges(image_path, threshold=threshold)
 
-        # Fall back to heuristic
+        if INFORMATIVE_AVAILABLE:
+            return informative_form_edges(image_path, threshold=threshold)
+
+        # Fall back to heuristic (always available)
         image = cv2.imread(image_path)
         if image is None:
             return {"error": f"Failed to read image: {image_path}"}
@@ -272,7 +453,7 @@ def extract_form_edges(
 
     return {
         "error": f"Unknown backend: {backend}",
-        "valid_backends": ["auto", "dsine", "heuristic"],
+        "valid_backends": ["auto", "rindnet", "dsine", "informative", "heuristic"],
     }
 
 
@@ -369,17 +550,21 @@ def edge_mask_to_contours(
 def contours_to_ai_points(
     contours: list[dict],
     image_size: tuple,
-    artboard_dims: tuple,
+    artboard_dims,
 ) -> list[dict]:
     """Transform pixel contours to Illustrator coordinates.
 
     Applies Y-flip (Illustrator Y goes up), scales to fit the artboard
-    (maintaining aspect ratio), and centers the result.
+    (maintaining aspect ratio), and centers the result.  Supports
+    multi-artboard documents where the artboard is not at the origin.
 
     Args:
         contours: List of contour dicts with ``"points"`` key (pixel coords).
         image_size: ``(width, height)`` of the source image in pixels.
-        artboard_dims: ``(width, height)`` of the Illustrator artboard in points.
+        artboard_dims: Either a dict with ``left``, ``top``, ``right``,
+            ``bottom`` keys (for multi-artboard support, matching the
+            pattern in ``contour_to_path.py``), or a ``(width, height)``
+            tuple as a convenience fallback (assumes artboard at origin).
 
     Returns:
         New list of contour dicts with transformed ``"points"`` in AI coords.
@@ -389,7 +574,19 @@ def contours_to_ai_points(
         return []
 
     img_w, img_h = image_size
-    ab_w, ab_h = artboard_dims
+
+    # Accept either dict with artboard bounds or (width, height) tuple
+    if isinstance(artboard_dims, dict):
+        ab_left = artboard_dims.get("left", 0)
+        ab_top = artboard_dims.get("top", artboard_dims.get("height", 0))
+        ab_right = artboard_dims.get("right", artboard_dims.get("width", 0))
+        ab_bottom = artboard_dims.get("bottom", 0)
+        ab_w = ab_right - ab_left
+        ab_h = ab_top - ab_bottom  # top > bottom in AI coordinate space
+    else:
+        ab_w, ab_h = artboard_dims
+        ab_left = 0
+        ab_top = ab_h  # artboard at origin: top = height
 
     if img_w <= 0 or img_h <= 0:
         return contours  # Can't transform, return as-is
@@ -398,9 +595,10 @@ def contours_to_ai_points(
     margin = 0.95
     scale = min((ab_w * margin) / img_w, (ab_h * margin) / img_h)
 
-    # Center offset
-    offset_x = (ab_w - img_w * scale) / 2.0
-    offset_y = (ab_h - img_h * scale) / 2.0
+    # Center offset — use artboard's actual position for the transform,
+    # matching the pattern in contour_to_path.py which uses ab["top"].
+    offset_x = ab_left + (ab_w - img_w * scale) / 2.0
+    offset_y = ab_top - (ab_h - img_h * scale) / 2.0
 
     transformed = []
     for contour in contours:
@@ -408,8 +606,8 @@ def contours_to_ai_points(
         for pt in contour["points"]:
             # Scale and shift
             ai_x = pt[0] * scale + offset_x
-            # Y-flip: pixel Y=0 is top, AI Y=0 is bottom
-            ai_y = ab_h - (pt[1] * scale + offset_y)
+            # Y-flip: pixel Y=0 is top, AI Y increases upward
+            ai_y = offset_y - pt[1] * scale
             new_points.append([round(ai_x, 2), round(ai_y, 2)])
 
         transformed.append({
@@ -450,6 +648,8 @@ def subtract_shadow_mask(
     fe = (form_edges > 127).astype(np.uint8)
     sm = (shadow_mask > 127).astype(np.uint8)
 
-    # form_edges AND NOT shadow_mask
-    result = cv2.bitwise_and(fe, cv2.bitwise_not(sm))
+    # form_edges AND NOT shadow_mask — using direct masking instead of
+    # cv2.bitwise_not which depends on bit patterns of 0/1 values.
+    result = fe.copy()
+    result[sm > 0] = 0
     return result * 255

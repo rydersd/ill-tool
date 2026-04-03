@@ -8,16 +8,28 @@ Actions:
 - extract: Run pipeline, return contours as JSON (no Illustrator interaction).
 - place: Extract + place as vector paths on a new Illustrator layer.
 - compare: Extract form edges from two images, compute IoU similarity.
+
+Integration with existing tools:
+- Extracted contours feed into adobe_ai_contour_to_path for vector placement.
+- Form edge masks serve as reference input for adobe_ai_contour_scanner
+  (shadow-free edge detection).
+- When DSINE backend is used, the normal map is saved to disk (normal_map.npy)
+  and can be passed to adobe_ai_normal_reference to skip redundant inference.
+- Edge masks can be compared against adobe_ai_compare_drawing output for
+  evaluating drawing accuracy against ground-truth form structure.
 """
 
 import json
 import os
+import tempfile
 import time
 from typing import Optional
 
 import cv2
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
+
+from adobe_mcp.apps.illustrator.path_validation import validate_image_size
 
 from adobe_mcp.apps.illustrator.form_edge_pipeline import (
     contours_to_ai_points,
@@ -39,12 +51,26 @@ try:
 except ImportError:
     DSINE_AVAILABLE = False
 
+try:
+    from adobe_mcp.apps.illustrator.ml_backends.edge_classifier import (
+        RINDNET_AVAILABLE,
+    )
+except ImportError:
+    RINDNET_AVAILABLE = False
+
+try:
+    from adobe_mcp.apps.illustrator.ml_backends.informative_draw import (
+        INFORMATIVE_AVAILABLE,
+    )
+except ImportError:
+    INFORMATIVE_AVAILABLE = False
+
 
 # ---------------------------------------------------------------------------
 # Output directory for cached edge masks
 # ---------------------------------------------------------------------------
 
-OUTPUT_DIR = "/tmp/ai_form_edges"
+OUTPUT_DIR = os.path.join(tempfile.gettempdir(), f"ai_form_edges_{os.getuid()}")
 
 
 # ---------------------------------------------------------------------------
@@ -77,7 +103,7 @@ class FormEdgeExtractInput(BaseModel):
     )
     backend: str = Field(
         default="auto",
-        description="Backend: auto (best available) | heuristic | dsine.",
+        description="Backend: auto (best available) | rindnet | dsine | informative | heuristic.",
     )
     edge_threshold: float = Field(
         default=0.5,
@@ -122,8 +148,11 @@ def _status() -> dict:
         "pipeline": "form_edge_extract",
         "description": (
             "Extract form edges (ignoring shadows) from reference images. "
-            "Heuristic backend uses multi-exposure Canny voting. "
-            "DSINE backend uses surface normals for shadow-free edge detection."
+            "Backends ranked by quality: rindnet > dsine > informative > heuristic. "
+            "RINDNet++ classifies edges into 4 types (reflectance, illumination, normal, depth). "
+            "DSINE uses surface normals for shadow-free edge detection. "
+            "Informative Drawings produces artist-style line drawings via ONNX. "
+            "Heuristic uses multi-exposure Canny voting (always available)."
         ),
         "backends": {
             "heuristic": {
@@ -138,9 +167,41 @@ def _status() -> dict:
                     else 'Install with: uv pip install -e ".[ml-form-edge]"'
                 ),
             },
+            "rindnet": {
+                "available": RINDNET_AVAILABLE,
+                "description": (
+                    "RINDNet++ 4-class edge classification "
+                    "(reflectance, illumination, normal, depth)."
+                ),
+                "install_hint": (
+                    None if RINDNET_AVAILABLE
+                    else (
+                        "RINDNet++ is a research repo.  Clone and install from: "
+                        "https://github.com/MengyangPu/RINDNet-plusplus  "
+                        'Also requires torch: uv pip install -e ".[ml-form-edge]"'
+                    )
+                ),
+            },
+            "informative": {
+                "available": INFORMATIVE_AVAILABLE,
+                "description": (
+                    "Informative Drawings artist-like line extraction (ONNX, ~17MB model)."
+                ),
+                "install_hint": (
+                    None if INFORMATIVE_AVAILABLE
+                    else 'Install with: uv pip install -e ".[ml-form-edge]"'
+                ),
+            },
         },
+        "auto_priority": ["rindnet", "dsine", "informative", "heuristic"],
         "available_actions": ["status", "extract", "place", "compare"],
         "output_dir": OUTPUT_DIR,
+        "recommended_next_tools": [
+            "adobe_ai_contour_to_path — place extracted form edges as vector paths",
+            "adobe_ai_contour_scanner — use form edge mask as shadow-free reference",
+            "adobe_ai_normal_reference — reuse saved normal map to skip DSINE re-inference",
+            "adobe_ai_compare_drawing — evaluate drawing accuracy against form edges",
+        ],
     }
 
 
@@ -201,13 +262,19 @@ def _extract(
         max_contours=max_contours,
     )
 
-    # Read image dimensions for coordinate transforms
-    img = cv2.imread(image_path)
-    img_h, img_w = img.shape[:2] if img is not None else (0, 0)
+    # Image dimensions from the extraction result (avoids redundant cv2.imread)
+    img_h, img_w = form_mask.shape[:2]
+
+    # When the DSINE backend was used, it returns the normal map.  Save it
+    # so the user can pass it to normal_reference without re-running DSINE.
+    normal_map_path = None
+    if result.get("normal_map") is not None:
+        normal_map_path = os.path.join(OUTPUT_DIR, "normal_map.npy")
+        np.save(normal_map_path, result["normal_map"])
 
     t1 = time.time()
 
-    return {
+    response = {
         "contours": contours,
         "contour_count": len(contours),
         "backend": result["backend"],
@@ -219,6 +286,11 @@ def _extract(
             "total_seconds": round(t1 - t0, 4),
         },
     }
+
+    if normal_map_path is not None:
+        response["normal_map_path"] = normal_map_path
+
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -368,13 +440,12 @@ def _build_place_jsx(
                     var prev = path.pathPoints[prevIdx];
                     var next = path.pathPoints[nextIdx];
 
-                    var dx_l = (pt.anchor[0] - prev.anchor[0]) / 3;
-                    var dy_l = (pt.anchor[1] - prev.anchor[1]) / 3;
-                    var dx_r = (next.anchor[0] - pt.anchor[0]) / 3;
-                    var dy_r = (next.anchor[1] - pt.anchor[1]) / 3;
+                    // C1-continuous: tangent = (next - prev), handles at 1/6
+                    var tx = next.anchor[0] - prev.anchor[0];
+                    var ty = next.anchor[1] - prev.anchor[1];
 
-                    pt.leftDirection = [pt.anchor[0] - dx_l, pt.anchor[1] - dy_l];
-                    pt.rightDirection = [pt.anchor[0] + dx_r, pt.anchor[1] + dy_r];
+                    pt.leftDirection = [pt.anchor[0] - tx / 6.0, pt.anchor[1] - ty / 6.0];
+                    pt.rightDirection = [pt.anchor[0] + tx / 6.0, pt.anchor[1] + ty / 6.0];
                 }}
             }}
 
@@ -486,12 +557,14 @@ def register(mcp):
                     "metadata": extract_result.get("metadata"),
                 })
 
-            # Query artboard dimensions from Illustrator
+            # Query artboard dimensions from Illustrator — return full bounds
+            # {left, top, right, bottom} for multi-artboard support, matching
+            # the pattern in contour_to_path.py.
             jsx_info = """
 (function() {
     var doc = app.activeDocument;
     var ab = doc.artboards[doc.artboards.getActiveArtboardIndex()].artboardRect;
-    return JSON.stringify({width: ab[2] - ab[0], height: ab[1] - ab[3]});
+    return JSON.stringify({left: ab[0], top: ab[1], right: ab[2], bottom: ab[3]});
 })();
 """
             ab_result = await _async_run_jsx("illustrator", jsx_info)
@@ -509,10 +582,11 @@ def register(mcp):
                     "contours": contours,
                 })
 
-            # Transform contours to AI coordinates
+            # Transform contours to AI coordinates — pass the full artboard
+            # bounds dict {left, top, right, bottom} for multi-artboard support.
+            # contours_to_ai_points() accepts both dict and (w, h) tuple.
             img_size = tuple(extract_result["image_size"])
-            ab_dims = (artboard["width"], artboard["height"])
-            ai_contours = contours_to_ai_points(contours, img_size, ab_dims)
+            ai_contours = contours_to_ai_points(contours, img_size, artboard)
 
             # Build and execute JSX
             jsx = _build_place_jsx(ai_contours, params.layer_name, params.smooth)

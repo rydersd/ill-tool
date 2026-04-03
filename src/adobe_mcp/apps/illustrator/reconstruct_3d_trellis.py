@@ -13,6 +13,8 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from adobe_mcp.apps.illustrator.path_validation import validate_safe_path
+
 # ---------------------------------------------------------------------------
 # Graceful ML dependency import
 # ---------------------------------------------------------------------------
@@ -375,6 +377,9 @@ def _reconstruct(
 
             output_dir = tempfile.mkdtemp(prefix="trellis_")
             output_path = os.path.join(output_dir, f"reconstruction.{fmt}")
+
+        # Validate output path against traversal attacks
+        output_path = validate_safe_path(output_path)
 
         # Ensure parent directory exists
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
