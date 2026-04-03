@@ -70,11 +70,15 @@ ml-trellis = [
     "torch>=2.0",
     "trimesh>=4.0",
 ]
+ml-form-edge = [
+    "torch>=2.0",
+    "torchvision>=0.15",
+]
 timeline = [
     "opentimelineio>=0.17",
 ]
 all = [
-    "ill-tool[test,ml,ml-diffvg,ml-3d,timeline]",
+    "ill-tool[test,ml,ml-diffvg,ml-3d,ml-form-edge,timeline]",
 ]
 
 [tool.pytest.ini_options]

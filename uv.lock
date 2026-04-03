@@ -887,6 +887,10 @@ ml-3d = [
 ml-diffvg = [
     { name = "torch" },
 ]
+ml-form-edge = [
+    { name = "torch" },
+    { name = "torchvision" },
+]
 ml-trellis = [
     { name = "torch" },
     { name = "trimesh" },
@@ -902,7 +906,7 @@ timeline = [
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.25.0" },
-    { name = "ill-tool", extras = ["test", "ml", "ml-diffvg", "ml-3d", "timeline"], marker = "extra == 'all'" },
+    { name = "ill-tool", extras = ["test", "ml", "ml-diffvg", "ml-3d", "ml-form-edge", "timeline"], marker = "extra == 'all'" },
     { name = "mcp", specifier = ">=1.0.0" },
     { name = "numpy", specifier = ">=2.2.6" },
     { name = "open3d", marker = "extra == 'ml-3d'", specifier = ">=0.18" },
@@ -915,15 +919,17 @@ requires-dist = [
     { name = "torch", marker = "extra == 'ml'", specifier = ">=2.0" },
     { name = "torch", marker = "extra == 'ml-3d'", specifier = ">=2.0" },
     { name = "torch", marker = "extra == 'ml-diffvg'", specifier = ">=2.0" },
+    { name = "torch", marker = "extra == 'ml-form-edge'", specifier = ">=2.0" },
     { name = "torch", marker = "extra == 'ml-trellis'", specifier = ">=2.0" },
     { name = "torchvision", marker = "extra == 'ml'", specifier = ">=0.15" },
+    { name = "torchvision", marker = "extra == 'ml-form-edge'", specifier = ">=0.15" },
     { name = "transformers", marker = "extra == 'ml'", specifier = ">=4.40" },
     { name = "trimesh", marker = "extra == 'ml-3d'", specifier = ">=4.0" },
     { name = "trimesh", marker = "extra == 'ml-trellis'", specifier = ">=4.0" },
     { name = "vtracer", specifier = ">=0.6.15" },
     { name = "websockets", specifier = ">=12.0" },
 ]
-provides-extras = ["test", "ml", "ml-diffvg", "ml-3d", "ml-trellis", "timeline", "all"]
+provides-extras = ["test", "ml", "ml-diffvg", "ml-3d", "ml-trellis", "ml-form-edge", "timeline", "all"]
 
 [[package]]
 name = "importlib-metadata"
