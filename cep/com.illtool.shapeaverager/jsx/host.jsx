@@ -49,9 +49,23 @@ function getSelectionInfo() {
  * Returns pipe-delimited: "shape|confidence|inputCount|outputCount"
  * On error: "error|message"
  */
+// Track hidden source paths so we can restore on cancel
+var _hiddenSourcePaths = [];
+
 function averageSelectedAnchors() {
+    var doc = app.activeDocument;
     var anchors = getSelectedAnchors();
     if (anchors.length < 2) return "error|Need at least 2 selected anchors";
+
+    // Hide the original selected paths so they don't interfere visually
+    _hiddenSourcePaths = [];
+    var sel = doc.selection;
+    for (var s = 0; s < sel.length; s++) {
+        if (sel[s].typename === "PathItem" && sel[s].opacity > 0) {
+            _hiddenSourcePaths.push({ item: sel[s], prevOpacity: sel[s].opacity });
+            sel[s].opacity = 0;
+        }
+    }
 
     var sorted = sortByPCA(anchors);
     _cachedSortedPoints = sorted;
@@ -65,18 +79,31 @@ function averageSelectedAnchors() {
     // Place preview path on "Cleaned Forms" layer (pass handles if available)
     var previewPath = placePreview(classification.points, classification.closed, "Cleaned Forms", classification.handles || null);
 
-    // Select the preview so user can see anchor handles
-    try {
-        app.activeDocument.selection = null;
-        previewPath.selected = true;
-    } catch (e) {}
-
-    // Compute and draw bounding box
+    // Compute and draw bounding box with 2x anchor points in blue
     var rect = minAreaRect(anchors);
     drawBoundingBox(rect.center[0], rect.center[1], rect.width, rect.height, rect.angle, 5, "Cleaned Forms");
 
+    // Select the preview so user can see/edit its anchor handles
+    // (user can delete stray points with Delete Anchor Point tool)
+    try {
+        doc.selection = null;
+        previewPath.selected = true;
+    } catch (e) {}
+
     // Return result as pipe-delimited string
     return classification.shape + "|" + classification.confidence + "|" + sorted.length + "|" + classification.points.length;
+}
+
+/**
+ * Restore hidden source paths (called on cancel/undo).
+ */
+function _restoreHiddenPaths() {
+    for (var i = 0; i < _hiddenSourcePaths.length; i++) {
+        try {
+            _hiddenSourcePaths[i].item.opacity = _hiddenSourcePaths[i].prevOpacity;
+        } catch (e) {}
+    }
+    _hiddenSourcePaths = [];
 }
 
 /**
@@ -184,6 +211,7 @@ function doUndoAverage() {
     logInteraction("shapeaverager", "undo", null, null, null);
     undoPreview("Cleaned Forms");
     removeBoundingBox("Cleaned Forms");
+    _restoreHiddenPaths();
     _cachedSortedPoints = null;
     _cachedClassification = null;
     _cachedLOD = null;
@@ -200,7 +228,7 @@ function cleanupOrphans() {
         var toRemove = [];
         for (var i = 0; i < lyr.pathItems.length; i++) {
             var name = lyr.pathItems[i].name;
-            if (name === "__preview__" || name === "__bbox_guide__") {
+            if (name === "__preview__" || name === "__bbox_guide__" || name.indexOf("__bbox_handle_") === 0) {
                 toRemove.push(lyr.pathItems[i]);
             }
         }

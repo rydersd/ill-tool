@@ -170,17 +170,18 @@ function drawBoundingBox(cx, cy, w, h, angle, padding, layerName) {
         ]);
     }
 
+    var bboxClr = new RGBColor();
+    bboxClr.red = 30;
+    bboxClr.green = 100;
+    bboxClr.blue = 220;
+
+    // Draw bbox outline
     var bbox = lyr.pathItems.add();
     bbox.name = "__bbox_guide__";
     bbox.filled = false;
     bbox.stroked = true;
-
-    var clr = new RGBColor();
-    clr.red = 30;
-    clr.green = 60;
-    clr.blue = 180;
-    bbox.strokeColor = clr;
-    bbox.strokeWidth = 0.5;
+    bbox.strokeColor = bboxClr;
+    bbox.strokeWidth = 1.0;
     bbox.strokeDashes = [6, 3];
     bbox.closed = true;
 
@@ -190,6 +191,29 @@ function drawBoundingBox(cx, cy, w, h, angle, padding, layerName) {
         pp.leftDirection = corners[j];
         pp.rightDirection = corners[j];
         pp.pointType = PointType.CORNER;
+    }
+
+    // Draw visible corner handles (filled blue circles, 2x normal anchor size)
+    // These are separate paths so they're visually distinct from shape anchors
+    var handleSize = 4; // radius in points (normal anchor is ~2pt)
+    for (var k = 0; k < 4; k++) {
+        var handle = lyr.pathItems.ellipse(
+            corners[k][1] + handleSize,  // top (AI Y = up)
+            corners[k][0] - handleSize,  // left
+            handleSize * 2,               // width
+            handleSize * 2,               // height
+            false, true                   // not reversed, inscribed
+        );
+        handle.name = "__bbox_handle_" + k + "__";
+        handle.filled = true;
+        handle.fillColor = bboxClr;
+        handle.stroked = true;
+        var handleStroke = new RGBColor();
+        handleStroke.red = 255;
+        handleStroke.green = 255;
+        handleStroke.blue = 255;
+        handle.strokeColor = handleStroke;
+        handle.strokeWidth = 0.5;
     }
 
     app.redraw();
@@ -202,12 +226,16 @@ function drawBoundingBox(cx, cy, w, h, angle, padding, layerName) {
 function removeBoundingBox(layerName) {
     try {
         var doc = app.activeDocument;
-        // Check specified layer, or both possible layers as fallback
         var layerNames = layerName ? [layerName] : ["Cleaned Forms", "Refined Forms"];
         for (var i = 0; i < layerNames.length; i++) {
             try {
                 var lyr = doc.layers.getByName(layerNames[i]);
-                lyr.pathItems.getByName("__bbox_guide__").remove();
+                // Remove bbox outline
+                try { lyr.pathItems.getByName("__bbox_guide__").remove(); } catch (e3) {}
+                // Remove corner handle circles
+                for (var h = 0; h < 4; h++) {
+                    try { lyr.pathItems.getByName("__bbox_handle_" + h + "__").remove(); } catch (e4) {}
+                }
             } catch (e2) {}
         }
         app.redraw();
