@@ -6,7 +6,7 @@ All tests are pure Python — no JSX or Adobe required.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.pose_library_generic import (
+from adobe_mcp.apps.illustrator.animation.pose_library_generic import (
     get_poses_for_type,
     apply_pose_preset,
     POSE_PRESETS,

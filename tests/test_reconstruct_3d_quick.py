@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 import pytest
 
-from adobe_mcp.apps.illustrator.reconstruct_3d_quick import (
+from adobe_mcp.apps.illustrator.threed.reconstruct_3d_quick import (
     ML_AVAILABLE,
     TRIMESH_AVAILABLE,
     _ml_status,
@@ -111,7 +111,7 @@ def test_validate_mesh_output():
 
 def test_graceful_fallback():
     """_reconstruct without ML deps returns error with install instructions."""
-    with patch("adobe_mcp.apps.illustrator.reconstruct_3d_quick.ML_AVAILABLE", False):
+    with patch("adobe_mcp.apps.illustrator.threed.reconstruct_3d_quick.ML_AVAILABLE", False):
         result = _reconstruct("/tmp/test.png", "obj", None)
 
     assert "error" in result

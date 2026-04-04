@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 import pytest
 
-from adobe_mcp.apps.illustrator.reconstruct_3d_trellis import (
+from adobe_mcp.apps.illustrator.threed.reconstruct_3d_trellis import (
     ML_AVAILABLE,
     TRELLIS_AVAILABLE,
     ReconstructTrellisInput,
@@ -235,7 +235,7 @@ def test_reconstruct_rejects_missing_image_path():
 def test_graceful_fallback_ml_unavailable():
     """_reconstruct without ML deps returns error with install hint."""
     with patch(
-        "adobe_mcp.apps.illustrator.reconstruct_3d_trellis.ML_AVAILABLE", False
+        "adobe_mcp.apps.illustrator.threed.reconstruct_3d_trellis.ML_AVAILABLE", False
     ):
         result = _reconstruct("/tmp/test.png", None, 512, "obj")
 
@@ -247,9 +247,9 @@ def test_graceful_fallback_ml_unavailable():
 def test_graceful_fallback_trellis_unavailable():
     """_reconstruct with ML but without TRELLIS returns install instructions."""
     with patch(
-        "adobe_mcp.apps.illustrator.reconstruct_3d_trellis.ML_AVAILABLE", True
+        "adobe_mcp.apps.illustrator.threed.reconstruct_3d_trellis.ML_AVAILABLE", True
     ), patch(
-        "adobe_mcp.apps.illustrator.reconstruct_3d_trellis.TRELLIS_AVAILABLE", False
+        "adobe_mcp.apps.illustrator.threed.reconstruct_3d_trellis.TRELLIS_AVAILABLE", False
     ):
         result = _reconstruct("/tmp/test.png", None, 512, "obj")
 
@@ -261,9 +261,9 @@ def test_graceful_fallback_trellis_unavailable():
 def test_status_reports_trellis_install_hint_when_ml_only():
     """Status shows TRELLIS install hint when torch is available but trellis isn't."""
     with patch(
-        "adobe_mcp.apps.illustrator.reconstruct_3d_trellis.ML_AVAILABLE", True
+        "adobe_mcp.apps.illustrator.threed.reconstruct_3d_trellis.ML_AVAILABLE", True
     ), patch(
-        "adobe_mcp.apps.illustrator.reconstruct_3d_trellis.TRELLIS_AVAILABLE", False
+        "adobe_mcp.apps.illustrator.threed.reconstruct_3d_trellis.TRELLIS_AVAILABLE", False
     ):
         # Need to also mock torch for the version string and device check
         import types
@@ -276,7 +276,7 @@ def test_status_reports_trellis_install_hint_when_ml_only():
             ),
         )
         with patch(
-            "adobe_mcp.apps.illustrator.reconstruct_3d_trellis.torch", mock_torch
+            "adobe_mcp.apps.illustrator.threed.reconstruct_3d_trellis.torch", mock_torch
         ):
             status = _ml_status()
 

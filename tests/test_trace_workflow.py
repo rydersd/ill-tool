@@ -11,7 +11,7 @@ import cv2
 import numpy as np
 import pytest
 
-from adobe_mcp.apps.illustrator.trace_workflow import (
+from adobe_mcp.apps.illustrator.ml_vision.trace_workflow import (
     _read_image_dimensions,
     _detect_black_contours,
     _detect_colored_regions,

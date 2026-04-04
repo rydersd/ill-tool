@@ -348,6 +348,54 @@ input[type="range"]::-webkit-slider-thumb:active {
     font-weight: 500;
 }
 
+/* ── Cluster List ──────────────────────────────────────────────── */
+.cluster-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 6px;
+    cursor: pointer;
+    border-radius: 3px;
+    font-size: 10px;
+}
+.cluster-row:hover {
+    background: rgba(255,255,255,0.05);
+}
+.cluster-row.selected {
+    background: rgba(68,136,255,0.15);
+    outline: 1px solid rgba(68,136,255,0.3);
+}
+.cluster-swatch {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    flex-shrink: 0;
+}
+.cluster-label {
+    flex: 1;
+    color: #ccc;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: 'SF Mono', Consolas, monospace;
+}
+.cluster-badge {
+    font-size: 9px;
+    font-weight: 600;
+    padding: 1px 4px;
+    border-radius: 2px;
+}
+.cluster-badge.high { background: #2a5a2a; color: #6f6; }
+.cluster-badge.medium { background: #5a4a1a; color: #fa0; }
+.cluster-badge.low { background: #4a2a2a; color: #f66; }
+.cluster-count {
+    color: #888;
+    font-size: 9px;
+    min-width: 20px;
+    text-align: right;
+}
+
 /* ── Scrollbar ──────────────────────────────────────────────────── */
 ::-webkit-scrollbar       { width: 4px; }
 ::-webkit-scrollbar-track { background: #2a2a2a; }

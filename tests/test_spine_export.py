@@ -6,7 +6,7 @@ All tests are pure Python — no Spine runtime required.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.spine_export import (
+from adobe_mcp.apps.illustrator.export_formats.spine_export import (
     rig_to_spine_skeleton,
     spine_bone,
 )

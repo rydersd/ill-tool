@@ -5,7 +5,7 @@ Tests wide shot -> 1 part, medium -> major parts only, close -> all parts.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.lod_system import (
+from adobe_mcp.apps.illustrator.analysis.lod_system import (
     compute_lod,
     simplify_to_lod,
 )

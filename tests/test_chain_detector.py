@@ -6,7 +6,7 @@ All tests are pure Python -- no JSX or Adobe required.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.chain_detector import (
+from adobe_mcp.apps.illustrator.rigging.chain_detector import (
     detect_chains,
     classify_chain,
     label_chain,

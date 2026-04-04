@@ -10,13 +10,13 @@ import json
 
 import pytest
 
-from adobe_mcp.apps.illustrator.template_matcher import (
+from adobe_mcp.apps.illustrator.rigging.template_matcher import (
     match_templates,
     suggest_template,
     _detect_symmetry,
     _compute_aspect_ratio,
 )
-from adobe_mcp.apps.illustrator.hierarchy_templates import save_template
+from adobe_mcp.apps.illustrator.rigging.hierarchy_templates import save_template
 
 
 # ---------------------------------------------------------------------------

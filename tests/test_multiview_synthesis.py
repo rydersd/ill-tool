@@ -9,7 +9,7 @@ import math
 
 import pytest
 
-from adobe_mcp.apps.illustrator.multiview_synthesis import compute_camera_positions
+from adobe_mcp.apps.illustrator.threed.multiview_synthesis import compute_camera_positions
 
 
 # ---------------------------------------------------------------------------

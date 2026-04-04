@@ -7,7 +7,7 @@ import math
 
 import pytest
 
-from adobe_mcp.apps.illustrator.form_volume import (
+from adobe_mcp.apps.illustrator.drawing.form_volume import (
     project_sphere,
     project_cylinder,
     project_box,

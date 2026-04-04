@@ -7,7 +7,7 @@ All tests are pure Python — no JSX or Adobe required.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.character_sheet_gen import (
+from adobe_mcp.apps.illustrator.character.character_sheet_gen import (
     generate_sheet_spec,
     sheet_layout,
     DEFAULT_LANDMARKS,

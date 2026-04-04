@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 import pytest
 
-from adobe_mcp.apps.illustrator.symmetry_detector import (
+from adobe_mcp.apps.illustrator.utility.symmetry_detector import (
     detect_bilateral_symmetry,
     detect_radial_symmetry,
     get_symmetry_axis,

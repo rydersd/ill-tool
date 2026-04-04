@@ -7,7 +7,7 @@ All tests are pure Python — no JSX or Adobe required.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.secondary_motion import (
+from adobe_mcp.apps.illustrator.animation.secondary_motion import (
     detect_secondary_parts,
     assign_motion_params,
     SECONDARY_MOTION_PRESETS,

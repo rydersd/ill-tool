@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 import pytest
 
-from adobe_mcp.apps.illustrator.tonal_analyzer import (
+from adobe_mcp.apps.illustrator.drawing.tonal_analyzer import (
     analyze_tonal_zones,
     find_plane_transitions,
     get_zone_boundary_contours,

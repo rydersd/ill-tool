@@ -9,7 +9,7 @@ import json
 
 import pytest
 
-from adobe_mcp.apps.illustrator.pdf_export import (
+from adobe_mcp.apps.illustrator.export_formats.pdf_export import (
     _collect_panel_data,
     _calc_layout_params,
     _build_annotation_jsx,

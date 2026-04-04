@@ -11,7 +11,7 @@ import cv2
 import numpy as np
 import pytest
 
-from adobe_mcp.apps.illustrator.connection_detector import (
+from adobe_mcp.apps.illustrator.rigging.connection_detector import (
     classify_connection,
     detect_connections,
     _create_part_mask,

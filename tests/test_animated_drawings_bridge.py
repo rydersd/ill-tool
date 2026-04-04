@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-from adobe_mcp.apps.illustrator.animated_drawings_bridge import (
+from adobe_mcp.apps.illustrator.utility.animated_drawings_bridge import (
     AD_TO_RIG_MAP,
     RIG_JOINT_NAMES,
     _check_service,

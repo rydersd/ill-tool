@@ -1,7 +1,7 @@
 """Test the rig persistence layer (save/load character rigs)."""
 import json
 
-from adobe_mcp.apps.illustrator.rig_data import _load_rig, _save_rig
+from adobe_mcp.apps.illustrator.rigging.rig_data import _load_rig, _save_rig
 
 
 REQUIRED_KEYS = {"character_name", "joints", "bones", "bindings", "body_part_labels", "poses"}

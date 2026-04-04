@@ -7,7 +7,7 @@ All tests are pure Python -- no JSX or Adobe required.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.panel_composer import (
+from adobe_mcp.apps.illustrator.storyboard.panel_composer import (
     compose_panel,
     camera_frame,
     _estimate_character_bounds,

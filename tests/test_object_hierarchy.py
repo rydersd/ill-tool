@@ -7,7 +7,7 @@ All tests are pure Python -- no JSX or Adobe required.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.object_hierarchy import (
+from adobe_mcp.apps.illustrator.rigging.object_hierarchy import (
     set_pivot,
     auto_pivots,
     get_pivot_tree,

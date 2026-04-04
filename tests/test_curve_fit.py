@@ -9,7 +9,7 @@ import math
 import numpy as np
 import pytest
 
-from adobe_mcp.apps.illustrator.curve_fit import (
+from adobe_mcp.apps.illustrator.core.curve_fit import (
     _fit_cubic,
     _max_error,
     _detect_corners,

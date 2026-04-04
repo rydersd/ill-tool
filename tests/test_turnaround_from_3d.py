@@ -8,7 +8,7 @@ import math
 
 import pytest
 
-from adobe_mcp.apps.illustrator.turnaround_from_3d import (
+from adobe_mcp.apps.illustrator.threed.turnaround_from_3d import (
     compute_turnaround_cameras,
     layout_turnaround_sheet,
     VIEW_LABELS,

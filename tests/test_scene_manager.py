@@ -7,8 +7,8 @@ import json
 
 import pytest
 
-from adobe_mcp.apps.illustrator.rig_data import _load_rig, _save_rig
-from adobe_mcp.apps.illustrator.scene_manager import (
+from adobe_mcp.apps.illustrator.rigging.rig_data import _load_rig, _save_rig
+from adobe_mcp.apps.illustrator.storyboard.scene_manager import (
     _ensure_scenes,
     _find_scene,
     _next_scene_number,

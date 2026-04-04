@@ -10,12 +10,12 @@ import os
 
 import pytest
 
-from adobe_mcp.apps.illustrator.dwpose_delta_extractor import (
+from adobe_mcp.apps.illustrator.utility.dwpose_delta_extractor import (
     match_joints_by_proximity,
     compute_deltas,
     store_deltas_via_correction_learning,
 )
-from adobe_mcp.apps.illustrator.correction_learning import (
+from adobe_mcp.apps.illustrator.analysis.correction_learning import (
     compute_correction_model,
     _load_dwpose_corrections,
 )
@@ -135,7 +135,7 @@ class TestStorageRoundTrip:
         # Point correction_learning at temp directory
         corrections_dir = str(tmp_path)
         monkeypatch.setattr(
-            "adobe_mcp.apps.illustrator.correction_learning._DWPOSE_CORRECTIONS_DIR",
+            "adobe_mcp.apps.illustrator.analysis.correction_learning._DWPOSE_CORRECTIONS_DIR",
             corrections_dir,
         )
 
@@ -158,7 +158,7 @@ class TestStorageRoundTrip:
         """Multiple extractions for the same character accumulate, not overwrite."""
         corrections_dir = str(tmp_path)
         monkeypatch.setattr(
-            "adobe_mcp.apps.illustrator.correction_learning._DWPOSE_CORRECTIONS_DIR",
+            "adobe_mcp.apps.illustrator.analysis.correction_learning._DWPOSE_CORRECTIONS_DIR",
             corrections_dir,
         )
 
@@ -186,7 +186,7 @@ class TestStorageRoundTrip:
         """Character type is preserved in stored corrections."""
         corrections_dir = str(tmp_path)
         monkeypatch.setattr(
-            "adobe_mcp.apps.illustrator.correction_learning._DWPOSE_CORRECTIONS_DIR",
+            "adobe_mcp.apps.illustrator.analysis.correction_learning._DWPOSE_CORRECTIONS_DIR",
             corrections_dir,
         )
 
@@ -210,7 +210,7 @@ class TestStorageRoundTrip:
         """Status reports correctly when no corrections exist."""
         corrections_dir = str(tmp_path)
         monkeypatch.setattr(
-            "adobe_mcp.apps.illustrator.correction_learning._DWPOSE_CORRECTIONS_DIR",
+            "adobe_mcp.apps.illustrator.analysis.correction_learning._DWPOSE_CORRECTIONS_DIR",
             corrections_dir,
         )
 
@@ -221,7 +221,7 @@ class TestStorageRoundTrip:
         """Storing empty deltas list stores nothing."""
         corrections_dir = str(tmp_path)
         monkeypatch.setattr(
-            "adobe_mcp.apps.illustrator.correction_learning._DWPOSE_CORRECTIONS_DIR",
+            "adobe_mcp.apps.illustrator.analysis.correction_learning._DWPOSE_CORRECTIONS_DIR",
             corrections_dir,
         )
 

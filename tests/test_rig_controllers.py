@@ -8,12 +8,12 @@ import json
 
 import pytest
 
-from adobe_mcp.apps.illustrator.rig_controllers import (
+from adobe_mcp.apps.illustrator.rigging.rig_controllers import (
     _controller_name,
     _build_controller_list,
     _map_controllers_to_joints,
 )
-from adobe_mcp.apps.illustrator.rig_data import _load_rig, _save_rig
+from adobe_mcp.apps.illustrator.rigging.rig_data import _load_rig, _save_rig
 
 
 # ---------------------------------------------------------------------------

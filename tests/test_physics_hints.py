@@ -7,7 +7,7 @@ All tests are pure Python — no JSX or Adobe required.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.physics_hints import (
+from adobe_mcp.apps.illustrator.animation.physics_hints import (
     estimate_mass,
     compute_center_of_gravity,
     compute_moment_of_inertia,

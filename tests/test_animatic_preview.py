@@ -9,7 +9,7 @@ import os
 
 import pytest
 
-from adobe_mcp.apps.illustrator.animatic_preview import (
+from adobe_mcp.apps.illustrator.production.animatic_preview import (
     _compute_panel_timings,
     _generate_html,
 )

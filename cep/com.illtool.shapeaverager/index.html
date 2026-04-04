@@ -7,12 +7,16 @@
 </head>
 <body>
 
-    <!-- Header with status -->
+    <!-- Header with status + help toggle -->
     <div class="header">
         <span class="header-title">Shape Cleanup</span>
-        <div class="status-indicator">
-            <div id="statusDot" class="status-dot ready"></div>
-            <span id="statusLabel" class="status-label ready">ready</span>
+        <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="color: #aaa; font-size: 10px; font-family: 'SF Mono', Consolas, monospace;" id="selectionInfo">0 anchors</span>
+            <div class="status-indicator">
+                <div id="statusDot" class="status-dot ready"></div>
+                <span id="statusLabel" class="status-label ready">ready</span>
+            </div>
+            <span id="helpToggle" onclick="toggleHelp()" style="cursor: pointer; color: #888; font-size: 14px; line-height: 1;" title="Help">&#8943;</span>
         </div>
     </div>
 
@@ -51,27 +55,34 @@
         </div>
     </div>
 
-    <!-- Bounding Box interactive canvas -->
-    <div class="section" id="bboxSection" style="display:none;">
-        <div class="section-label">Bounding Box</div>
-        <canvas id="bboxCanvas" width="250" height="180" style="border: 1px solid #444; border-radius: 3px; background: #2a2a2a; cursor: crosshair;"></canvas>
-        <div class="slider-group" style="margin-top: 6px;">
-            <div class="slider-row">
-                <span class="slider-label">Rotation</span>
-                <input type="number" id="rotationInput" value="0" step="1" style="width: 50px; background: #3a3a3a; border: 1px solid #555; color: #e0e0e0; border-radius: 2px; padding: 2px 4px; font-size: 10px;">
-                <span class="slider-value">deg</span>
-            </div>
-        </div>
-    </div>
-
-    <!-- First-use guidance -->
-    <div id="helpText" class="section">
+    <!-- Help (hidden by default, toggled via ⋯ button) -->
+    <div id="helpText" class="section" style="display: none;">
         <div style="color: #aaa; font-size: 10px; line-height: 1.6;">
             <strong>Getting started:</strong><br>
             1. Use Direct Selection (A) or Lasso to select anchor points<br>
             2. Click <em>Average Selection</em> to classify and preview<br>
-            3. Adjust shape type or simplification if needed<br>
-            4. Click <em>Confirm</em> to place the cleaned path
+            3. Shift-click anchors to deselect — preview updates live<br>
+            4. Click <em>Confirm</em> to place the cleaned path<br>
+            <br>
+            <strong>Shortcuts:</strong> Enter=Confirm, Esc=Cancel, 1-7=Shape type
+        </div>
+    </div>
+
+    <!-- Clustering -->
+    <div id="clusterSection" class="section" style="display: none;">
+        <div class="slider-row">
+            <span class="slider-label">Distance</span>
+            <input type="range" id="distanceSlider" min="1" max="30" value="8">
+            <span class="slider-value" id="distanceValue">8</span>
+            <span style="color: #666; font-size: 9px;">pt</span>
+        </div>
+        <div id="clusterReadout" style="color: #aaa; font-size: 10px; margin: 4px 0; font-family: 'SF Mono', Consolas, monospace;"></div>
+        <div id="clusterList" style="max-height: 160px; overflow-y: auto; margin: 4px 0;"></div>
+        <div class="action-buttons">
+            <div class="btn-row">
+                <button class="btn btn-primary" id="btnAcceptAll" onclick="acceptAllClusters()" disabled title="Average all clusters (A)">Accept All</button>
+                <button class="btn btn-secondary" id="btnExitCluster" onclick="exitClusterMode()" title="Exit clustering mode">Exit</button>
+            </div>
         </div>
     </div>
 
@@ -79,6 +90,7 @@
     <div class="section">
         <div class="action-buttons">
             <div class="btn-row">
+                <button class="btn btn-secondary" id="btnCluster" onclick="clusterLayers()" title="Auto-cluster paths across extraction layers">Cluster Layers</button>
                 <button class="btn btn-primary" id="btnAverage" onclick="averageSelection()" title="Classify and preview averaged path from selected anchors">
                     Average Selection
                 </button>

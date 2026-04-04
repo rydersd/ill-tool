@@ -8,7 +8,7 @@ import math
 
 import pytest
 
-from adobe_mcp.apps.illustrator.environment import (
+from adobe_mcp.apps.illustrator.production.environment import (
     compute_vanishing_points,
     compute_grid_lines,
     _ensure_environment,

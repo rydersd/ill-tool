@@ -10,7 +10,7 @@ import tempfile
 import numpy as np
 import pytest
 
-from adobe_mcp.apps.illustrator.mesh_face_grouper import (
+from adobe_mcp.apps.illustrator.threed.mesh_face_grouper import (
     classify_face_groups,
     compute_face_normal,
     extract_group_boundary,

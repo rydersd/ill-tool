@@ -7,7 +7,7 @@ All tests are pure Python — no JSX or Adobe required.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.project_dashboard import (
+from adobe_mcp.apps.illustrator.production.project_dashboard import (
     dashboard_data,
     generate_dashboard,
 )

@@ -11,8 +11,8 @@ import json
 
 import pytest
 
-from adobe_mcp.apps.illustrator.rig_data import _load_rig, _save_rig
-from adobe_mcp.apps.illustrator.shot_list_gen import (
+from adobe_mcp.apps.illustrator.rigging.rig_data import _load_rig, _save_rig
+from adobe_mcp.apps.illustrator.storyboard.shot_list_gen import (
     _build_shot_rows,
     _format_csv,
     _format_table,

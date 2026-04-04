@@ -9,7 +9,7 @@ import math
 
 import pytest
 
-from adobe_mcp.apps.illustrator.motion_path_from_hierarchy import (
+from adobe_mcp.apps.illustrator.animation.motion_path_from_hierarchy import (
     compute_joint_paths,
     generate_path_curves,
 )

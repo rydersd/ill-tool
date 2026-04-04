@@ -7,7 +7,7 @@ All tests are pure Python — no JSX or Adobe required.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.timing_curves import (
+from adobe_mcp.apps.illustrator.animation.timing_curves import (
     get_timing_curve,
     generate_ae_easing,
     _classify_joint,

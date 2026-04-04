@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 import pytest
 
-from adobe_mcp.apps.illustrator.normal_reference import (
+from adobe_mcp.apps.illustrator.drawing.normal_reference import (
     ALL_RENDERING_NAMES,
     DISPLAY_NAMES,
     OUTPUT_DIR,
@@ -80,7 +80,7 @@ def mock_estimator(monkeypatch, fake_normal_map):
         }
 
     monkeypatch.setattr(
-        "adobe_mcp.apps.illustrator.normal_reference.estimate_normals",
+        "adobe_mcp.apps.illustrator.drawing.normal_reference.estimate_normals",
         _fake_estimate,
     )
 
@@ -413,12 +413,12 @@ class TestPlaceAction:
             json.dumps({"layers_placed": 5, "layers": []})
         )
         # Import and call the handler directly
-        from adobe_mcp.apps.illustrator.normal_reference import (
+        from adobe_mcp.apps.illustrator.drawing.normal_reference import (
             NormalReferenceInput,
         )
 
         # We need to call the internal logic since the tool is registered on mcp
-        from adobe_mcp.apps.illustrator.normal_reference import (
+        from adobe_mcp.apps.illustrator.drawing.normal_reference import (
             _generate,
             _build_place_jsx,
         )

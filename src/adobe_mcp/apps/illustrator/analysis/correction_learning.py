@@ -1,0 +1,944 @@
+"""Correction learning from user feedback.
+
+Three correction systems:
+
+1. **Label corrections** — Records user corrections to CV analysis part
+   labels and uses shape context to suggest labels for future similar parts.
+   Storage: ~/.claude/memory/illustration/corrections.json
+
+2. **DWPose joint corrections** — Records user corrections to DWPose skeleton
+   predictions. When the user moves a joint from the predicted position to the
+   correct position, the delta is stored per character. After corrections on 2+
+   figures, the system pre-applies predicted corrections to future DWPose output.
+   Storage: /tmp/ai_rigs/{character_name}_corrections.json
+
+3. **Cluster threshold corrections** — Records accept/split/reject/slider_adjust
+   feedback from the edge clustering UI. Learns per-identity thresholds so
+   clustering improves over time. Tracks convergence via Accept All ratio.
+   Storage: ~/Library/Application Support/illtool/cluster_corrections.json
+"""
+
+import json
+import math
+import os
+import statistics
+import tempfile
+from pathlib import Path
+from typing import Optional
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from adobe_mcp.apps.illustrator.path_validation import validate_safe_path
+
+from adobe_mcp.apps.illustrator.rigging.rig_data import _load_rig, _save_rig
+
+
+# ---------------------------------------------------------------------------
+# Input model
+# ---------------------------------------------------------------------------
+
+
+class AiCorrectionLearningInput(BaseModel):
+    """Learn from user corrections to improve future analysis."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    action: str = Field(
+        ...,
+        description="Action: record_correction, suggest_from_corrections",
+    )
+    correction_type: Optional[str] = Field(
+        default=None,
+        description="Type: part_label, connection, hierarchy, joint_type",
+    )
+    original: Optional[str] = Field(
+        default=None, description="Original label/value"
+    )
+    corrected: Optional[str] = Field(
+        default=None, description="Corrected label/value"
+    )
+    context: Optional[dict] = Field(
+        default=None,
+        description="Shape context: area_ratio, aspect_ratio, position_relative_to_root",
+    )
+    part_features: Optional[dict] = Field(
+        default=None,
+        description="Features of a new part to get suggestions for",
+    )
+    storage_path: Optional[str] = Field(
+        default=None, description="Custom storage path for corrections file"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Storage
+# ---------------------------------------------------------------------------
+
+VALID_CORRECTION_TYPES = {"part_label", "connection", "hierarchy", "joint_type", "projection_delta"}
+
+
+def _default_corrections_path() -> str:
+    """Return the default corrections file path."""
+    home = os.path.expanduser("~")
+    return os.path.join(home, ".claude", "memory", "illustration", "corrections.json")
+
+
+def _load_corrections(storage_path: str | None = None) -> list[dict]:
+    """Load corrections from disk."""
+    path = storage_path or _default_corrections_path()
+    path = validate_safe_path(path)
+    if os.path.exists(path):
+        with open(path) as f:
+            return json.load(f)
+    return []
+
+
+def _save_corrections(corrections: list[dict], storage_path: str | None = None) -> None:
+    """Save corrections to disk."""
+    path = storage_path or _default_corrections_path()
+    path = validate_safe_path(path)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(corrections, f, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# Core logic
+# ---------------------------------------------------------------------------
+
+
+def record_correction(
+    correction_type: str,
+    original: str,
+    corrected: str,
+    context: dict,
+    storage_path: str | None = None,
+) -> dict:
+    """Store a user correction with shape context.
+
+    Args:
+        correction_type: one of part_label, connection, hierarchy, joint_type
+        original: the original label/value
+        corrected: the corrected label/value
+        context: shape features dict (area_ratio, aspect_ratio, position_relative_to_root)
+        storage_path: optional custom path for the corrections file
+
+    Returns:
+        The stored correction dict.
+
+    Raises:
+        ValueError: if correction_type is invalid.
+    """
+    if correction_type not in VALID_CORRECTION_TYPES:
+        raise ValueError(
+            f"Invalid correction type '{correction_type}'. "
+            f"Valid types: {sorted(VALID_CORRECTION_TYPES)}"
+        )
+
+    correction = {
+        "correction_type": correction_type,
+        "original": original,
+        "corrected": corrected,
+        "context": context,
+    }
+
+    corrections = _load_corrections(storage_path)
+    corrections.append(correction)
+    # Cap to most recent 1000 entries to prevent unbounded file growth
+    if len(corrections) > 1000:
+        corrections = corrections[-1000:]
+    _save_corrections(corrections, storage_path)
+
+    return correction
+
+
+def _feature_distance(features_a: dict, features_b: dict) -> float:
+    """Compute distance between two feature dicts.
+
+    Compares area_ratio, aspect_ratio, and position_relative_to_root
+    with equal weighting. Missing keys contribute 0 distance.
+
+    Returns:
+        Euclidean distance across normalized feature dimensions.
+    """
+    dims = ["area_ratio", "aspect_ratio", "position_relative_to_root"]
+    sum_sq = 0.0
+    for dim in dims:
+        a = features_a.get(dim, 0.0)
+        b = features_b.get(dim, 0.0)
+        sum_sq += (a - b) ** 2
+    return math.sqrt(sum_sq)
+
+
+def suggest_from_corrections(
+    part_features: dict,
+    storage_path: str | None = None,
+    max_distance: float = 0.3,
+) -> dict | None:
+    """Suggest a label based on stored corrections with similar features.
+
+    Finds the correction whose context features are closest to the given
+    part features (within max_distance).
+
+    Args:
+        part_features: shape features of the new part
+        storage_path: optional custom corrections file path
+        max_distance: maximum feature distance to consider a match
+
+    Returns:
+        {"suggested_label": str, "distance": float, "from_correction": dict}
+        or None if no match is close enough.
+    """
+    corrections = _load_corrections(storage_path)
+    if not corrections:
+        return None
+
+    best_match = None
+    best_distance = float("inf")
+
+    for correction in corrections:
+        ctx = correction.get("context", {})
+        dist = _feature_distance(part_features, ctx)
+        if dist < best_distance:
+            best_distance = dist
+            best_match = correction
+
+    if best_match is None or best_distance > max_distance:
+        return None
+
+    return {
+        "suggested_label": best_match["corrected"],
+        "distance": round(best_distance, 4),
+        "from_correction": best_match,
+    }
+
+
+# ---------------------------------------------------------------------------
+# DWPose joint correction learning
+# ---------------------------------------------------------------------------
+
+_DWPOSE_CORRECTIONS_DIR = "/tmp/ai_rigs"
+
+
+def _dwpose_corrections_path(character_name: str) -> str:
+    """Return storage path for a character's DWPose corrections.
+
+    Sanitizes character_name by removing path traversal characters
+    (``/``, ``\\``, ``..``) to prevent directory traversal attacks.
+    """
+    # Strip path traversal components from character_name
+    sanitized = character_name.replace("/", "").replace("\\", "").replace("..", "")
+    if not sanitized:
+        raise ValueError(f"Invalid character_name after sanitization: {character_name!r}")
+    path = os.path.join(_DWPOSE_CORRECTIONS_DIR, f"{sanitized}_corrections.json")
+    return validate_safe_path(path)
+
+
+def _load_dwpose_corrections(character_name: str) -> list[dict]:
+    """Load stored DWPose corrections for a character."""
+    path = _dwpose_corrections_path(character_name)
+    if os.path.exists(path):
+        with open(path) as f:
+            return json.load(f)
+    return []
+
+
+def _save_dwpose_corrections(character_name: str, corrections: list[dict]) -> None:
+    """Save DWPose corrections for a character."""
+    os.makedirs(_DWPOSE_CORRECTIONS_DIR, exist_ok=True)
+    path = _dwpose_corrections_path(character_name)
+    with open(path, "w") as f:
+        json.dump(corrections, f, indent=2)
+
+
+def store_correction(
+    character_name: str,
+    joint_name: str,
+    dwpose_pos: tuple[float, float],
+    corrected_pos: tuple[float, float],
+    figure_type: str = "mech",
+) -> None:
+    """Store a single joint correction for learning.
+
+    When a user moves a joint from the DWPose-predicted position to the
+    correct position, this function records the delta so the system can
+    learn systematic biases in DWPose predictions for this figure type.
+
+    Saves to /tmp/ai_rigs/{character_name}_corrections.json
+
+    Args:
+        character_name: Identifier for the character (e.g. "gir", "zaku").
+        joint_name: Name of the joint (e.g. "left_shoulder", "right_knee").
+        dwpose_pos: The (x, y) position DWPose predicted.
+        corrected_pos: The (x, y) position the user corrected it to.
+        figure_type: Category of figure, e.g. "mech", "human", "creature".
+    """
+    delta_x = corrected_pos[0] - dwpose_pos[0]
+    delta_y = corrected_pos[1] - dwpose_pos[1]
+
+    correction = {
+        "joint_name": joint_name,
+        "dwpose_pos": list(dwpose_pos),
+        "corrected_pos": list(corrected_pos),
+        "delta": [delta_x, delta_y],
+        "figure_type": figure_type,
+    }
+
+    corrections = _load_dwpose_corrections(character_name)
+    corrections.append(correction)
+    _save_dwpose_corrections(character_name, corrections)
+
+
+def compute_correction_model(
+    figure_type: str = "mech",
+    min_samples: int = 2,
+) -> dict[str, tuple[float, float]]:
+    """Compute average correction vectors per joint type.
+
+    Scans all correction files in /tmp/ai_rigs/ for the given figure type,
+    groups corrections by joint name, and computes the mean delta (dx, dy)
+    for each joint across all characters.
+
+    This model captures systematic DWPose biases -- for example, if DWPose
+    consistently places mech shoulders too high, the model will contain a
+    downward correction vector for "left_shoulder" and "right_shoulder".
+
+    Args:
+        figure_type: Category to filter corrections by (e.g. "mech").
+        min_samples: Minimum number of correction samples (across distinct
+            characters) required before producing a model. Returns empty
+            dict if fewer than min_samples corrections exist for the type.
+
+    Returns:
+        Dict mapping joint_name to (avg_dx, avg_dy) correction vector.
+        Returns empty dict if fewer than min_samples corrections exist.
+    """
+    # Collect all corrections for the figure type across all characters
+    joint_deltas: dict[str, list[tuple[float, float]]] = {}
+    total_corrections = 0
+
+    if not os.path.isdir(_DWPOSE_CORRECTIONS_DIR):
+        return {}
+
+    for filename in os.listdir(_DWPOSE_CORRECTIONS_DIR):
+        if not filename.endswith("_corrections.json"):
+            continue
+        filepath = os.path.join(_DWPOSE_CORRECTIONS_DIR, filename)
+        with open(filepath) as f:
+            corrections = json.load(f)
+
+        for c in corrections:
+            if c.get("figure_type") != figure_type:
+                continue
+            jname = c["joint_name"]
+            delta = c["delta"]
+            if jname not in joint_deltas:
+                joint_deltas[jname] = []
+            joint_deltas[jname].append((delta[0], delta[1]))
+            total_corrections += 1
+
+    if total_corrections < min_samples:
+        return {}
+
+    # Compute mean delta per joint
+    model: dict[str, tuple[float, float]] = {}
+    for jname, deltas in joint_deltas.items():
+        avg_dx = statistics.mean(d[0] for d in deltas)
+        avg_dy = statistics.mean(d[1] for d in deltas)
+        model[jname] = (avg_dx, avg_dy)
+
+    return model
+
+
+def pre_correct_dwpose(
+    dwpose_joints: dict[str, tuple[float, float]],
+    figure_type: str = "mech",
+) -> dict[str, tuple[float, float]]:
+    """Apply learned corrections to raw DWPose output.
+
+    Loads the correction model for the given figure type and applies the
+    average delta to each joint that has a learned correction. Joints
+    without learned corrections are returned unchanged.
+
+    This is the main consumer-facing function: feed it raw DWPose joint
+    positions and get back improved positions based on prior user feedback.
+
+    Args:
+        dwpose_joints: Dict mapping joint_name to (x, y) position from DWPose.
+        figure_type: Category of figure to load corrections for.
+
+    Returns:
+        Dict mapping joint_name to corrected (x, y) position.
+        If no correction model exists, returns joints unchanged.
+    """
+    model = compute_correction_model(figure_type)
+
+    if not model:
+        return dict(dwpose_joints)
+
+    corrected: dict[str, tuple[float, float]] = {}
+    for jname, pos in dwpose_joints.items():
+        if jname in model:
+            dx, dy = model[jname]
+            corrected[jname] = (pos[0] + dx, pos[1] + dy)
+        else:
+            corrected[jname] = pos
+
+    return corrected
+
+
+# ---------------------------------------------------------------------------
+# Projection delta learning (Phase 4 feedback loop)
+# ---------------------------------------------------------------------------
+
+PROJECTION_CORRECTIONS_PATH = os.path.expanduser(
+    "~/.claude/memory/illustration/projection_corrections.json"
+)
+
+
+def _load_projection_corrections(path: str | None = None) -> list[dict]:
+    """Load projection correction deltas from disk."""
+    p = path or PROJECTION_CORRECTIONS_PATH
+    p = validate_safe_path(p)
+    if os.path.exists(p):
+        with open(p) as f:
+            return json.load(f)
+    return []
+
+
+def _save_projection_corrections(
+    corrections: list[dict], path: str | None = None
+) -> None:
+    """Save projection correction deltas to disk."""
+    p = path or PROJECTION_CORRECTIONS_PATH
+    p = validate_safe_path(p)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p, "w") as f:
+        json.dump(corrections, f, indent=2)
+
+
+def store_projection_delta(
+    face_group_label: str,
+    projected_contour: list,
+    reference_contour: list,
+    displacement_vectors: list,
+    mesh_source: str,
+    image_hash: str,
+    score_before: float,
+    score_after: float,
+    path: str | None = None,
+) -> dict:
+    """Store a projection delta for a face group.
+
+    Appends to projection_corrections.json.
+    Each entry follows the schema:
+    {
+        "correction_type": "projection_delta",
+        "face_group_label": "front_face",
+        "projected_contour": [[x,y], ...],
+        "reference_contour": [[x,y], ...],
+        "displacement_vectors": [[dx,dy], ...],
+        "mesh_source": "trellis_v2",
+        "image_hash": "abc123",
+        "score_before": 0.3,
+        "score_after": 0.6,
+    }
+
+    Args:
+        face_group_label: Which face group this correction applies to.
+        projected_contour: Where the mesh projected to, as [[x,y], ...].
+        reference_contour: Where it should have been, as [[x,y], ...].
+        displacement_vectors: Per-point correction vectors [[dx,dy], ...].
+        mesh_source: Which reconstructor produced the mesh.
+        image_hash: Identity hash of the reference image.
+        score_before: Pixel deviation score before correction.
+        score_after: Pixel deviation score after correction.
+        path: Optional custom storage path.
+
+    Returns:
+        The stored correction entry dict.
+    """
+    entry = {
+        "correction_type": "projection_delta",
+        "face_group_label": face_group_label,
+        "projected_contour": projected_contour,
+        "reference_contour": reference_contour,
+        "displacement_vectors": displacement_vectors,
+        "mesh_source": mesh_source,
+        "image_hash": image_hash,
+        "score_before": score_before,
+        "score_after": score_after,
+    }
+
+    corrections = _load_projection_corrections(path)
+    corrections.append(entry)
+    # Cap to most recent 1000 entries to prevent unbounded file growth
+    if len(corrections) > 1000:
+        corrections = corrections[-1000:]
+    _save_projection_corrections(corrections, path)
+
+    return entry
+
+
+def pre_correct_projection(
+    projected_contours: list,
+    face_group_labels: list[str],
+    image_hash: str | None = None,
+    path: str | None = None,
+) -> list:
+    """Apply stored projection deltas to new projected contours.
+
+    For each face group label, find matching stored deltas.
+    Compute mean displacement vector across all matching entries.
+    Weight: 1.0 for same image_hash, 0.3 for different image.
+    Apply weighted mean displacement to each point in the contour.
+
+    Args:
+        projected_contours: List of contour arrays, each [[x,y], ...].
+        face_group_labels: List of face group label strings, one per contour.
+        image_hash: Optional hash of the current reference image for
+            weighting stored deltas (exact match = 1.0, different = 0.3).
+        path: Optional custom storage path.
+
+    Returns:
+        List of corrected contour arrays, same structure as input.
+        Contours with no matching stored deltas are returned unchanged.
+    """
+    stored = _load_projection_corrections(path)
+    if not stored:
+        return list(projected_contours)
+
+    corrected_contours = []
+    for contour, label in zip(projected_contours, face_group_labels):
+        # Find all stored deltas matching this face group label
+        matching = [s for s in stored if s.get("face_group_label") == label]
+
+        if not matching:
+            corrected_contours.append(contour)
+            continue
+
+        # Compute weighted mean displacement vectors across all matches.
+        # Each matching entry has displacement_vectors [[dx,dy], ...].
+        # We need to average them, weighted by image hash similarity.
+        num_points = len(contour)
+
+        # Accumulate weighted sums
+        weighted_dx = [0.0] * num_points
+        weighted_dy = [0.0] * num_points
+        total_weight = 0.0
+
+        for entry in matching:
+            disp = entry.get("displacement_vectors", [])
+            # Only use entries whose displacement vector length matches
+            if len(disp) != num_points:
+                continue
+
+            # Weight: 1.0 for same image_hash, 0.3 for different
+            if image_hash and entry.get("image_hash") == image_hash:
+                w = 1.0
+            else:
+                w = 0.3
+
+            for i in range(num_points):
+                weighted_dx[i] += w * disp[i][0]
+                weighted_dy[i] += w * disp[i][1]
+            total_weight += w
+
+        if total_weight == 0.0:
+            corrected_contours.append(contour)
+            continue
+
+        # Apply weighted mean displacement
+        corrected = []
+        for i, pt in enumerate(contour):
+            mean_dx = weighted_dx[i] / total_weight
+            mean_dy = weighted_dy[i] / total_weight
+            corrected.append([pt[0] + mean_dx, pt[1] + mean_dy])
+
+        corrected_contours.append(corrected)
+
+    return corrected_contours
+
+
+def compare_corrections(
+    original: dict[str, tuple[float, float]],
+    corrected: dict[str, tuple[float, float]],
+) -> dict:
+    """Compare original DWPose positions to user-corrected positions.
+
+    Provides per-joint analysis of how much each joint was moved, in what
+    direction, and summary statistics across all joints. Useful for
+    understanding the magnitude and pattern of DWPose errors.
+
+    Args:
+        original: Dict mapping joint_name to original (x, y) from DWPose.
+        corrected: Dict mapping joint_name to corrected (x, y) from user.
+
+    Returns:
+        Dict with:
+        - "per_joint": dict mapping joint_name to {delta_x, delta_y, distance, direction_deg}
+        - "summary": {mean_deviation, max_deviation, max_deviation_joint, total_joints, corrected_joints}
+    """
+    per_joint: dict[str, dict] = {}
+    distances: list[float] = []
+
+    # Only compare joints present in both dicts
+    common_joints = set(original.keys()) & set(corrected.keys())
+
+    for jname in sorted(common_joints):
+        ox, oy = original[jname]
+        cx, cy = corrected[jname]
+        dx = cx - ox
+        dy = cy - oy
+        dist = math.sqrt(dx * dx + dy * dy)
+        # Direction in degrees, 0 = right, 90 = down (screen coords)
+        direction = math.degrees(math.atan2(dy, dx))
+
+        per_joint[jname] = {
+            "delta_x": round(dx, 4),
+            "delta_y": round(dy, 4),
+            "distance": round(dist, 4),
+            "direction_deg": round(direction, 2),
+        }
+        distances.append(dist)
+
+    # Summary statistics
+    corrected_joints = sum(1 for d in distances if d > 0.0001)
+    summary: dict = {
+        "total_joints": len(common_joints),
+        "corrected_joints": corrected_joints,
+    }
+
+    if distances:
+        summary["mean_deviation"] = round(statistics.mean(distances), 4)
+        summary["max_deviation"] = round(max(distances), 4)
+        # Find which joint had the max deviation
+        max_dist = max(distances)
+        for jname, info in per_joint.items():
+            if abs(info["distance"] - max_dist) < 0.0001:
+                summary["max_deviation_joint"] = jname
+                break
+    else:
+        summary["mean_deviation"] = 0.0
+        summary["max_deviation"] = 0.0
+        summary["max_deviation_joint"] = None
+
+    return {
+        "per_joint": per_joint,
+        "summary": summary,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Cluster Threshold Learning
+# ---------------------------------------------------------------------------
+
+CLUSTER_CORRECTIONS_PATH = Path(os.path.expanduser("~")) / "Library" / "Application Support" / "illtool" / "cluster_corrections.json"
+
+
+def record_cluster_correction(
+    action: str,  # "accept", "reject", "split", "accept_all", "slider_adjust"
+    identity_key: str,  # boundary signature identity key
+    context: dict,  # {member_count, source_layers, distance_threshold, confidence, quality_score}
+) -> dict:
+    """Record a clustering correction for learning.
+
+    Stores to CLUSTER_CORRECTIONS_PATH as a JSON array.
+    Each entry: {action, identity_key, context, timestamp}
+
+    Args:
+        action: One of "accept", "reject", "split", "accept_all", "slider_adjust".
+        identity_key: Boundary signature identity key for the cluster.
+        context: Dict with cluster metadata (member_count, source_layers,
+            distance_threshold, confidence, quality_score).
+
+    Returns:
+        The stored correction entry dict.
+    """
+    from datetime import datetime
+
+    entry = {
+        "action": action,
+        "identity_key": identity_key,
+        "context": context,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+    # Load existing corrections
+    corrections: list[dict] = []
+    if CLUSTER_CORRECTIONS_PATH.exists():
+        try:
+            corrections = json.loads(CLUSTER_CORRECTIONS_PATH.read_text())
+        except (json.JSONDecodeError, OSError):
+            corrections = []
+
+    # Append and cap at 2000 entries
+    corrections.append(entry)
+    if len(corrections) > 2000:
+        corrections = corrections[-2000:]
+
+    # Atomic write: write to temp file, then os.replace (L1)
+    CLUSTER_CORRECTIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp_fd, tmp_path = tempfile.mkstemp(
+        dir=CLUSTER_CORRECTIONS_PATH.parent, suffix=".tmp"
+    )
+    try:
+        with os.fdopen(tmp_fd, "w") as f:
+            json.dump(corrections, f, indent=2)
+        os.replace(tmp_path, CLUSTER_CORRECTIONS_PATH)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+    return entry
+
+
+def learn_cluster_thresholds(
+    corrections: list | None = None,  # if None, loads from CLUSTER_CORRECTIONS_PATH
+) -> dict:
+    """Compute learned thresholds per boundary identity type.
+
+    Logic:
+    - Accept at distance D -> threshold for this identity can stay >= D
+    - Split at distance D -> threshold for this identity should be < D
+    - Reject -> this identity at this confidence should be filtered
+    - slider_adjust -> user's preferred threshold for this session
+
+    Args:
+        corrections: Optional list of correction dicts. If None, loads from
+            CLUSTER_CORRECTIONS_PATH on disk.
+
+    Returns:
+        Dict keyed by identity_key, each value a dict with:
+        - suggested_threshold: float
+        - reject_below_confidence: float
+        - sample_count: int
+        - accept_rate: float
+    """
+    if corrections is None:
+        if not CLUSTER_CORRECTIONS_PATH.exists():
+            return {}
+        try:
+            corrections = json.loads(CLUSTER_CORRECTIONS_PATH.read_text())
+        except (json.JSONDecodeError, OSError):
+            return {}
+
+    # Group corrections by identity_key
+    by_identity: dict[str, list[dict]] = {}
+    for c in corrections:
+        key = c.get("identity_key", "unknown")
+        by_identity.setdefault(key, []).append(c)
+
+    thresholds: dict[str, dict] = {}
+    for identity_key, entries in by_identity.items():
+        accepts = [e for e in entries if e["action"] in ("accept", "accept_all")]
+        splits = [e for e in entries if e["action"] == "split"]
+        rejects = [e for e in entries if e["action"] == "reject"]
+        adjusts = [e for e in entries if e["action"] == "slider_adjust"]
+
+        # L6: Include slider_adjust in total denominator
+        total = len(accepts) + len(splits) + len(rejects) + len(adjusts)
+        if total == 0:
+            continue
+
+        accept_rate = len(accepts) / total
+
+        # Compute suggested threshold
+        # Accept distances are lower bounds, split distances are upper bounds
+        accept_distances = [e["context"].get("distance_threshold", 8.0) for e in accepts]
+        split_distances = [e["context"].get("distance_threshold", 8.0) for e in splits]
+
+        suggested = 8.0  # default
+        if accept_distances:
+            # L3: Use statistics.median instead of biased manual median
+            suggested = statistics.median(accept_distances)
+        if split_distances:
+            # Split means threshold was too loose — cap below minimum split distance
+            min_split = min(split_distances)
+            suggested = min(suggested, min_split * 0.8)  # 20% margin below split point
+        if adjusts:
+            # L5: Sort by timestamp before taking most recent adjustment
+            sorted_adjusts = sorted(adjusts, key=lambda e: e.get("timestamp", ""))
+            suggested = sorted_adjusts[-1]["context"].get("distance_threshold", 8.0)
+
+        # L4: Floor on split threshold — prevent degenerate near-zero values
+        suggested = max(suggested, 1.0)
+
+        # Compute reject confidence threshold
+        reject_confidences = [e["context"].get("confidence", 0.0) for e in rejects]
+        reject_below = 0.0
+        if reject_confidences:
+            reject_below = max(reject_confidences)  # reject at or below max rejected confidence
+
+        thresholds[identity_key] = {
+            "suggested_threshold": round(suggested, 1),
+            "reject_below_confidence": round(reject_below, 2),
+            "sample_count": total,
+            "accept_rate": round(accept_rate, 2),
+        }
+
+    return thresholds
+
+
+def get_convergence_signal(corrections: list | None = None) -> dict:
+    """Track Accept All accuracy over time.
+
+    Groups corrections by date (proxy for session) and computes the
+    accept ratio per session. Convergence is reached when the last 3
+    sessions all have an accept rate above 0.95.
+
+    Args:
+        corrections: Optional list of correction dicts. If None, loads from
+            CLUSTER_CORRECTIONS_PATH on disk.
+
+    Returns:
+        Dict with:
+        - accept_all_ratio: float (most recent session ratio)
+        - total_sessions: int
+        - converged: bool (True if ratio > 0.95 for last 3 sessions)
+        - recent_ratios: list (last 5 session ratios)
+    """
+    empty = {"accept_all_ratio": 0.0, "total_sessions": 0, "converged": False, "recent_ratios": []}
+
+    if corrections is None:
+        if not CLUSTER_CORRECTIONS_PATH.exists():
+            return empty
+        try:
+            corrections = json.loads(CLUSTER_CORRECTIONS_PATH.read_text())
+        except (json.JSONDecodeError, OSError):
+            return empty
+
+    # Group by date (proxy for session)
+    sessions: dict[str, list[dict]] = {}
+    for c in corrections:
+        date = c.get("timestamp", "")[:10]  # YYYY-MM-DD
+        sessions.setdefault(date, []).append(c)
+
+    ratios: list[float] = []
+    for date in sorted(sessions.keys()):
+        entries = sessions[date]
+        accepts = sum(1 for e in entries if e["action"] in ("accept", "accept_all"))
+        total = sum(1 for e in entries if e["action"] in ("accept", "accept_all", "split", "reject"))
+        if total > 0:
+            ratios.append(accepts / total)
+
+    recent = ratios[-5:] if ratios else []
+    converged = len(recent) >= 3 and all(r > 0.95 for r in recent[-3:])
+
+    return {
+        "accept_all_ratio": recent[-1] if recent else 0.0,
+        "total_sessions": len(sessions),
+        "converged": converged,
+        "recent_ratios": [round(r, 2) for r in recent],
+    }
+
+
+# ---------------------------------------------------------------------------
+# MCP tool registration
+# ---------------------------------------------------------------------------
+
+
+def register(mcp):
+    """Register the adobe_ai_correction_learning tool."""
+
+    @mcp.tool(
+        name="adobe_ai_correction_learning",
+        annotations={
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": False,
+            "openWorldHint": False,
+        },
+    )
+    async def adobe_ai_correction_learning(params: AiCorrectionLearningInput) -> str:
+        """Learn from user corrections to improve future analysis.
+
+        Actions:
+        - record_correction: store a correction with shape context
+        - suggest_from_corrections: get suggestions for a new part
+        """
+        action = params.action.lower().strip()
+
+        if action == "record_correction":
+            if (
+                not params.correction_type
+                or params.original is None
+                or params.corrected is None
+                or params.context is None
+            ):
+                return json.dumps({
+                    "error": "record_correction requires correction_type, original, corrected, context"
+                })
+            try:
+                result = record_correction(
+                    params.correction_type,
+                    params.original,
+                    params.corrected,
+                    params.context,
+                    params.storage_path,
+                )
+            except ValueError as e:
+                return json.dumps({"error": str(e)})
+            return json.dumps({"action": "record_correction", "correction": result})
+
+        elif action == "suggest_from_corrections":
+            if params.part_features is None:
+                return json.dumps({
+                    "error": "suggest_from_corrections requires part_features"
+                })
+            result = suggest_from_corrections(
+                params.part_features, params.storage_path
+            )
+            if result is None:
+                return json.dumps({
+                    "action": "suggest_from_corrections",
+                    "suggestion": None,
+                    "message": "No matching corrections found",
+                })
+            return json.dumps({
+                "action": "suggest_from_corrections",
+                "suggestion": result,
+            })
+
+        elif action == "record_cluster_correction":
+            # S3: Wire learning loop — record accept/split/reject/slider_adjust
+            ctx = params.context or {}
+            identity_key = ctx.get("identity_key", "unknown")
+            cluster_action = ctx.get("cluster_action", "accept")
+            try:
+                entry = record_cluster_correction(
+                    action=cluster_action,
+                    identity_key=identity_key,
+                    context=ctx,
+                )
+                return json.dumps({
+                    "action": "record_cluster_correction",
+                    "entry": entry,
+                })
+            except Exception as e:
+                return json.dumps({"error": f"Failed to record cluster correction: {e}"})
+
+        elif action == "get_cluster_thresholds":
+            # S3: Wire learning loop — return learned per-identity thresholds
+            try:
+                thresholds = learn_cluster_thresholds()
+                convergence = get_convergence_signal()
+                return json.dumps({
+                    "action": "get_cluster_thresholds",
+                    "thresholds": thresholds,
+                    "convergence": convergence,
+                })
+            except Exception as e:
+                return json.dumps({"error": f"Failed to compute thresholds: {e}"})
+
+        else:
+            return json.dumps({
+                "error": f"Unknown action: {action}",
+                "valid_actions": [
+                    "record_correction",
+                    "suggest_from_corrections",
+                    "record_cluster_correction",
+                    "get_cluster_thresholds",
+                ],
+            })

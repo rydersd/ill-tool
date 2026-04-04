@@ -10,13 +10,13 @@ import tempfile
 import numpy as np
 import pytest
 
-from adobe_mcp.apps.illustrator.spatial_pipeline import (
+from adobe_mcp.apps.illustrator.pipeline.spatial_pipeline import (
     SpatialPipelineInput,
     _pipeline_status,
     _preview_mesh,
 )
-from adobe_mcp.apps.illustrator.contour_to_path import _from_face_group_boundary
-from adobe_mcp.apps.illustrator.reconstruct_3d_trellis import (
+from adobe_mcp.apps.illustrator.drawing.contour_to_path import _from_face_group_boundary
+from adobe_mcp.apps.illustrator.threed.reconstruct_3d_trellis import (
     ML_AVAILABLE as TRELLIS_ML_AVAILABLE,
 )
 

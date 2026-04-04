@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-from adobe_mcp.apps.illustrator.character_apose import (
+from adobe_mcp.apps.illustrator.character.character_apose import (
     ML_AVAILABLE,
     APOSE_TARGET_ANGLES,
     _ml_status,
@@ -99,7 +99,7 @@ def test_status():
 
 def test_graceful_fallback():
     """_canonicalize without ML deps returns error with install instructions."""
-    with patch("adobe_mcp.apps.illustrator.character_apose.ML_AVAILABLE", False):
+    with patch("adobe_mcp.apps.illustrator.character.character_apose.ML_AVAILABLE", False):
         result = _canonicalize("/tmp/test.png", None, 15.0)
 
     assert "error" in result

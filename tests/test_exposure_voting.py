@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 import pytest
 
-from adobe_mcp.apps.illustrator.contour_scanner import (
+from adobe_mcp.apps.illustrator.drawing.contour_scanner import (
     multi_exposure_edge_vote,
     classify_edge_votes,
     generate_exposure_gif,

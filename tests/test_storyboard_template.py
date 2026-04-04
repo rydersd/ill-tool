@@ -6,7 +6,7 @@ All tests are pure math — no JSX or Adobe required.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.storyboard_template import (
+from adobe_mcp.apps.illustrator.storyboard.storyboard_template import (
     PRESETS,
     _resolve_preset,
     _parse_ratio,

@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 import pytest
 
-from adobe_mcp.apps.illustrator.refine_3d import (
+from adobe_mcp.apps.illustrator.threed.refine_3d import (
     ML_AVAILABLE,
     TRIMESH_AVAILABLE,
     _ml_status,
@@ -129,13 +129,13 @@ def test_status():
 def test_input_validation():
     """_refine_mesh with missing inputs returns helpful errors."""
     # No ML -> fallback error
-    with patch("adobe_mcp.apps.illustrator.refine_3d.ML_AVAILABLE", False):
+    with patch("adobe_mcp.apps.illustrator.threed.refine_3d.ML_AVAILABLE", False):
         result = _refine_mesh("/tmp/mesh.obj", ["/tmp/target.png"], 100, 0.001, 0.01, None)
     assert "error" in result
     assert "install_hint" in result
 
     # With ML but missing mesh file
-    with patch("adobe_mcp.apps.illustrator.refine_3d.ML_AVAILABLE", True):
+    with patch("adobe_mcp.apps.illustrator.threed.refine_3d.ML_AVAILABLE", True):
         result = _refine_mesh("/nonexistent/mesh.obj", ["/tmp/t.png"], 100, 0.001, 0.01, None)
     assert "error" in result
     assert "not found" in result["error"].lower()
@@ -148,7 +148,7 @@ def test_input_validation():
         real_mesh = f.name
 
     try:
-        with patch("adobe_mcp.apps.illustrator.refine_3d.ML_AVAILABLE", True):
+        with patch("adobe_mcp.apps.illustrator.threed.refine_3d.ML_AVAILABLE", True):
             result = _refine_mesh(real_mesh, [], 100, 0.001, 0.01, None)
         assert "error" in result
         assert "target" in result["error"].lower()

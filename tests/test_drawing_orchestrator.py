@@ -12,7 +12,7 @@ import cv2
 import numpy as np
 import pytest
 
-from adobe_mcp.apps.illustrator.drawing_orchestrator import (
+from adobe_mcp.apps.illustrator.drawing.drawing_orchestrator import (
     DrawingOrchestratorInput,
 )
 

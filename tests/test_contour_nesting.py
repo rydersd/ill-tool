@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 import pytest
 
-from adobe_mcp.apps.illustrator.contour_nesting import (
+from adobe_mcp.apps.illustrator.drawing.contour_nesting import (
     analyze_nesting,
     build_nesting_tree,
     get_depth_layers,

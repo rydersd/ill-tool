@@ -8,7 +8,7 @@ import math
 
 import pytest
 
-from adobe_mcp.apps.illustrator.interaction_zones import (
+from adobe_mcp.apps.illustrator.analysis.interaction_zones import (
     define_interaction_zone,
     check_interaction,
     get_zones,

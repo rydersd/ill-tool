@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 import pytest
 
-from adobe_mcp.apps.illustrator.silhouette import _extract_silhouette
+from adobe_mcp.apps.illustrator.drawing.silhouette import _extract_silhouette
 from adobe_mcp.apps.illustrator.models import AiSilhouetteInput
 
 

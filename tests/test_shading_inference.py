@@ -11,7 +11,7 @@ import cv2
 import numpy as np
 import pytest
 
-from adobe_mcp.apps.illustrator.shading_inference import (
+from adobe_mcp.apps.illustrator.drawing.shading_inference import (
     detect_shading_regions,
     infer_light_direction,
 )

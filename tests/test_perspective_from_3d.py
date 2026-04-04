@@ -8,7 +8,7 @@ import math
 
 import pytest
 
-from adobe_mcp.apps.illustrator.perspective_from_3d import (
+from adobe_mcp.apps.illustrator.threed.perspective_from_3d import (
     compute_perspective_error,
     classify_error,
     generate_correction_report,

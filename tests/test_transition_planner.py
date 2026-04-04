@@ -8,11 +8,11 @@ import json
 
 import pytest
 
-from adobe_mcp.apps.illustrator.transition_planner import (
+from adobe_mcp.apps.illustrator.ui.transition_planner import (
     _ensure_transitions,
     VALID_TRANSITIONS,
 )
-from adobe_mcp.apps.illustrator.rig_data import _load_rig, _save_rig
+from adobe_mcp.apps.illustrator.rigging.rig_data import _load_rig, _save_rig
 
 
 # ---------------------------------------------------------------------------

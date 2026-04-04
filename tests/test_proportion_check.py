@@ -8,7 +8,7 @@ import math
 
 import pytest
 
-from adobe_mcp.apps.illustrator.proportion_check import (
+from adobe_mcp.apps.illustrator.drawing.proportion_check import (
     compute_head_height,
     compute_body_height,
     compute_proportion_ratio,

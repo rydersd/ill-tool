@@ -7,7 +7,7 @@ All tests are pure Python — no JSX or Adobe required.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.camera_expressions import (
+from adobe_mcp.apps.illustrator.ui.camera_expressions import (
     generate_shake_expression,
     generate_zoom_expression,
     generate_pan_expression,

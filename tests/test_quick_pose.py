@@ -7,7 +7,7 @@ All tests are pure Python -- no JSX or Adobe required.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.quick_pose import (
+from adobe_mcp.apps.illustrator.animation.quick_pose import (
     parse_pose_description,
     apply_quick_pose,
     combine_poses,

@@ -8,7 +8,7 @@ import json
 
 import pytest
 
-from adobe_mcp.apps.illustrator.panel_text import (
+from adobe_mcp.apps.illustrator.storyboard.panel_text import (
     format_panel_text,
     _format_dialogue,
     _format_action,
@@ -16,7 +16,7 @@ from adobe_mcp.apps.illustrator.panel_text import (
     _format_note,
     _ensure_panel_texts,
 )
-from adobe_mcp.apps.illustrator.rig_data import _load_rig, _save_rig
+from adobe_mcp.apps.illustrator.rigging.rig_data import _load_rig, _save_rig
 
 
 # ---------------------------------------------------------------------------

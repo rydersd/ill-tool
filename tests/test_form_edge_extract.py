@@ -11,7 +11,7 @@ import cv2
 import numpy as np
 import pytest
 
-from adobe_mcp.apps.illustrator.form_edge_extract import (
+from adobe_mcp.apps.illustrator.drawing.form_edge_extract import (
     DSINE_AVAILABLE,
     INFORMATIVE_AVAILABLE,
     RINDNET_AVAILABLE,

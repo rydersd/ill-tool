@@ -8,7 +8,7 @@ import math
 
 import pytest
 
-from adobe_mcp.apps.illustrator.construction_draw import (
+from adobe_mcp.apps.illustrator.drawing.construction_draw import (
     compute_head_circle,
     compute_body_box,
     compute_limb_cylinder,

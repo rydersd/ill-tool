@@ -7,7 +7,7 @@ All tests are pure Python — no JSX or Adobe required.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.deformation_zones import (
+from adobe_mcp.apps.illustrator.utility.deformation_zones import (
     find_deformation_zones,
     find_deformation_zones_with_factor,
 )

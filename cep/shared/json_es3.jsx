@@ -179,7 +179,12 @@ function jsonParse(str) {
             var key = _parseString();
             _skipWS();
             if (_next() !== ':') _error("expected ':'");
-            obj[key] = _parseValue();
+            // Guard against prototype pollution
+            if (key === "__proto__" || key === "constructor" || key === "prototype") {
+                _parseValue(); // consume value but don't assign
+            } else {
+                obj[key] = _parseValue();
+            }
             _skipWS();
             var ch = _next();
             if (ch === '}') { _jsonDepth--; return obj; }

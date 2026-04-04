@@ -10,7 +10,7 @@
 
 // Include shared libraries
 // Derive shared library path from this script's location
-var _SHARED = (function() {
+var _SA_SHARED = (function() {
     try {
         var thisFile = new File($.fileName);
         var jsxDir = thisFile.parent;
@@ -19,21 +19,34 @@ var _SHARED = (function() {
         var sharedDir = new Folder(cepDir.fsName + "/shared");
         if (sharedDir.exists) return sharedDir.fsName + "/";
     } catch (e) { /* $.fileName empty or parent traversal failed */ }
-    return "/Users/ryders/Developer/GitHub/ill_tool/cep/shared/";
+    // Fallback: try relative from known CEP install location
+    try {
+        var f = new File($.fileName);
+        return f.parent.parent.parent.fsName + "/shared/";
+    } catch(e2) {}
+    return "";
 })();
-$.evalFile(_SHARED + "json_es3.jsx");
-$.evalFile(_SHARED + "logging.jsx");
-$.evalFile(_SHARED + "math2d.jsx");
-$.evalFile(_SHARED + "geometry.jsx");
-$.evalFile(_SHARED + "shapes.jsx");
-$.evalFile(_SHARED + "pathutils.jsx");
-$.evalFile(_SHARED + "ui.jsx");
+$.evalFile(_SA_SHARED + "json_es3.jsx");
+$.evalFile(_SA_SHARED + "logging.jsx");
+$.evalFile(_SA_SHARED + "math2d.jsx");
+$.evalFile(_SA_SHARED + "geometry.jsx");
+$.evalFile(_SA_SHARED + "shapes.jsx");
+$.evalFile(_SA_SHARED + "pathutils.jsx");
+$.evalFile(_SA_SHARED + "ui.jsx");
 
 // Module-level cache (persists across evalScript calls)
-var _cachedSortedPoints = null;
-var _cachedClassification = null;
-var _cachedLOD = null;
-var _bboxOriginalPoints = null;
+var _sa_cachedSortedPoints = null;
+var _sa_cachedClassification = null;
+var _sa_cachedLOD = null;
+
+/**
+ * Get info about the current selection.
+ * Returns pipe-delimited: "anchorCount|pathCount"
+ */
+function sa_getSelectionInfo() {
+    var counts = getSelectionCounts();
+    return counts.anchorCount + "|" + counts.pathCount;
+}
 
 /**
  * Main entry point: read selected anchors, classify shape, place preview.
@@ -41,28 +54,68 @@ var _bboxOriginalPoints = null;
  * Returns pipe-delimited: "shape|confidence|inputCount|outputCount"
  * On error: "error|message"
  */
-function averageSelectedAnchors() {
+// Track hidden source paths so we can restore on cancel
+var _sa_hiddenSourcePaths = [];
+
+function sa_averageSelectedAnchors() {
+    var doc = app.activeDocument;
     var anchors = getSelectedAnchors();
     if (anchors.length < 2) return "error|Need at least 2 selected anchors";
 
+    // Hide the original selected paths so they don't interfere visually
+    // Don't reset — append new items, checking for duplicates
+    var sel = doc.selection;
+    for (var s = 0; s < sel.length; s++) {
+        if (sel[s].typename === "PathItem" && sel[s].opacity > 0) {
+            // Check if already tracked
+            var alreadyTracked = false;
+            for (var h = 0; h < _sa_hiddenSourcePaths.length; h++) {
+                if (_sa_hiddenSourcePaths[h].item === sel[s]) { alreadyTracked = true; break; }
+            }
+            if (!alreadyTracked) {
+                _sa_hiddenSourcePaths.push({ item: sel[s], prevOpacity: sel[s].opacity });
+                sel[s].opacity = 0;
+            }
+        }
+    }
+
     var sorted = sortByPCA(anchors);
-    _cachedSortedPoints = sorted;
+    _sa_cachedSortedPoints = sorted;
 
     var classification = classifyShape(sorted);
-    _cachedClassification = classification;
+    _sa_cachedClassification = classification;
 
     // Precompute LOD levels for instant slider scrubbing
-    _cachedLOD = precomputeLOD(sorted, 20);
+    _sa_cachedLOD = precomputeLOD(sorted, 20);
 
     // Place preview path on "Cleaned Forms" layer (pass handles if available)
-    placePreview(classification.points, classification.closed, "Cleaned Forms", classification.handles || null);
+    var previewPath = placePreview(classification.points, classification.closed, "Cleaned Forms", classification.handles || null);
 
-    // Compute and draw bounding box
+    // Compute and draw bounding box with 2x anchor points in blue
     var rect = minAreaRect(anchors);
     drawBoundingBox(rect.center[0], rect.center[1], rect.width, rect.height, rect.angle, 5, "Cleaned Forms");
 
+    // Select the preview so user can see/edit its anchor handles
+    // (user can delete stray points with Delete Anchor Point tool)
+    try {
+        doc.selection = null;
+        previewPath.selected = true;
+    } catch (e) {}
+
     // Return result as pipe-delimited string
     return classification.shape + "|" + classification.confidence + "|" + sorted.length + "|" + classification.points.length;
+}
+
+/**
+ * Restore hidden source paths (called on cancel/undo).
+ */
+function _sa_restoreHiddenPaths() {
+    for (var i = 0; i < _sa_hiddenSourcePaths.length; i++) {
+        try {
+            _sa_hiddenSourcePaths[i].item.opacity = _sa_hiddenSourcePaths[i].prevOpacity;
+        } catch (e) {}
+    }
+    _sa_hiddenSourcePaths = [];
 }
 
 /**
@@ -71,20 +124,18 @@ function averageSelectedAnchors() {
  * Returns pipe-delimited: "shape|confidence|outputCount"
  * On error: "error|message"
  */
-function reclassifyAs(shapeType) {
-    if (!_cachedSortedPoints) return "error|No cached data";
+function sa_reclassifyAs(shapeType) {
+    if (!_sa_cachedSortedPoints) return "error|No cached data";
 
-    var result = fitToShape(_cachedSortedPoints, shapeType);
-    _cachedClassification = result;
+    var result = fitToShape(_sa_cachedSortedPoints, shapeType);
+    _sa_cachedClassification = result;
 
     placePreview(result.points, result.closed, "Cleaned Forms", result.handles || null);
-    // Re-snapshot originals so bbox transform matches new point count
-    storeBboxOriginals();
 
     logInteraction("shapeaverager", "reclassify",
-        {shape: _cachedClassification ? _cachedClassification.shape : "unknown"},
+        {shape: _sa_cachedClassification ? _sa_cachedClassification.shape : "unknown"},
         {shape: result.shape, confidence: result.confidence, pointCount: result.points.length},
-        {inputAnchors: _cachedSortedPoints ? _cachedSortedPoints.length : 0});
+        {inputAnchors: _sa_cachedSortedPoints ? _sa_cachedSortedPoints.length : 0});
 
     return result.shape + "|" + result.confidence + "|" + result.points.length;
 }
@@ -96,18 +147,16 @@ function reclassifyAs(shapeType) {
  * Returns the point count at that level as a string.
  * On error: "error|message"
  */
-function applyLODLevel(level) {
-    if (!_cachedLOD) return "error|No LOD cached";
+function sa_applyLODLevel(level) {
+    if (!_sa_cachedLOD) return "error|No LOD cached";
 
     // Find the closest cached level at or below the requested value
-    var best = _cachedLOD[0];
-    for (var i = 0; i < _cachedLOD.length; i++) {
-        if (_cachedLOD[i].value <= level) best = _cachedLOD[i];
+    var best = _sa_cachedLOD[0];
+    for (var i = 0; i < _sa_cachedLOD.length; i++) {
+        if (_sa_cachedLOD[i].value <= level) best = _sa_cachedLOD[i];
     }
 
     placePreview(best.points, false, "Cleaned Forms");
-    // Re-snapshot originals so bbox transform matches new point count
-    storeBboxOriginals();
     return best.count + "";
 }
 
@@ -117,7 +166,7 @@ function applyLODLevel(level) {
  * @param {number} tension - handle length factor (default 1/6)
  * Returns "ok" or "error|message"
  */
-function resmooth(tension) {
+function sa_resmooth(tension) {
     try {
         var lyr = app.activeDocument.layers.getByName("Cleaned Forms");
         var preview = lyr.pathItems.getByName("__preview__");
@@ -133,18 +182,24 @@ function resmooth(tension) {
  * Confirm the preview: solidify stroke, clear caches, enter isolation mode.
  * Returns "confirmed|<pathName>" or "confirmed|unknown"
  */
-function doConfirm() {
+function sa_doConfirm() {
     logInteraction("shapeaverager", "confirm",
-        {shape: _cachedClassification ? _cachedClassification.shape : "unknown",
-         confidence: _cachedClassification ? _cachedClassification.confidence : 0},
+        {shape: _sa_cachedClassification ? _sa_cachedClassification.shape : "unknown",
+         confidence: _sa_cachedClassification ? _sa_cachedClassification.confidence : 0},
         null, null);
     var pathName = confirmPreview("Cleaned Forms");
     removeBoundingBox("Cleaned Forms");
-    _cachedSortedPoints = null;
-    _cachedClassification = null;
-    _cachedLOD = null;
+    // Delete hidden source paths — they've been replaced by the confirmed preview
+    for (var hp = _sa_hiddenSourcePaths.length - 1; hp >= 0; hp--) {
+        try { _sa_hiddenSourcePaths[hp].item.remove(); } catch(e3) {}
+    }
+    _sa_hiddenSourcePaths = [];
 
-    // Enter isolation mode on the confirmed path
+    _sa_cachedSortedPoints = null;
+    _sa_cachedClassification = null;
+    _sa_cachedLOD = null;
+
+    // Enter isolation mode on the confirmed path and activate Free Transform
     if (pathName) {
         try {
             var doc = app.activeDocument;
@@ -156,6 +211,11 @@ function doConfirm() {
         } catch (e) {
             // isolation mode not available or path not found — non-fatal
         }
+        try {
+            app.executeMenuCommand("Live Free Transform");
+        } catch (e2) {
+            // Free Transform may not be available in all versions — non-fatal
+        }
     }
 
     return "confirmed|" + (pathName || "unknown");
@@ -165,63 +225,28 @@ function doConfirm() {
  * Undo the preview: remove preview path, clear caches.
  * Returns "undone"
  */
-function doUndoAverage() {
+function sa_doUndoAverage() {
     logInteraction("shapeaverager", "undo", null, null, null);
     undoPreview("Cleaned Forms");
     removeBoundingBox("Cleaned Forms");
-    _cachedSortedPoints = null;
-    _cachedClassification = null;
-    _cachedLOD = null;
-    _bboxOriginalPoints = null;
+    _sa_restoreHiddenPaths();
+    _sa_cachedSortedPoints = null;
+    _sa_cachedClassification = null;
+    _sa_cachedLOD = null;
     return "undone";
-}
-
-/**
- * Return bounding box data for the cached sorted points.
- * Returns pipe-delimited: "cx|cy|width|height|angle"
- * On error: "error|message"
- */
-function getBboxData() {
-    if (!_cachedSortedPoints) return "error|No data";
-    var rect = minAreaRect(_cachedSortedPoints);
-    return rect.center[0] + "|" + rect.center[1] + "|" + rect.width + "|" + rect.height + "|" + rect.angle;
-}
-
-/**
- * Store original point positions for the preview path.
- * Must be called once before any applyBboxTransform calls (at bbox drag start).
- * Returns "ok|pointCount" or "error|message"
- */
-function storeBboxOriginals() {
-    try {
-        var lyr = app.activeDocument.layers.getByName("Cleaned Forms");
-        var preview = lyr.pathItems.getByName("__preview__");
-        _bboxOriginalPoints = [];
-        for (var i = 0; i < preview.pathPoints.length; i++) {
-            var pp = preview.pathPoints[i];
-            _bboxOriginalPoints.push({
-                anchor: [pp.anchor[0], pp.anchor[1]],
-                left: [pp.leftDirection[0], pp.leftDirection[1]],
-                right: [pp.rightDirection[0], pp.rightDirection[1]]
-            });
-        }
-        return "ok|" + _bboxOriginalPoints.length;
-    } catch (e) {
-        return "error|" + e.message;
-    }
 }
 
 /**
  * Clean up orphaned preview paths left from a previous session or crash.
  * Called on panel load. Returns the count of removed items as a string.
  */
-function cleanupOrphans() {
+function sa_cleanupOrphans() {
     try {
         var lyr = app.activeDocument.layers.getByName("Cleaned Forms");
         var toRemove = [];
         for (var i = 0; i < lyr.pathItems.length; i++) {
             var name = lyr.pathItems[i].name;
-            if (name === "__preview__" || name === "__bbox_guide__") {
+            if (name === "__preview__" || name === "__bbox_guide__" || name.indexOf("__bbox_handle_") === 0) {
                 toRemove.push(lyr.pathItems[i]);
             }
         }
@@ -231,41 +256,294 @@ function cleanupOrphans() {
     } catch (e) { return "0"; }
 }
 
+// ── Clustering State ─────────────────────────────────────────────
+var _sa_clusters = null;       // array of cluster objects from MCP
+var _sa_clusterPaths = [];     // references to colored paths on artboard
+var _sa_clusterMode = false;   // whether clustering mode is active
+// Saved original stroke state for paths colored by clustering
+var _sa_origStrokes = [];      // [{path, color, width, dashes}]
+
 /**
- * Apply an affine transform matrix to the current preview path.
- * Transforms FROM stored originals to prevent cumulative drift during drag.
- * Matrix form: [a b tx; c d ty; 0 0 1]
- *
- * @param {number} a  - scale/rotate component
- * @param {number} b  - shear/rotate component
- * @param {number} c  - shear/rotate component
- * @param {number} d  - scale/rotate component
- * @param {number} tx - translation X
- * @param {number} ty - translation Y
- * @returns {string} "ok" or "error|message"
+ * Read all paths from specified extraction layers.
+ * Returns JSON array of {name, layer, points: [[x,y],...]}
+ * for the MCP clustering tool.
  */
-function applyBboxTransform(a, b, c, d, tx, ty) {
-    if (!_bboxOriginalPoints) return "error|No originals stored";
-    try {
-        var lyr = app.activeDocument.layers.getByName("Cleaned Forms");
-        var preview = lyr.pathItems.getByName("__preview__");
+function sa_readLayerPaths(layerNames) {
+    var doc;
+    try { doc = app.activeDocument; } catch(e) { return "error|No document"; }
 
-        for (var i = 0; i < preview.pathPoints.length; i++) {
-            var pp = preview.pathPoints[i];
-            var orig = _bboxOriginalPoints[i];
+    var allPaths = [];
+    var names = layerNames ? layerNames.split(",") : null;
 
-            // Transform FROM originals, not from current position
-            pp.anchor = [a * orig.anchor[0] + b * orig.anchor[1] + tx,
-                         c * orig.anchor[0] + d * orig.anchor[1] + ty];
-            pp.leftDirection = [a * orig.left[0] + b * orig.left[1] + tx,
-                                c * orig.left[0] + d * orig.left[1] + ty];
-            pp.rightDirection = [a * orig.right[0] + b * orig.right[1] + tx,
-                                 c * orig.right[0] + d * orig.right[1] + ty];
+    for (var li = 0; li < doc.layers.length; li++) {
+        var lyr = doc.layers[li];
+        // If layer names specified, filter; otherwise include extraction layers
+        if (names) {
+            var found = false;
+            for (var ni = 0; ni < names.length; ni++) {
+                if (lyr.name === names[ni]) { found = true; break; }
+            }
+            if (!found) continue;
+        } else {
+            // Auto-detect extraction layers by exact name match
+            var EXTRACTION_LAYERS = [
+                "Scale Fine", "Scale Medium", "Scale Coarse",
+                "Ink Lines", "Forms 5%", "Forms 10%",
+                "Curvature", "Plane Boundaries", "contour_paths",
+                "Form Edges", "Form Edge Heuristic", "Form Edge Informative", "Form Edge DSINE"
+            ];
+            var n = lyr.name;
+            var isExtraction = false;
+            for (var ei = 0; ei < EXTRACTION_LAYERS.length; ei++) {
+                if (n === EXTRACTION_LAYERS[ei]) { isExtraction = true; break; }
+            }
+            if (!isExtraction) continue;
         }
 
-        app.redraw();
-        return "ok";
-    } catch (e) {
-        return "error|" + e.message;
+        // Ensure unique path names before collecting
+        var nameCount = {};
+        for (var pi = 0; pi < lyr.pathItems.length; pi++) {
+            var path = lyr.pathItems[pi];
+            if (!path.name || path.name === "") {
+                path.name = "__cluster_" + lyr.name.replace(/[^a-zA-Z0-9]/g, "_") + "_" + pi + "__";
+            } else if (nameCount[path.name]) {
+                path.name = path.name + "_" + nameCount[path.name];
+            }
+            nameCount[path.name] = (nameCount[path.name] || 0) + 1;
+
+            var pts = [];
+            for (var pp = 0; pp < path.pathPoints.length; pp++) {
+                pts.push([path.pathPoints[pp].anchor[0], path.pathPoints[pp].anchor[1]]);
+            }
+            allPaths.push({
+                name: path.name,
+                layer: lyr.name,
+                points: pts
+            });
+        }
     }
+
+    return jsonStringify(allPaths);
 }
+
+/**
+ * Color-code paths by cluster assignment.
+ * Takes JSON: [{cluster_id, identity_key, path_names: [...], color: [r,g,b],
+ *               stroke_width, dashed, confidence_tier, member_count}]
+ * Saves original stroke state for restore on exit.
+ * Returns "colored|count" or "error|message"
+ */
+function sa_colorClusters(clusterJson) {
+    var doc;
+    try { doc = app.activeDocument; } catch(e) { return "error|No document"; }
+
+    var clusters;
+    try { clusters = jsonParse(clusterJson); } catch(e) { return "error|Invalid JSON"; }
+    if (!clusters) return "error|Parse failed";
+
+    _sa_clusterMode = true;
+    _sa_clusters = clusters;
+
+    // Only save original strokes on the first call (not on re-color after accept/reject)
+    var isFirstColor = (_sa_origStrokes.length === 0);
+
+    var colored = 0;
+    for (var ci = 0; ci < clusters.length; ci++) {
+        var cluster = clusters[ci];
+        var clr = new RGBColor();
+        clr.red = cluster.color[0];
+        clr.green = cluster.color[1];
+        clr.blue = cluster.color[2];
+
+        var pathNames = cluster.path_names;
+        for (var ni = 0; ni < pathNames.length; ni++) {
+            // Search all layers for the path by name
+            for (var li = 0; li < doc.layers.length; li++) {
+                try {
+                    var p = doc.layers[li].pathItems.getByName(pathNames[ni]);
+                    // Save original stroke state only on first coloring pass
+                    if (isFirstColor) {
+                        _sa_origStrokes.push({
+                            path: p,
+                            color: p.strokeColor,
+                            width: p.strokeWidth,
+                            dashes: p.strokeDashes ? p.strokeDashes.slice(0) : []
+                        });
+                    }
+                    p.strokeColor = clr;
+                    p.strokeWidth = cluster.stroke_width || 1;
+                    if (cluster.dashed) {
+                        p.strokeDashes = [4, 4];
+                    }
+                    colored++;
+                    break;  // found it, stop searching layers
+                } catch(e) {
+                    // not on this layer, try next
+                }
+            }
+        }
+    }
+
+    app.redraw();
+    return "colored|" + colored;
+}
+
+/**
+ * Accept a single cluster: collect anchors, classify, place preview, delete sources.
+ * Dedicated batch function — does NOT enter isolation mode or call sa_averageSelectedAnchors.
+ * Returns "accepted|shape|confidence" or "error|message"
+ */
+function sa_acceptCluster(clusterIndex) {
+    if (!_sa_clusters || clusterIndex < 0 || clusterIndex >= _sa_clusters.length) return "error|Invalid cluster";
+
+    var doc;
+    try { doc = app.activeDocument; } catch(e) { return "error|No document"; }
+
+    var cluster = _sa_clusters[clusterIndex];
+    var names = cluster.path_names;
+
+    // Collect all anchors from cluster paths
+    var anchors = [];
+    var sourcePaths = [];
+    for (var ni = 0; ni < names.length; ni++) {
+        for (var li = 0; li < doc.layers.length; li++) {
+            try {
+                var p = doc.layers[li].pathItems.getByName(names[ni]);
+                for (var pp = 0; pp < p.pathPoints.length; pp++) {
+                    anchors.push([p.pathPoints[pp].anchor[0], p.pathPoints[pp].anchor[1]]);
+                }
+                sourcePaths.push(p);
+                break;
+            } catch(e) {}
+        }
+    }
+
+    if (anchors.length < 2) return "error|Need at least 2 anchors";
+
+    // Sort, classify, place preview — reusing shared library functions
+    var sorted = sortByPCA(anchors);
+    var classification = classifyShape(sorted);
+    var previewPath = placePreview(classification.points, classification.closed, "Cleaned Forms", classification.handles || null);
+
+    // Rename from __preview__ to a permanent name
+    try {
+        previewPath.name = "clustered_" + new Date().getTime() + "_" + clusterIndex;
+    } catch(e) {}
+
+    // Delete source paths
+    for (var si = sourcePaths.length - 1; si >= 0; si--) {
+        try { sourcePaths[si].remove(); } catch(e) {}
+    }
+
+    // Clean up origStrokes for deleted paths
+    if (_sa_origStrokes) {
+        for (var oi = _sa_origStrokes.length - 1; oi >= 0; oi--) {
+            var found = false;
+            for (var sp = 0; sp < sourcePaths.length; sp++) {
+                if (_sa_origStrokes[oi].path === sourcePaths[sp]) { found = true; break; }
+            }
+            if (found) _sa_origStrokes.splice(oi, 1);
+        }
+    }
+
+    logInteraction("shapeaverager", "cluster_accept",
+        {cluster_id: clusterIndex, identity_key: cluster.identity_key || "", member_count: names.length},
+        null, null);
+
+    app.redraw();
+    return "accepted|" + classification.shape + "|" + classification.confidence;
+}
+
+/**
+ * Accept ALL clusters: batch process each cluster in sequence.
+ * Does NOT enter isolation mode — sa_acceptCluster handles placement directly.
+ * Returns "accepted_all|count" or "error|message"
+ */
+function sa_acceptAllClusters() {
+    if (!_sa_clusters) return "error|No clusters";
+
+    var doc;
+    try { doc = app.activeDocument; } catch(e) { return "error|No document"; }
+
+    var accepted = 0;
+    // Process in reverse so indices don't shift as clusters are consumed
+    for (var ci = _sa_clusters.length - 1; ci >= 0; ci--) {
+        doc.selection = null;  // clear between iterations
+        var result = sa_acceptCluster(ci);
+        if (result.indexOf("accepted") === 0) accepted++;
+    }
+
+    logInteraction("shapeaverager", "cluster_accept_all",
+        {total_clusters: _sa_clusters.length, accepted: accepted},
+        null, null);
+
+    _sa_clusters = null;
+    _sa_clusterMode = false;
+    _sa_origStrokes = [];
+    return "accepted_all|" + accepted;
+}
+
+/**
+ * Reject a cluster: remove all paths in that cluster.
+ * Returns "rejected|count" or "error|message"
+ */
+function sa_rejectCluster(clusterIndex) {
+    if (!_sa_clusters || clusterIndex < 0 || clusterIndex >= _sa_clusters.length) return "error|Invalid cluster";
+
+    var doc;
+    try { doc = app.activeDocument; } catch(e) { return "error|No document"; }
+
+    var cluster = _sa_clusters[clusterIndex];
+    var pathNames = cluster.path_names;
+    var removed = 0;
+
+    for (var ni = 0; ni < pathNames.length; ni++) {
+        for (var li = 0; li < doc.layers.length; li++) {
+            try {
+                var p = doc.layers[li].pathItems.getByName(pathNames[ni]);
+                // Remove from origStrokes tracking too
+                for (var oi = _sa_origStrokes.length - 1; oi >= 0; oi--) {
+                    if (_sa_origStrokes[oi].path === p) {
+                        _sa_origStrokes.splice(oi, 1);
+                        break;
+                    }
+                }
+                p.remove();
+                removed++;
+                break;
+            } catch(e) {}
+        }
+    }
+
+    // Remove this cluster from the array
+    _sa_clusters.splice(clusterIndex, 1);
+
+    logInteraction("shapeaverager", "cluster_reject",
+        {cluster_id: clusterIndex, removed: removed},
+        null, null);
+
+    app.redraw();
+    return "rejected|" + removed;
+}
+
+/**
+ * Exit clustering mode: restore original strokes, clear state.
+ * Returns "exited"
+ */
+function sa_exitClusterMode() {
+    // Restore original stroke colors/widths
+    for (var i = 0; i < _sa_origStrokes.length; i++) {
+        try {
+            var entry = _sa_origStrokes[i];
+            entry.path.strokeColor = entry.color;
+            entry.path.strokeWidth = entry.width;
+            entry.path.strokeDashes = entry.dashes;
+        } catch(e) {}
+    }
+    _sa_origStrokes = [];
+    _sa_clusters = null;
+    _sa_clusterMode = false;
+    app.redraw();
+    return "exited";
+}
+

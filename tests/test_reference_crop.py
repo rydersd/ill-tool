@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 import pytest
 
-from adobe_mcp.apps.illustrator.reference_crop import _analyze_cropped_region
+from adobe_mcp.apps.illustrator.ml_vision.reference_crop import _analyze_cropped_region
 
 
 # ---------------------------------------------------------------------------

@@ -14,7 +14,7 @@ import cv2
 import numpy as np
 import pytest
 
-from adobe_mcp.apps.illustrator.landmark_axis import (
+from adobe_mcp.apps.illustrator.analysis.landmark_axis import (
     axis_to_ai,
     ai_to_axis,
     batch_axis_to_ai,
@@ -30,7 +30,7 @@ from adobe_mcp.apps.illustrator.landmark_axis import (
     SYMMETRY_PAIRS,
     MIDLINE_LANDMARKS,
 )
-from adobe_mcp.apps.illustrator.rig_data import _load_rig, _save_rig
+from adobe_mcp.apps.illustrator.rigging.rig_data import _load_rig, _save_rig
 
 
 # ---------------------------------------------------------------------------

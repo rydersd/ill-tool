@@ -7,7 +7,7 @@ All tests are pure Python — no JSX or Adobe required.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.color_script import (
+from adobe_mcp.apps.illustrator.ui.color_script import (
     assign_mood,
     create_color_script,
     generate_color_arc,

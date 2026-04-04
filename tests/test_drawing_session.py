@@ -10,7 +10,7 @@ import json
 
 import pytest
 
-from adobe_mcp.apps.illustrator.drawing_session import (
+from adobe_mcp.apps.illustrator.drawing.drawing_session import (
     start_session,
     next_shape,
     record_iteration,
@@ -28,11 +28,11 @@ def clean_session_dir(tmp_path, monkeypatch):
     test_dir = str(tmp_path / "sessions")
     os.makedirs(test_dir, exist_ok=True)
     monkeypatch.setattr(
-        "adobe_mcp.apps.illustrator.drawing_session.SESSION_DIR", test_dir
+        "adobe_mcp.apps.illustrator.drawing.drawing_session.SESSION_DIR", test_dir
     )
     # Also patch the module-level reference used by _session_path
     monkeypatch.setattr(
-        "adobe_mcp.apps.illustrator.drawing_session._session_path",
+        "adobe_mcp.apps.illustrator.drawing.drawing_session._session_path",
         lambda sid: os.path.join(test_dir, f"{sid}.json"),
     )
 

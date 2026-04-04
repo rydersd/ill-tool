@@ -7,7 +7,7 @@ all pure Python, no Adobe required.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.format_hub import (
+from adobe_mcp.apps.illustrator.export_formats.format_hub import (
     available_formats,
     route_export,
     FORMAT_REGISTRY,

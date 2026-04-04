@@ -2,7 +2,7 @@
 
 import math
 import pytest
-from adobe_mcp.apps.illustrator.form_3d_projection import (
+from adobe_mcp.apps.illustrator.threed.form_3d_projection import (
     infer_orientation_from_axis,
     place_feature_on_surface,
     mirror_point_3d,

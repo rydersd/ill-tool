@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-from adobe_mcp.apps.illustrator.segment_ml import (
+from adobe_mcp.apps.illustrator.ml_vision.segment_ml import (
     ML_AVAILABLE,
     PART_LABELS,
     _ml_status,
@@ -109,7 +109,7 @@ def test_masks_to_parts():
 
 def test_graceful_fallback():
     """_segment_image without ML deps returns error with install instructions."""
-    with patch("adobe_mcp.apps.illustrator.segment_ml.ML_AVAILABLE", False):
+    with patch("adobe_mcp.apps.illustrator.ml_vision.segment_ml.ML_AVAILABLE", False):
         result = _segment_image("/tmp/test.png", 0.5)
 
     assert "error" in result

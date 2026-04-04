@@ -6,7 +6,7 @@ All tests are pure Python -- no JSX or Adobe required.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.relationship_types import (
+from adobe_mcp.apps.illustrator.utility.relationship_types import (
     RELATIONSHIP_TYPES,
     infer_relationship,
     get_ae_expression,

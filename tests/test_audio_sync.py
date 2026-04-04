@@ -8,13 +8,13 @@ import json
 
 import pytest
 
-from adobe_mcp.apps.illustrator.audio_sync import (
+from adobe_mcp.apps.illustrator.production.audio_sync import (
     _ensure_audio_cues,
     _compute_panel_start_frames,
     export_markers,
     VALID_CUE_TYPES,
 )
-from adobe_mcp.apps.illustrator.rig_data import _load_rig, _save_rig
+from adobe_mcp.apps.illustrator.rigging.rig_data import _load_rig, _save_rig
 
 
 # ---------------------------------------------------------------------------

@@ -7,7 +7,7 @@ All tests are pure Python — no opentimelineio dep required.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.otio_export import (
+from adobe_mcp.apps.illustrator.export_formats.otio_export import (
     otio_clip,
     otio_transition,
     timeline_to_otio_dict,

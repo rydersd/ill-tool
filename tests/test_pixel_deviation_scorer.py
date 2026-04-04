@@ -13,7 +13,7 @@ import tempfile
 import numpy as np
 import pytest
 
-from adobe_mcp.apps.illustrator.pixel_deviation_scorer import (
+from adobe_mcp.apps.illustrator.ml_vision.pixel_deviation_scorer import (
     hausdorff_distance,
     mean_contour_distance,
     score_pixel_deviation,

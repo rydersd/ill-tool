@@ -7,7 +7,7 @@ import math
 
 import pytest
 
-from adobe_mcp.apps.illustrator.ik_solver import (
+from adobe_mcp.apps.illustrator.rigging.ik_solver import (
     _solve_two_bone,
     _distance,
     _clamp,

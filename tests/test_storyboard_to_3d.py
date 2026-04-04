@@ -6,7 +6,7 @@ all pure Python, no 3D engine required.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.storyboard_to_3d import (
+from adobe_mcp.apps.illustrator.storyboard.storyboard_to_3d import (
     panel_to_3d_scene,
     estimate_depth_from_scale,
     CAMERA_PRESETS,

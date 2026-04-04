@@ -6,7 +6,7 @@ All tests are pure Python — no JSX or Adobe required.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.weight_zones import (
+from adobe_mcp.apps.illustrator.utility.weight_zones import (
     get_weights_for_path,
     compute_weight_zones,
 )

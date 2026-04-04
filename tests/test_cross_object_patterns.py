@@ -9,7 +9,7 @@ import os
 
 import pytest
 
-from adobe_mcp.apps.illustrator.cross_object_patterns import (
+from adobe_mcp.apps.illustrator.analysis.cross_object_patterns import (
     extract_features,
     record_labeled_part,
     match_pattern,

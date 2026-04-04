@@ -6,7 +6,7 @@ hierarchy validation.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.failure_detection import (
+from adobe_mcp.apps.illustrator.analysis.failure_detection import (
     check_hierarchy,
     check_connections,
 )

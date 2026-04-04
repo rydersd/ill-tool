@@ -11,7 +11,7 @@ import cv2
 import numpy as np
 import pytest
 
-from adobe_mcp.apps.illustrator.part_segmenter import (
+from adobe_mcp.apps.illustrator.rigging.part_segmenter import (
     segment_by_color,
     extract_parts,
     filter_outline_regions,

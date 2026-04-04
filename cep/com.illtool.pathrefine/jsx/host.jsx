@@ -10,7 +10,7 @@
 
 // Include shared libraries
 // Derive shared library path from this script's location
-var _SHARED = (function() {
+var _PR_SHARED = (function() {
     try {
         var thisFile = new File($.fileName);
         var jsxDir = thisFile.parent;
@@ -19,27 +19,32 @@ var _SHARED = (function() {
         var sharedDir = new Folder(cepDir.fsName + "/shared");
         if (sharedDir.exists) return sharedDir.fsName + "/";
     } catch (e) { /* $.fileName empty or parent traversal failed */ }
-    return "/Users/ryders/Developer/GitHub/ill_tool/cep/shared/";
+    // Fallback: try relative from known CEP install location
+    try {
+        var f = new File($.fileName);
+        return f.parent.parent.parent.fsName + "/shared/";
+    } catch(e2) {}
+    return "";
 })();
-$.evalFile(_SHARED + "json_es3.jsx");
-$.evalFile(_SHARED + "logging.jsx");
-$.evalFile(_SHARED + "math2d.jsx");
-$.evalFile(_SHARED + "geometry.jsx");
-$.evalFile(_SHARED + "shapes.jsx");
-$.evalFile(_SHARED + "pathutils.jsx");
-$.evalFile(_SHARED + "ui.jsx");
+$.evalFile(_PR_SHARED + "json_es3.jsx");
+$.evalFile(_PR_SHARED + "logging.jsx");
+$.evalFile(_PR_SHARED + "math2d.jsx");
+$.evalFile(_PR_SHARED + "geometry.jsx");
+$.evalFile(_PR_SHARED + "shapes.jsx");
+$.evalFile(_PR_SHARED + "pathutils.jsx");
+$.evalFile(_PR_SHARED + "ui.jsx");
 
 // Module-level cache (persists across evalScript calls)
-var _detachedPaths = [];     // references to detached pathItems
-var _originalAnchors = [];   // backup anchor data for reset
-var _lodCache = null;        // precomputed LOD levels
-var _originalPointCount = 0; // point count before simplification
+var _pr_detachedPaths = [];     // references to detached pathItems
+var _pr_originalAnchors = [];   // backup anchor data for reset
+var _pr_lodCache = null;        // precomputed LOD levels
+var _pr_originalPointCount = 0; // point count before simplification
 
 /**
  * Clean up orphaned detached paths left from a previous session or crash.
  * Called on panel load. Returns the count of removed items as a string.
  */
-function cleanupOrphans() {
+function pr_cleanupOrphans() {
     try {
         var lyr = app.activeDocument.layers.getByName("Refined Forms");
         var toRemove = [];
@@ -59,7 +64,7 @@ function cleanupOrphans() {
  * Get info about the current selection.
  * Returns pipe-delimited: "anchorCount|pathCount"
  */
-function getSelectionInfo() {
+function pr_getSelectionInfo() {
     var counts = getSelectionCounts();
     return counts.anchorCount + "|" + counts.pathCount;
 }
@@ -76,7 +81,7 @@ function getSelectionInfo() {
  * Returns pipe-delimited: "detachedCount|totalPoints|done"
  * On error: "error|message"
  */
-function detachAndPrecompute(padding) {
+function pr_detachAndPrecompute(padding) {
     if (padding === undefined || padding === null) padding = 5;
     var doc;
     try {
@@ -92,10 +97,10 @@ function detachAndPrecompute(padding) {
     var lyr = ensureLayer("Refined Forms");
 
     // Clear any previous detached state
-    _cleanDetachedPaths();
+    _pr_cleanDetachedPaths();
 
-    _detachedPaths = [];
-    _originalAnchors = [];
+    _pr_detachedPaths = [];
+    _pr_originalAnchors = [];
     var detachedCount = 0;
     var allAnchorsFlat = [];  // [x,y] pairs for LOD and bounding box
 
@@ -141,7 +146,7 @@ function detachAndPrecompute(padding) {
                     right: run.points[oc].right.slice(0)
                 });
             }
-            _originalAnchors.push(origCopy);
+            _pr_originalAnchors.push(origCopy);
 
             var newPath = createPathWithHandles(lyr, run.points, {
                 name: "__detached_" + detachedCount + "__",
@@ -152,14 +157,14 @@ function detachAndPrecompute(padding) {
                 strokeDashes: [3, 3]
             });
 
-            _detachedPaths.push(newPath);
+            _pr_detachedPaths.push(newPath);
             detachedCount++;
         }
     }
 
     if (detachedCount === 0) return "error|No contiguous runs with 2+ points";
 
-    _originalPointCount = allAnchorsFlat.length;
+    _pr_originalPointCount = allAnchorsFlat.length;
 
     // Compute and draw bounding box
     if (allAnchorsFlat.length >= 2) {
@@ -170,7 +175,7 @@ function detachAndPrecompute(padding) {
     // Precompute LOD levels
     if (allAnchorsFlat.length >= 3) {
         var sorted = sortByPCA(allAnchorsFlat);
-        _lodCache = precomputeLOD(sorted, 20);
+        _pr_lodCache = precomputeLOD(sorted, 20);
     }
 
     logInteraction("pathrefine", "detach", null,
@@ -187,18 +192,18 @@ function detachAndPrecompute(padding) {
  * Rebuilds detached paths with simplified point data.
  * Returns "pointCount" or "error|message"
  */
-function applySimplifyLevel(level) {
-    if (!_lodCache) return "error|No LOD cached";
+function pr_applySimplifyLevel(level) {
+    if (!_pr_lodCache) return "error|No LOD cached";
 
     // Find the closest level at or below the requested value
-    var best = _lodCache[0];
-    for (var i = 0; i < _lodCache.length; i++) {
-        if (_lodCache[i].value <= level) best = _lodCache[i];
+    var best = _pr_lodCache[0];
+    for (var i = 0; i < _pr_lodCache.length; i++) {
+        if (_pr_lodCache[i].value <= level) best = _pr_lodCache[i];
     }
 
     // For simplification we rebuild detached paths with the simplified points.
     // Remove existing detached paths and create a single simplified one.
-    _cleanDetachedPaths();
+    _pr_cleanDetachedPaths();
 
     if (best.points.length >= 2) {
         var lyr = ensureLayer("Refined Forms");
@@ -212,11 +217,11 @@ function applySimplifyLevel(level) {
             computeHandles: true,
             tension: 1 / 6
         });
-        _detachedPaths = [path];
+        _pr_detachedPaths = [path];
     }
 
     logInteraction("pathrefine", "simplify",
-        {originalPoints: _originalPointCount},
+        {originalPoints: _pr_originalPointCount},
         {simplifiedPoints: best.count, level: level}, null);
 
     app.redraw();
@@ -227,11 +232,11 @@ function applySimplifyLevel(level) {
  * Apply: solidify detached paths, clear state.
  * Returns "applied|count"
  */
-function doApply() {
+function pr_doApply() {
     var count = 0;
-    for (var i = 0; i < _detachedPaths.length; i++) {
+    for (var i = 0; i < _pr_detachedPaths.length; i++) {
         try {
-            var item = _detachedPaths[i];
+            var item = _pr_detachedPaths[i];
             // Make solid
             item.strokeDashes = [];
             var clr = new RGBColor();
@@ -251,10 +256,10 @@ function doApply() {
     logInteraction("pathrefine", "apply", null, {count: count}, null);
 
     removeBoundingBox("Refined Forms");
-    _detachedPaths = [];
-    _originalAnchors = [];
-    _lodCache = null;
-    _originalPointCount = 0;
+    _pr_detachedPaths = [];
+    _pr_originalAnchors = [];
+    _pr_lodCache = null;
+    _pr_originalPointCount = 0;
 
     app.redraw();
     return "applied|" + count;
@@ -264,16 +269,16 @@ function doApply() {
  * Reset: restore original point data on detached paths.
  * Returns "reset|pointCount"
  */
-function doReset() {
+function pr_doReset() {
     // Remove current detached paths and recreate from originals
-    _cleanDetachedPaths();
+    _pr_cleanDetachedPaths();
 
     var lyr = ensureLayer("Refined Forms");
-    _detachedPaths = [];
+    _pr_detachedPaths = [];
     var totalPoints = 0;
 
-    for (var i = 0; i < _originalAnchors.length; i++) {
-        var origPts = _originalAnchors[i];
+    for (var i = 0; i < _pr_originalAnchors.length; i++) {
+        var origPts = _pr_originalAnchors[i];
         if (origPts.length < 2) continue;
 
         var newPath = createPathWithHandles(lyr, origPts, {
@@ -285,7 +290,7 @@ function doReset() {
             strokeDashes: [3, 3]
         });
 
-        _detachedPaths.push(newPath);
+        _pr_detachedPaths.push(newPath);
         totalPoints += origPts.length;
     }
 
@@ -297,13 +302,13 @@ function doReset() {
  * Undo: remove all detached paths and bounding box, clear state.
  * Returns "undone"
  */
-function doUndoDetach() {
-    _cleanDetachedPaths();
+function pr_doUndoDetach() {
+    _pr_cleanDetachedPaths();
     removeBoundingBox("Refined Forms");
-    _detachedPaths = [];
-    _originalAnchors = [];
-    _lodCache = null;
-    _originalPointCount = 0;
+    _pr_detachedPaths = [];
+    _pr_originalAnchors = [];
+    _pr_lodCache = null;
+    _pr_originalPointCount = 0;
     app.redraw();
     return "undone";
 }
@@ -313,14 +318,14 @@ function doUndoDetach() {
 /**
  * Remove all detached path items from the canvas.
  */
-function _cleanDetachedPaths() {
+function _pr_cleanDetachedPaths() {
     // Remove tracked paths
-    for (var i = _detachedPaths.length - 1; i >= 0; i--) {
+    for (var i = _pr_detachedPaths.length - 1; i >= 0; i--) {
         try {
-            _detachedPaths[i].remove();
+            _pr_detachedPaths[i].remove();
         } catch (e) {}
     }
-    _detachedPaths = [];
+    _pr_detachedPaths = [];
 
     // Also clean up any orphaned __detached_*__ paths on the layer
     try {

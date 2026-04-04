@@ -1,457 +1,76 @@
-"""Illustrator tools — 194 modules split by feature.
+"""Illustrator tools -- 200 modules organized into 15 subdirectories.
 
 Registration chain:
-    apps/__init__.py -> illustrator/__init__.py -> {new_document, shapes, text,
-    paths, export, layers, modify, inspect, image_trace, analyze_reference,
-    reference_underlay, vtrace, anchor_edit, silhouette, auto_correct,
-    proportion_grid, style_transfer, shape_recipes, contour_to_path, smart_shape,
-    bezier_optimize, curve_fit, artboard_from_ref, path_boolean, symmetry,
-    layer_auto_organize, group_and_name, color_sampler, stroke_profiles,
-    path_offset, path_weld, snap_to_grid, undo_checkpoint, reference_crop,
-    drawing_orchestrator, skeleton_annotate, body_part_label, skeleton_build,
-    part_bind, joint_rotate, pose_snapshot, pose_interpolate, ik_solver,
-    onion_skin, character_template, pose_from_image, keyframe_timeline,
-    motion_path, storyboard_panel, scene_manager, background_layer,
-    multi_character, shot_list_gen, beat_sheet, production_notes,
-    continuity_check, asset_registry, pdf_export, animatic_preview,
-    prop_manager, lighting_notation, transition_planner, audio_sync,
-    sequence_assembler, rig_controllers, storyboard_template, panel_text,
-    camera_notation, character_turnaround, landmark_axis, form_3d_projection,
-    construction_draw, gesture_line, proportion_check, negative_space,
-    line_weight, form_volume, thumbnail_grid, scene_composition,
-    character_expression, batch_pose, staging_system, revision_tracker,
-    edl_export, thumbnail_promote, environment, continuity_enhanced,
-    director_markup, audio_sync_enhanced, cross_section, shading_inference,
-    color_region_cluster, contour_nesting, symmetry_detector, part_size_ranker,
-    joint_geometry, object_classifier, template_inheritance, template_scaling,
-    template_export, template_library_search, scene_graph, interaction_zones,
-    lod_system, asset_versioning, batch_rig, cv_confidence, correction_learning,
-    cross_object_patterns, failure_detection, active_learning, object_hierarchy,
-    part_segmenter, part_questioner, connection_detector, hierarchy_builder,
-    relationship_types, constraint_system, chain_detector, hierarchy_templates,
-    template_matcher, ik_chain_auto, motion_range_from_shape, deformation_zones,
-    secondary_motion, weight_zones, pose_library_generic, physics_hints,
-    timing_curves, anticipation_markers, motion_path_from_hierarchy,
-    dialogue_layout, action_lines, camera_expressions, color_script,
-    aspect_adapter, character_sheet_gen, transition_validator, batch_export_all,
-    project_dashboard, drawing_session, character_wizard, pipeline_runner,
-    quick_pose, panel_composer, storyboard_from_script, visual_debugger,
-    animation_flipbook, smart_export, reference_library, style_guide,
-    trace_workflow, vectorize_ml, smart_dispatcher, landmark_ml, segment_ml,
-    diffvg_correct, dwpose_delta_extractor, animated_drawings_bridge,
-    mesh_face_grouper, reconstruct_3d_trellis, spatial_pipeline,
-    reconstruct_3d_quick, reconstruct_3d_quality, character_3d, character_apose,
-    refine_3d, export_usdz, multiview_synthesis, mesh_to_rig, depth_compositor,
-    camera_3d, otio_export, spine_export, rive_export, lottie_workflow,
-    live2d_export, drawing_spinup_bridge, sketch2anim_bridge, turnaround_from_3d,
-    perspective_from_3d, asset_3d_library, one_click_character, storyboard_to_3d,
-    pose_preview_3d, format_hub, project_dashboard_3d, contour_scanner,
-    contour_labeler, tonal_analyzer, feedback_loop_3d, normal_reference,
-    form_edge_extract, interaction_ingest}.py
+    apps/__init__.py -> illustrator/__init__.py -> {subdir}/__init__.py -> module.register(mcp)
+
+Subdirectories:
+    core/           22 tools  -- document, paths, layers, shapes, text, editing
+    drawing/        19 tools  -- orchestration, construction, contours, form analysis
+    rigging/        20 files  -- skeleton, joints, IK, constraints, hierarchy
+    analysis/       12 tools  -- learning, detection, classification, style
+    character/       9 tools  -- templates, turnarounds, expressions, sheets
+    animation/      16 tools  -- poses, keyframes, motion paths, physics
+    storyboard/     13 tools  -- panels, scenes, shots, staging
+    production/     17 tools  -- notes, continuity, assets, audio, dashboard
+    pipeline/        4 tools  -- orchestration, dispatch, spatial processing
+    export_formats/ 11 tools  -- PDF, Spine, Rive, Lottie, Live2D, USDZ, OTIO, EDL
+    ml_vision/      13 files  -- reference analysis, tracing, vectorization, segmentation
+    threed/         15 tools  -- reconstruction, mesh, depth, camera, multiview
+    ui/             10 tools  -- action lines, camera, color, thumbnails, transitions
+    utility/        16 tools  -- correction, debugging, symmetry, templates, bridges
+    ml_backends/     3 files  -- normal estimation, edge classification, informative drawing (no MCP tools)
+
+Root-level shared modules (not moved):
+    models.py, server.py, coordinate_transforms.py, path_validation.py,
+    surface_classifier.py, normal_renderings.py, interaction_ingest.py,
+    form_edge_pipeline.py
 """
 
-from adobe_mcp.apps.illustrator.new_document import register as _reg_new_document
-from adobe_mcp.apps.illustrator.shapes import register as _reg_shapes
-from adobe_mcp.apps.illustrator.text import register as _reg_text
-from adobe_mcp.apps.illustrator.paths import register as _reg_paths
-from adobe_mcp.apps.illustrator.export import register as _reg_export
-from adobe_mcp.apps.illustrator.layers import register as _reg_layers
-from adobe_mcp.apps.illustrator.modify import register as _reg_modify
-from adobe_mcp.apps.illustrator.inspect import register as _reg_inspect
-from adobe_mcp.apps.illustrator.image_trace import register as _reg_image_trace
-from adobe_mcp.apps.illustrator.analyze_reference import register as _reg_analyze_reference
-from adobe_mcp.apps.illustrator.reference_underlay import register as _reg_reference_underlay
-from adobe_mcp.apps.illustrator.vtrace import register as _reg_vtrace
-from adobe_mcp.apps.illustrator.anchor_edit import register as _reg_anchor_edit
-from adobe_mcp.apps.illustrator.silhouette import register as _reg_silhouette
-from adobe_mcp.apps.illustrator.auto_correct import register as _reg_auto_correct
-from adobe_mcp.apps.illustrator.proportion_grid import register as _reg_proportion_grid
-from adobe_mcp.apps.illustrator.style_transfer import register as _reg_style_transfer
-from adobe_mcp.apps.illustrator.shape_recipes import register as _reg_shape_recipes
-from adobe_mcp.apps.illustrator.contour_to_path import register as _reg_contour_to_path
-from adobe_mcp.apps.illustrator.smart_shape import register as _reg_smart_shape
-from adobe_mcp.apps.illustrator.bezier_optimize import register as _reg_bezier_optimize
-from adobe_mcp.apps.illustrator.curve_fit import register as _reg_curve_fit
-from adobe_mcp.apps.illustrator.artboard_from_ref import register as _reg_artboard_from_ref
-from adobe_mcp.apps.illustrator.path_boolean import register as _reg_path_boolean
-from adobe_mcp.apps.illustrator.symmetry import register as _reg_symmetry
-from adobe_mcp.apps.illustrator.layer_auto_organize import register as _reg_layer_auto_organize
-from adobe_mcp.apps.illustrator.group_and_name import register as _reg_group_and_name
-from adobe_mcp.apps.illustrator.color_sampler import register as _reg_color_sampler
-from adobe_mcp.apps.illustrator.stroke_profiles import register as _reg_stroke_profiles
-from adobe_mcp.apps.illustrator.path_offset import register as _reg_path_offset
-from adobe_mcp.apps.illustrator.path_weld import register as _reg_path_weld
-from adobe_mcp.apps.illustrator.snap_to_grid import register as _reg_snap_to_grid
-from adobe_mcp.apps.illustrator.undo_checkpoint import register as _reg_undo_checkpoint
-from adobe_mcp.apps.illustrator.reference_crop import register as _reg_reference_crop
-from adobe_mcp.apps.illustrator.drawing_orchestrator import register as _reg_drawing_orchestrator
-from adobe_mcp.apps.illustrator.skeleton_annotate import register as _reg_skeleton_annotate
-from adobe_mcp.apps.illustrator.body_part_label import register as _reg_body_part_label
-from adobe_mcp.apps.illustrator.skeleton_build import register as _reg_skeleton_build
-from adobe_mcp.apps.illustrator.part_bind import register as _reg_part_bind
-from adobe_mcp.apps.illustrator.joint_rotate import register as _reg_joint_rotate
-from adobe_mcp.apps.illustrator.pose_snapshot import register as _reg_pose_snapshot
-from adobe_mcp.apps.illustrator.pose_interpolate import register as _reg_pose_interpolate
-from adobe_mcp.apps.illustrator.ik_solver import register as _reg_ik_solver
-from adobe_mcp.apps.illustrator.onion_skin import register as _reg_onion_skin
-from adobe_mcp.apps.illustrator.character_template import register as _reg_character_template
-from adobe_mcp.apps.illustrator.pose_from_image import register as _reg_pose_from_image
-from adobe_mcp.apps.illustrator.keyframe_timeline import register as _reg_keyframe_timeline
-from adobe_mcp.apps.illustrator.motion_path import register as _reg_motion_path
-from adobe_mcp.apps.illustrator.storyboard_panel import register as _reg_storyboard_panel
-from adobe_mcp.apps.illustrator.scene_manager import register as _reg_scene_manager
-from adobe_mcp.apps.illustrator.background_layer import register as _reg_background_layer
-from adobe_mcp.apps.illustrator.multi_character import register as _reg_multi_character
-from adobe_mcp.apps.illustrator.shot_list_gen import register as _reg_shot_list_gen
-from adobe_mcp.apps.illustrator.beat_sheet import register as _reg_beat_sheet
-from adobe_mcp.apps.illustrator.production_notes import register as _reg_production_notes
-from adobe_mcp.apps.illustrator.continuity_check import register as _reg_continuity_check
-from adobe_mcp.apps.illustrator.asset_registry import register as _reg_asset_registry
-from adobe_mcp.apps.illustrator.pdf_export import register as _reg_pdf_export
-from adobe_mcp.apps.illustrator.animatic_preview import register as _reg_animatic_preview
-from adobe_mcp.apps.illustrator.prop_manager import register as _reg_prop_manager
-from adobe_mcp.apps.illustrator.lighting_notation import register as _reg_lighting_notation
-from adobe_mcp.apps.illustrator.transition_planner import register as _reg_transition_planner
-from adobe_mcp.apps.illustrator.audio_sync import register as _reg_audio_sync
-from adobe_mcp.apps.illustrator.sequence_assembler import register as _reg_sequence_assembler
-from adobe_mcp.apps.illustrator.rig_controllers import register as _reg_rig_controllers
-from adobe_mcp.apps.illustrator.storyboard_template import register as _reg_storyboard_template
-from adobe_mcp.apps.illustrator.panel_text import register as _reg_panel_text
-from adobe_mcp.apps.illustrator.camera_notation import register as _reg_camera_notation
-from adobe_mcp.apps.illustrator.character_turnaround import register as _reg_character_turnaround
-from adobe_mcp.apps.illustrator.landmark_axis import register as _reg_landmark_axis
-from adobe_mcp.apps.illustrator.form_3d_projection import register as _reg_form_3d_projection
-from adobe_mcp.apps.illustrator.construction_draw import register as _reg_construction_draw
-from adobe_mcp.apps.illustrator.gesture_line import register as _reg_gesture_line
-from adobe_mcp.apps.illustrator.proportion_check import register as _reg_proportion_check
-from adobe_mcp.apps.illustrator.negative_space import register as _reg_negative_space
-from adobe_mcp.apps.illustrator.line_weight import register as _reg_line_weight
-from adobe_mcp.apps.illustrator.form_volume import register as _reg_form_volume
-from adobe_mcp.apps.illustrator.thumbnail_grid import register as _reg_thumbnail_grid
-from adobe_mcp.apps.illustrator.scene_composition import register as _reg_scene_composition
-from adobe_mcp.apps.illustrator.character_expression import register as _reg_character_expression
-from adobe_mcp.apps.illustrator.batch_pose import register as _reg_batch_pose
-from adobe_mcp.apps.illustrator.staging_system import register as _reg_staging_system
-from adobe_mcp.apps.illustrator.revision_tracker import register as _reg_revision_tracker
-from adobe_mcp.apps.illustrator.edl_export import register as _reg_edl_export
-from adobe_mcp.apps.illustrator.thumbnail_promote import register as _reg_thumbnail_promote
-from adobe_mcp.apps.illustrator.environment import register as _reg_environment
-from adobe_mcp.apps.illustrator.continuity_enhanced import register as _reg_continuity_enhanced
-from adobe_mcp.apps.illustrator.director_markup import register as _reg_director_markup
-from adobe_mcp.apps.illustrator.audio_sync_enhanced import register as _reg_audio_sync_enhanced
-from adobe_mcp.apps.illustrator.cross_section import register as _reg_cross_section
-from adobe_mcp.apps.illustrator.shading_inference import register as _reg_shading_inference
-from adobe_mcp.apps.illustrator.color_region_cluster import register as _reg_color_region_cluster
-from adobe_mcp.apps.illustrator.contour_nesting import register as _reg_contour_nesting
-from adobe_mcp.apps.illustrator.symmetry_detector import register as _reg_symmetry_detector
-from adobe_mcp.apps.illustrator.part_size_ranker import register as _reg_part_size_ranker
-from adobe_mcp.apps.illustrator.joint_geometry import register as _reg_joint_geometry
-from adobe_mcp.apps.illustrator.object_classifier import register as _reg_object_classifier
-from adobe_mcp.apps.illustrator.template_inheritance import register as _reg_template_inheritance
-from adobe_mcp.apps.illustrator.template_scaling import register as _reg_template_scaling
-from adobe_mcp.apps.illustrator.template_export import register as _reg_template_export
-from adobe_mcp.apps.illustrator.template_library_search import register as _reg_template_library_search
-from adobe_mcp.apps.illustrator.scene_graph import register as _reg_scene_graph
-from adobe_mcp.apps.illustrator.interaction_zones import register as _reg_interaction_zones
-from adobe_mcp.apps.illustrator.lod_system import register as _reg_lod_system
-from adobe_mcp.apps.illustrator.asset_versioning import register as _reg_asset_versioning
-from adobe_mcp.apps.illustrator.batch_rig import register as _reg_batch_rig
-from adobe_mcp.apps.illustrator.cv_confidence import register as _reg_cv_confidence
-from adobe_mcp.apps.illustrator.correction_learning import register as _reg_correction_learning
-from adobe_mcp.apps.illustrator.cross_object_patterns import register as _reg_cross_object_patterns
-from adobe_mcp.apps.illustrator.failure_detection import register as _reg_failure_detection
-from adobe_mcp.apps.illustrator.active_learning import register as _reg_active_learning
-from adobe_mcp.apps.illustrator.object_hierarchy import register as _reg_object_hierarchy
-from adobe_mcp.apps.illustrator.part_segmenter import register as _reg_part_segmenter
-from adobe_mcp.apps.illustrator.part_questioner import register as _reg_part_questioner
-from adobe_mcp.apps.illustrator.connection_detector import register as _reg_connection_detector
-from adobe_mcp.apps.illustrator.hierarchy_builder import register as _reg_hierarchy_builder
-from adobe_mcp.apps.illustrator.relationship_types import register as _reg_relationship_types
-from adobe_mcp.apps.illustrator.constraint_system import register as _reg_constraint_system
-from adobe_mcp.apps.illustrator.chain_detector import register as _reg_chain_detector
-from adobe_mcp.apps.illustrator.hierarchy_templates import register as _reg_hierarchy_templates
-from adobe_mcp.apps.illustrator.template_matcher import register as _reg_template_matcher
-from adobe_mcp.apps.illustrator.ik_chain_auto import register as _reg_ik_chain_auto
-from adobe_mcp.apps.illustrator.motion_range_from_shape import register as _reg_motion_range_from_shape
-from adobe_mcp.apps.illustrator.deformation_zones import register as _reg_deformation_zones
-from adobe_mcp.apps.illustrator.secondary_motion import register as _reg_secondary_motion
-from adobe_mcp.apps.illustrator.weight_zones import register as _reg_weight_zones
-from adobe_mcp.apps.illustrator.pose_library_generic import register as _reg_pose_library_generic
-from adobe_mcp.apps.illustrator.physics_hints import register as _reg_physics_hints
-from adobe_mcp.apps.illustrator.timing_curves import register as _reg_timing_curves
-from adobe_mcp.apps.illustrator.anticipation_markers import register as _reg_anticipation_markers
-from adobe_mcp.apps.illustrator.motion_path_from_hierarchy import register as _reg_motion_path_from_hierarchy
-from adobe_mcp.apps.illustrator.dialogue_layout import register as _reg_dialogue_layout
-from adobe_mcp.apps.illustrator.action_lines import register as _reg_action_lines
-from adobe_mcp.apps.illustrator.camera_expressions import register as _reg_camera_expressions
-from adobe_mcp.apps.illustrator.color_script import register as _reg_color_script
-from adobe_mcp.apps.illustrator.aspect_adapter import register as _reg_aspect_adapter
-from adobe_mcp.apps.illustrator.character_sheet_gen import register as _reg_character_sheet_gen
-from adobe_mcp.apps.illustrator.transition_validator import register as _reg_transition_validator
-from adobe_mcp.apps.illustrator.batch_export_all import register as _reg_batch_export_all
-from adobe_mcp.apps.illustrator.project_dashboard import register as _reg_project_dashboard
-from adobe_mcp.apps.illustrator.drawing_session import register as _reg_drawing_session
-from adobe_mcp.apps.illustrator.character_wizard import register as _reg_character_wizard
-from adobe_mcp.apps.illustrator.pipeline_runner import register as _reg_pipeline_runner
-from adobe_mcp.apps.illustrator.quick_pose import register as _reg_quick_pose
-from adobe_mcp.apps.illustrator.panel_composer import register as _reg_panel_composer
-from adobe_mcp.apps.illustrator.storyboard_from_script import register as _reg_storyboard_from_script
-from adobe_mcp.apps.illustrator.visual_debugger import register as _reg_visual_debugger
-from adobe_mcp.apps.illustrator.animation_flipbook import register as _reg_animation_flipbook
-from adobe_mcp.apps.illustrator.smart_export import register as _reg_smart_export
-from adobe_mcp.apps.illustrator.reference_library import register as _reg_reference_library
-from adobe_mcp.apps.illustrator.style_guide import register as _reg_style_guide
-from adobe_mcp.apps.illustrator.trace_workflow import register as _reg_trace_workflow
-from adobe_mcp.apps.illustrator.vectorize_ml import register as _reg_vectorize_ml
-from adobe_mcp.apps.illustrator.smart_dispatcher import register as _reg_smart_dispatcher
-from adobe_mcp.apps.illustrator.landmark_ml import register as _reg_landmark_ml
-from adobe_mcp.apps.illustrator.segment_ml import register as _reg_segment_ml
-from adobe_mcp.apps.illustrator.diffvg_correct import register as _reg_diffvg_correct
-from adobe_mcp.apps.illustrator.dwpose_delta_extractor import register as _reg_dwpose_delta_extractor
-from adobe_mcp.apps.illustrator.animated_drawings_bridge import register as _reg_animated_drawings_bridge
-from adobe_mcp.apps.illustrator.mesh_face_grouper import register as _reg_mesh_face_grouper
-from adobe_mcp.apps.illustrator.reconstruct_3d_trellis import register as _reg_reconstruct_3d_trellis
-from adobe_mcp.apps.illustrator.spatial_pipeline import register as _reg_spatial_pipeline
-from adobe_mcp.apps.illustrator.reconstruct_3d_quick import register as _reg_reconstruct_3d_quick
-from adobe_mcp.apps.illustrator.reconstruct_3d_quality import register as _reg_reconstruct_3d_quality
-from adobe_mcp.apps.illustrator.character_3d import register as _reg_character_3d
-from adobe_mcp.apps.illustrator.character_apose import register as _reg_character_apose
-from adobe_mcp.apps.illustrator.refine_3d import register as _reg_refine_3d
-from adobe_mcp.apps.illustrator.export_usdz import register as _reg_export_usdz
-from adobe_mcp.apps.illustrator.multiview_synthesis import register as _reg_multiview_synthesis
-from adobe_mcp.apps.illustrator.mesh_to_rig import register as _reg_mesh_to_rig
-from adobe_mcp.apps.illustrator.depth_compositor import register as _reg_depth_compositor
-from adobe_mcp.apps.illustrator.camera_3d import register as _reg_camera_3d
-from adobe_mcp.apps.illustrator.otio_export import register as _reg_otio_export
-from adobe_mcp.apps.illustrator.spine_export import register as _reg_spine_export
-from adobe_mcp.apps.illustrator.rive_export import register as _reg_rive_export
-from adobe_mcp.apps.illustrator.lottie_workflow import register as _reg_lottie_workflow
-from adobe_mcp.apps.illustrator.live2d_export import register as _reg_live2d_export
-from adobe_mcp.apps.illustrator.drawing_spinup_bridge import register as _reg_drawing_spinup_bridge
-from adobe_mcp.apps.illustrator.sketch2anim_bridge import register as _reg_sketch2anim_bridge
-from adobe_mcp.apps.illustrator.turnaround_from_3d import register as _reg_turnaround_from_3d
-from adobe_mcp.apps.illustrator.perspective_from_3d import register as _reg_perspective_from_3d
-from adobe_mcp.apps.illustrator.asset_3d_library import register as _reg_asset_3d_library
-from adobe_mcp.apps.illustrator.one_click_character import register as _reg_one_click_character
-from adobe_mcp.apps.illustrator.storyboard_to_3d import register as _reg_storyboard_to_3d
-from adobe_mcp.apps.illustrator.pose_preview_3d import register as _reg_pose_preview_3d
-from adobe_mcp.apps.illustrator.format_hub import register as _reg_format_hub
-from adobe_mcp.apps.illustrator.project_dashboard_3d import register as _reg_project_dashboard_3d
-from adobe_mcp.apps.illustrator.contour_scanner import register as _reg_contour_scanner
-from adobe_mcp.apps.illustrator.contour_labeler import register as _reg_contour_labeler
-from adobe_mcp.apps.illustrator.tonal_analyzer import register as _reg_tonal_analyzer
-from adobe_mcp.apps.illustrator.feedback_loop_3d import register as _reg_feedback_loop_3d
-from adobe_mcp.apps.illustrator.normal_reference import register as _reg_normal_reference
-from adobe_mcp.apps.illustrator.form_edge_extract import register as _reg_form_edge_extract
+from adobe_mcp.apps.illustrator.core import register_core_tools
+from adobe_mcp.apps.illustrator.drawing import register_drawing_tools
+from adobe_mcp.apps.illustrator.rigging import register_rigging_tools
+from adobe_mcp.apps.illustrator.analysis import register_analysis_tools
+from adobe_mcp.apps.illustrator.character import register_character_tools
+from adobe_mcp.apps.illustrator.animation import register_animation_tools
+from adobe_mcp.apps.illustrator.storyboard import register_storyboard_tools
+from adobe_mcp.apps.illustrator.production import register_production_tools
+from adobe_mcp.apps.illustrator.pipeline import register_pipeline_tools
+from adobe_mcp.apps.illustrator.export_formats import register_export_formats_tools
+from adobe_mcp.apps.illustrator.ml_vision import register_ml_vision_tools
+from adobe_mcp.apps.illustrator.threed import register_threed_tools
+from adobe_mcp.apps.illustrator.ui import register_ui_tools
+from adobe_mcp.apps.illustrator.utility import register_utility_tools
+
+# Root-level shared module that has a register function
 from adobe_mcp.apps.illustrator.interaction_ingest import register as _reg_interaction_ingest
 
 
 def register_illustrator_tools(mcp):
     """Register all Illustrator tools.
 
-    Each registration is wrapped in try/except so one broken tool
-    doesn't prevent the remaining tools from loading.
+    Each subdirectory's register function wraps individual registrations
+    in try/except so one broken tool doesn't prevent the rest from loading.
     """
     import logging as _logging
     _log = _logging.getLogger(__name__)
 
-    def _safe_register(reg_fn, mcp_ref):
-        try:
-            reg_fn(mcp_ref)
-        except Exception as exc:
-            _log.warning("Failed to register %s.%s: %s", reg_fn.__module__, reg_fn.__name__, exc)
+    register_core_tools(mcp)
+    register_drawing_tools(mcp)
+    register_rigging_tools(mcp)
+    register_analysis_tools(mcp)
+    register_character_tools(mcp)
+    register_animation_tools(mcp)
+    register_storyboard_tools(mcp)
+    register_production_tools(mcp)
+    register_pipeline_tools(mcp)
+    register_export_formats_tools(mcp)
+    register_ml_vision_tools(mcp)
+    register_threed_tools(mcp)
+    register_ui_tools(mcp)
+    register_utility_tools(mcp)
 
-    _safe_register(_reg_new_document, mcp)
-    _safe_register(_reg_shapes, mcp)
-    _safe_register(_reg_text, mcp)
-    _safe_register(_reg_paths, mcp)
-    _safe_register(_reg_export, mcp)
-    _safe_register(_reg_layers, mcp)
-    _safe_register(_reg_modify, mcp)
-    _safe_register(_reg_inspect, mcp)
-    _safe_register(_reg_image_trace, mcp)
-    _safe_register(_reg_analyze_reference, mcp)
-    _safe_register(_reg_reference_underlay, mcp)
-    _safe_register(_reg_vtrace, mcp)
-    _safe_register(_reg_anchor_edit, mcp)
-    _safe_register(_reg_silhouette, mcp)
-    _safe_register(_reg_auto_correct, mcp)
-    _safe_register(_reg_proportion_grid, mcp)
-    _safe_register(_reg_style_transfer, mcp)
-    _safe_register(_reg_shape_recipes, mcp)
-    _safe_register(_reg_contour_to_path, mcp)
-    _safe_register(_reg_smart_shape, mcp)
-    _safe_register(_reg_bezier_optimize, mcp)
-    _safe_register(_reg_curve_fit, mcp)
-    _safe_register(_reg_artboard_from_ref, mcp)
-    _safe_register(_reg_path_boolean, mcp)
-    _safe_register(_reg_symmetry, mcp)
-    _safe_register(_reg_layer_auto_organize, mcp)
-    _safe_register(_reg_group_and_name, mcp)
-    _safe_register(_reg_color_sampler, mcp)
-    _safe_register(_reg_stroke_profiles, mcp)
-    _safe_register(_reg_path_offset, mcp)
-    _safe_register(_reg_path_weld, mcp)
-    _safe_register(_reg_snap_to_grid, mcp)
-    _safe_register(_reg_undo_checkpoint, mcp)
-    _safe_register(_reg_reference_crop, mcp)
-    _safe_register(_reg_drawing_orchestrator, mcp)
-    _safe_register(_reg_skeleton_annotate, mcp)
-    _safe_register(_reg_body_part_label, mcp)
-    _safe_register(_reg_skeleton_build, mcp)
-    _safe_register(_reg_part_bind, mcp)
-    _safe_register(_reg_joint_rotate, mcp)
-    _safe_register(_reg_pose_snapshot, mcp)
-    _safe_register(_reg_pose_interpolate, mcp)
-    _safe_register(_reg_ik_solver, mcp)
-    _safe_register(_reg_onion_skin, mcp)
-    _safe_register(_reg_character_template, mcp)
-    _safe_register(_reg_pose_from_image, mcp)
-    _safe_register(_reg_keyframe_timeline, mcp)
-    _safe_register(_reg_motion_path, mcp)
-    _safe_register(_reg_storyboard_panel, mcp)
-    _safe_register(_reg_scene_manager, mcp)
-    _safe_register(_reg_background_layer, mcp)
-    _safe_register(_reg_multi_character, mcp)
-    _safe_register(_reg_shot_list_gen, mcp)
-    _safe_register(_reg_beat_sheet, mcp)
-    _safe_register(_reg_production_notes, mcp)
-    _safe_register(_reg_continuity_check, mcp)
-    _safe_register(_reg_asset_registry, mcp)
-    _safe_register(_reg_pdf_export, mcp)
-    _safe_register(_reg_animatic_preview, mcp)
-    _safe_register(_reg_prop_manager, mcp)
-    _safe_register(_reg_lighting_notation, mcp)
-    _safe_register(_reg_transition_planner, mcp)
-    _safe_register(_reg_audio_sync, mcp)
-    _safe_register(_reg_sequence_assembler, mcp)
-    _safe_register(_reg_rig_controllers, mcp)
-    _safe_register(_reg_storyboard_template, mcp)
-    _safe_register(_reg_panel_text, mcp)
-    _safe_register(_reg_camera_notation, mcp)
-    _safe_register(_reg_character_turnaround, mcp)
-    _safe_register(_reg_landmark_axis, mcp)
-    _safe_register(_reg_form_3d_projection, mcp)
-    _safe_register(_reg_construction_draw, mcp)
-    _safe_register(_reg_gesture_line, mcp)
-    _safe_register(_reg_proportion_check, mcp)
-    _safe_register(_reg_negative_space, mcp)
-    _safe_register(_reg_line_weight, mcp)
-    _safe_register(_reg_form_volume, mcp)
-    _safe_register(_reg_thumbnail_grid, mcp)
-    _safe_register(_reg_scene_composition, mcp)
-    _safe_register(_reg_character_expression, mcp)
-    _safe_register(_reg_batch_pose, mcp)
-    _safe_register(_reg_staging_system, mcp)
-    _safe_register(_reg_revision_tracker, mcp)
-    _safe_register(_reg_edl_export, mcp)
-    _safe_register(_reg_thumbnail_promote, mcp)
-    _safe_register(_reg_environment, mcp)
-    _safe_register(_reg_continuity_enhanced, mcp)
-    _safe_register(_reg_director_markup, mcp)
-    _safe_register(_reg_audio_sync_enhanced, mcp)
-    _safe_register(_reg_cross_section, mcp)
-    _safe_register(_reg_shading_inference, mcp)
-    _safe_register(_reg_color_region_cluster, mcp)
-    _safe_register(_reg_contour_nesting, mcp)
-    _safe_register(_reg_symmetry_detector, mcp)
-    _safe_register(_reg_part_size_ranker, mcp)
-    _safe_register(_reg_joint_geometry, mcp)
-    _safe_register(_reg_object_classifier, mcp)
-    _safe_register(_reg_template_inheritance, mcp)
-    _safe_register(_reg_template_scaling, mcp)
-    _safe_register(_reg_template_export, mcp)
-    _safe_register(_reg_template_library_search, mcp)
-    _safe_register(_reg_scene_graph, mcp)
-    _safe_register(_reg_interaction_zones, mcp)
-    _safe_register(_reg_lod_system, mcp)
-    _safe_register(_reg_asset_versioning, mcp)
-    _safe_register(_reg_batch_rig, mcp)
-    _safe_register(_reg_cv_confidence, mcp)
-    _safe_register(_reg_correction_learning, mcp)
-    _safe_register(_reg_cross_object_patterns, mcp)
-    _safe_register(_reg_failure_detection, mcp)
-    _safe_register(_reg_active_learning, mcp)
-    _safe_register(_reg_object_hierarchy, mcp)
-    _safe_register(_reg_part_segmenter, mcp)
-    _safe_register(_reg_part_questioner, mcp)
-    _safe_register(_reg_connection_detector, mcp)
-    _safe_register(_reg_hierarchy_builder, mcp)
-    _safe_register(_reg_relationship_types, mcp)
-    _safe_register(_reg_constraint_system, mcp)
-    _safe_register(_reg_chain_detector, mcp)
-    _safe_register(_reg_hierarchy_templates, mcp)
-    _safe_register(_reg_template_matcher, mcp)
-    _safe_register(_reg_ik_chain_auto, mcp)
-    _safe_register(_reg_motion_range_from_shape, mcp)
-    _safe_register(_reg_deformation_zones, mcp)
-    _safe_register(_reg_secondary_motion, mcp)
-    _safe_register(_reg_weight_zones, mcp)
-    _safe_register(_reg_pose_library_generic, mcp)
-    _safe_register(_reg_physics_hints, mcp)
-    _safe_register(_reg_timing_curves, mcp)
-    _safe_register(_reg_anticipation_markers, mcp)
-    _safe_register(_reg_motion_path_from_hierarchy, mcp)
-    _safe_register(_reg_dialogue_layout, mcp)
-    _safe_register(_reg_action_lines, mcp)
-    _safe_register(_reg_camera_expressions, mcp)
-    _safe_register(_reg_color_script, mcp)
-    _safe_register(_reg_aspect_adapter, mcp)
-    _safe_register(_reg_character_sheet_gen, mcp)
-    _safe_register(_reg_transition_validator, mcp)
-    _safe_register(_reg_batch_export_all, mcp)
-    _safe_register(_reg_project_dashboard, mcp)
-    _safe_register(_reg_drawing_session, mcp)
-    _safe_register(_reg_character_wizard, mcp)
-    _safe_register(_reg_pipeline_runner, mcp)
-    _safe_register(_reg_quick_pose, mcp)
-    _safe_register(_reg_panel_composer, mcp)
-    _safe_register(_reg_storyboard_from_script, mcp)
-    _safe_register(_reg_visual_debugger, mcp)
-    _safe_register(_reg_animation_flipbook, mcp)
-    _safe_register(_reg_smart_export, mcp)
-    _safe_register(_reg_reference_library, mcp)
-    _safe_register(_reg_style_guide, mcp)
-    _safe_register(_reg_trace_workflow, mcp)
-    _safe_register(_reg_vectorize_ml, mcp)
-    _safe_register(_reg_smart_dispatcher, mcp)
-    _safe_register(_reg_landmark_ml, mcp)
-    _safe_register(_reg_segment_ml, mcp)
-    _safe_register(_reg_diffvg_correct, mcp)
-    _safe_register(_reg_dwpose_delta_extractor, mcp)
-    _safe_register(_reg_animated_drawings_bridge, mcp)
-    _safe_register(_reg_reconstruct_3d_quick, mcp)
-    _safe_register(_reg_reconstruct_3d_quality, mcp)
-    _safe_register(_reg_mesh_face_grouper, mcp)
-    _safe_register(_reg_reconstruct_3d_trellis, mcp)
-    _safe_register(_reg_spatial_pipeline, mcp)
-    _safe_register(_reg_character_3d, mcp)
-    _safe_register(_reg_character_apose, mcp)
-    _safe_register(_reg_refine_3d, mcp)
-    _safe_register(_reg_export_usdz, mcp)
-    _safe_register(_reg_multiview_synthesis, mcp)
-    _safe_register(_reg_mesh_to_rig, mcp)
-    _safe_register(_reg_depth_compositor, mcp)
-    _safe_register(_reg_camera_3d, mcp)
-    _safe_register(_reg_otio_export, mcp)
-    _safe_register(_reg_spine_export, mcp)
-    _safe_register(_reg_rive_export, mcp)
-    _safe_register(_reg_lottie_workflow, mcp)
-    _safe_register(_reg_live2d_export, mcp)
-    _safe_register(_reg_drawing_spinup_bridge, mcp)
-    _safe_register(_reg_sketch2anim_bridge, mcp)
-    _safe_register(_reg_turnaround_from_3d, mcp)
-    _safe_register(_reg_perspective_from_3d, mcp)
-    _safe_register(_reg_asset_3d_library, mcp)
-    _safe_register(_reg_one_click_character, mcp)
-    _safe_register(_reg_storyboard_to_3d, mcp)
-    _safe_register(_reg_pose_preview_3d, mcp)
-    _safe_register(_reg_format_hub, mcp)
-    _safe_register(_reg_project_dashboard_3d, mcp)
-    _safe_register(_reg_contour_scanner, mcp)
-    _safe_register(_reg_contour_labeler, mcp)
-    _safe_register(_reg_tonal_analyzer, mcp)
-    _safe_register(_reg_feedback_loop_3d, mcp)
-    _safe_register(_reg_normal_reference, mcp)
-    _safe_register(_reg_form_edge_extract, mcp)
-    _safe_register(_reg_interaction_ingest, mcp)
+    # Root-level module with register function
+    try:
+        _reg_interaction_ingest(mcp)
+    except Exception as exc:
+        _log.warning("Failed to register interaction_ingest: %s", exc)

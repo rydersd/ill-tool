@@ -9,7 +9,7 @@ import os
 
 import pytest
 
-from adobe_mcp.apps.illustrator.reference_library import (
+from adobe_mcp.apps.illustrator.ml_vision.reference_library import (
     add_reference,
     get_references,
     remove_reference,

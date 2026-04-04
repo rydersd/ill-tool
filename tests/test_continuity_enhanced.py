@@ -6,7 +6,7 @@ and props checking. All tests are pure Python.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.continuity_enhanced import (
+from adobe_mcp.apps.illustrator.production.continuity_enhanced import (
     check_scale,
     check_eyeline,
     check_props,

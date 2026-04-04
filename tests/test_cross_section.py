@@ -8,7 +8,7 @@ import math
 
 import pytest
 
-from adobe_mcp.apps.illustrator.cross_section import (
+from adobe_mcp.apps.illustrator.drawing.cross_section import (
     compute_ellipse_params,
     compute_all_cross_sections,
 )

@@ -8,7 +8,7 @@ import os
 
 import pytest
 
-from adobe_mcp.apps.illustrator.template_export import (
+from adobe_mcp.apps.illustrator.export_formats.template_export import (
     export_template,
     import_template,
 )

@@ -6,7 +6,7 @@ All tests are pure Python — no trimesh or 3D deps required.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.export_usdz import generate_usda_text
+from adobe_mcp.apps.illustrator.export_formats.export_usdz import generate_usda_text
 
 
 # ---------------------------------------------------------------------------
