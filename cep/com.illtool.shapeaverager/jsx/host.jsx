@@ -11,20 +11,14 @@
 // Include shared libraries
 // Derive shared library path from this script's location
 var _SHARED = (function() {
-    // $.fileName gives the path of the currently executing script
-    // host.jsx is at: .../com.illtool.shapeaverager/jsx/host.jsx
-    // shared is at:   .../shared/
-    var thisFile = new File($.fileName);
-    var jsxDir = thisFile.parent;        // .../jsx/
-    var panelDir = jsxDir.parent;        // .../com.illtool.shapeaverager/
-    var cepDir = panelDir.parent;        // .../cep/ (or CEP extensions dir)
-    var sharedDir = new Folder(cepDir.fsName + "/shared");
-
-    if (sharedDir.exists) {
-        return sharedDir.fsName + "/";
-    }
-
-    // Fallback: hardcoded path for development
+    try {
+        var thisFile = new File($.fileName);
+        var jsxDir = thisFile.parent;
+        var panelDir = jsxDir.parent;
+        var cepDir = panelDir.parent;
+        var sharedDir = new Folder(cepDir.fsName + "/shared");
+        if (sharedDir.exists) return sharedDir.fsName + "/";
+    } catch (e) { /* $.fileName empty or parent traversal failed */ }
     return "/Users/ryders/Developer/GitHub/ill_tool/cep/shared/";
 })();
 $.evalFile(_SHARED + "json_es3.jsx");

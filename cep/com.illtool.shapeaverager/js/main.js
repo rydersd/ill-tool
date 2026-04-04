@@ -43,6 +43,8 @@ function updateStatus(state) {
 function initShapeButtons() {
     var buttons = document.querySelectorAll(".shape-btn");
     for (var i = 0; i < buttons.length; i++) {
+        // Disabled until a preview exists
+        buttons[i].disabled = true;
         buttons[i].addEventListener("click", function () {
             var shapeType = this.getAttribute("data-shape");
             highlightShape(shapeType);
@@ -75,7 +77,6 @@ function clearShapeHighlight() {
 
 function initSliders() {
     var sliders = [
-        { id: "cornerSlider",  display: "cornerValue" },
         { id: "tensionSlider", display: "tensionValue" }
     ];
 
@@ -120,7 +121,8 @@ function averageSelection() {
     csInterface.evalScript("averageSelectedAnchors()", function (result) {
         if (!result || result.indexOf("error") === 0) {
             updateStatus("ready");
-            updateDetected(result || "No selection", null);
+            var errMsg = result ? result.replace(/^error\|/, "") : "No selection";
+            updateDetected(errMsg, null);
             bboxUI.hide();
             return;
         }
@@ -135,6 +137,14 @@ function averageSelection() {
         document.getElementById("btnConfirm").disabled = false;
         // LOD is already precomputed in ExtendScript
         document.getElementById("simplifySlider").disabled = false;
+
+        // Enable shape override buttons
+        var shapeBtns = document.querySelectorAll(".shape-btn");
+        for (var sb = 0; sb < shapeBtns.length; sb++) shapeBtns[sb].disabled = false;
+
+        // Hide first-use guidance
+        var help = document.getElementById("helpText");
+        if (help) help.style.display = "none";
 
         // Fetch bbox data and show the interactive canvas
         bboxUI.fetch();
@@ -199,6 +209,14 @@ function confirmPreview() {
             document.getElementById("btnConfirm").disabled = true;
             document.getElementById("simplifySlider").disabled = true;
             bboxUI.hide();
+
+            // Disable shape override buttons
+            var shapeBtns = document.querySelectorAll(".shape-btn");
+            for (var sb = 0; sb < shapeBtns.length; sb++) shapeBtns[sb].disabled = true;
+
+            // Show isolation mode hint and guidance
+            updateDetected("In isolation mode \u2014 press Esc to exit", null);
+            document.getElementById("isolationHint").style.display = "block";
             updateStatus("ready");
         }
     });
@@ -216,6 +234,14 @@ function undoPreview() {
             clearShapeHighlight();
             updateDetected("No selection", null);
             bboxUI.hide();
+
+            // Disable shape override buttons
+            var shapeBtns = document.querySelectorAll(".shape-btn");
+            for (var sb = 0; sb < shapeBtns.length; sb++) shapeBtns[sb].disabled = true;
+
+            // Hide isolation hint if visible
+            document.getElementById("isolationHint").style.display = "none";
+
             updateStatus("ready");
         }
     });
@@ -227,6 +253,14 @@ function escapeHtml(str) {
     var div = document.createElement("div");
     div.appendChild(document.createTextNode(str));
     return div.innerHTML;
+}
+
+// ── Isolation Mode Exit ───────────────────────────────────────────
+
+function exitIsolation() {
+    csInterface.evalScript("app.executeMenuCommand('deselectall'); app.executeMenuCommand('exitisolation')", function() {
+        document.getElementById("isolationHint").style.display = "none";
+    });
 }
 
 // ── Bounding Box Interactive Canvas ────────────────────────────────

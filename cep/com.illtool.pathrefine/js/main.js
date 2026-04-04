@@ -84,10 +84,12 @@ function stopSelectionPolling() {
 function detachSelection() {
     updateStatus("processing");
 
-    csInterface.evalScript("detachAndPrecompute()", function (result) {
+    var padding = parseInt(document.getElementById("paddingSlider").value, 10) || 5;
+    csInterface.evalScript("detachAndPrecompute(" + padding + ")", function (result) {
         if (!result || result.indexOf("error") === 0) {
             updateStatus("ready");
-            console.warn("[PathRefine] detachAndPrecompute:", result);
+            var errMsg = result ? result.replace(/^error\|/, "") : "No selection";
+            document.getElementById("anchorCount").textContent = errMsg;
             return;
         }
 

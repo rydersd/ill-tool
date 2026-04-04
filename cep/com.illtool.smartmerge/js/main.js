@@ -140,6 +140,12 @@ function doPreview() {
 // ── Merge ──────────────────────────────────────────────────────────
 
 function doMerge() {
+    var pairCountEl = document.getElementById("mergeReadout").querySelector(".pair-count");
+    var count = pairCountEl ? pairCountEl.textContent : "?";
+    if (!confirm("Merge " + count + " path pair(s)? Original paths will be replaced.\n\nUse Cmd+Z in Illustrator to undo after merging.")) {
+        return;
+    }
+
     updateStatus("processing");
 
     var chain = document.getElementById("chkChainMerge").checked;
@@ -149,8 +155,8 @@ function doMerge() {
         "executeMerge(" + chain + ", " + preserve + ")",
         function (result) {
             if (result && result.indexOf("merged") === 0) {
-                var count = result.split("|")[1];
-                updateReadout("Merged " + count + " pair(s)");
+                var merged = result.split("|")[1];
+                updateReadout("Merged " + merged + " pair(s). Use Cmd+Z to undo.");
                 hasPreview = false;
                 document.getElementById("btnPreview").disabled = true;
                 document.getElementById("btnMerge").disabled = true;
@@ -167,10 +173,10 @@ function doUndoMerge() {
     csInterface.evalScript("doUndoMerge()", function (result) {
         if (result === "undone") {
             hasPreview = false;
-            document.getElementById("btnPreview").disabled = true;
-            document.getElementById("btnMerge").disabled = true;
+            // Keep scan readout and Merge button enabled so user can re-preview or merge
+            // Only disable Preview (can re-preview) and Undo
+            document.getElementById("btnPreview").disabled = false;
             document.getElementById("btnUndo").disabled = true;
-            updateReadout("Select paths and click Scan");
             updateStatus("ready");
         }
     });

@@ -11,20 +11,14 @@
 // Include shared libraries
 // Derive shared library path from this script's location
 var _SHARED = (function() {
-    // $.fileName gives the path of the currently executing script
-    // host.jsx is at: .../com.illtool.smartmerge/jsx/host.jsx
-    // shared is at:   .../shared/
-    var thisFile = new File($.fileName);
-    var jsxDir = thisFile.parent;        // .../jsx/
-    var panelDir = jsxDir.parent;        // .../com.illtool.smartmerge/
-    var cepDir = panelDir.parent;        // .../cep/ (or CEP extensions dir)
-    var sharedDir = new Folder(cepDir.fsName + "/shared");
-
-    if (sharedDir.exists) {
-        return sharedDir.fsName + "/";
-    }
-
-    // Fallback: hardcoded path for development
+    try {
+        var thisFile = new File($.fileName);
+        var jsxDir = thisFile.parent;
+        var panelDir = jsxDir.parent;
+        var cepDir = panelDir.parent;
+        var sharedDir = new Folder(cepDir.fsName + "/shared");
+        if (sharedDir.exists) return sharedDir.fsName + "/";
+    } catch (e) { /* $.fileName empty or parent traversal failed */ }
     return "/Users/ryders/Developer/GitHub/ill_tool/cep/shared/";
 })();
 $.evalFile(_SHARED + "json_es3.jsx");
@@ -184,16 +178,24 @@ function previewMerge() {
             ? pathB.points[0].anchor
             : pathB.points[pathB.points.length - 1].anchor;
 
-        // Determine color: green for same-surface, red-orange for cross-surface
+        // Determine color and dash pattern:
+        //   same-surface: green, even dashes (visually uniform)
+        //   cross-surface: dark orange, long-short dashes (visually distinct for colorblind users)
         var strokeColor;
+        var strokeDashes;
         if (_hasSidecar && _cachedNormalScores) {
             var tA = _cachedNormalScores[pathA.name] || "";
             var tB = _cachedNormalScores[pathB.name] || "";
-            strokeColor = (tA !== "" && tB !== "" && tA === tB)
-                ? [60, 180, 60]    // green — same surface
-                : [200, 80, 30];   // dark orange — cross surface
+            if (tA !== "" && tB !== "" && tA === tB) {
+                strokeColor = [60, 180, 60];    // green — same surface
+                strokeDashes = [4, 4];          // even dashes
+            } else {
+                strokeColor = [200, 80, 30];    // dark orange — cross surface
+                strokeDashes = [8, 3, 2, 3];    // long-short (visually distinct)
+            }
         } else {
             strokeColor = [200, 100, 30]; // default dark orange
+            strokeDashes = [4, 4];
         }
 
         var preview = createPath(lyr, [ptA, ptB], {
@@ -201,8 +203,8 @@ function previewMerge() {
             closed: false,
             stroked: true,
             strokeColor: strokeColor,
-            strokeWidth: 1.0,
-            strokeDashes: [4, 4]
+            strokeWidth: 1.5,
+            strokeDashes: strokeDashes
         });
         _previewPaths.push(preview);
     }
@@ -393,8 +395,7 @@ function updateRadius(tolerance, useFormAware) {
  */
 function doUndoMerge() {
     _cleanPreviews();
-    _cachedPaths = null;
-    _cachedPairs = null;
+    // Keep _cachedPaths and _cachedPairs so user can re-preview or merge
     app.redraw();
     return "undone";
 }

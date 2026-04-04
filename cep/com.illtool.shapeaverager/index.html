@@ -34,13 +34,6 @@
     <div class="section">
         <div class="slider-group">
             <div class="slider-row">
-                <span class="slider-label">Corner Sharpness</span>
-                <input type="range" id="cornerSlider" min="0" max="100" value="50">
-                <span class="slider-value" id="cornerValue">50</span>
-            </div>
-        </div>
-        <div class="slider-group">
-            <div class="slider-row">
                 <span class="slider-label">Curve Tension</span>
                 <input type="range" id="tensionSlider" min="0" max="100" value="50">
                 <span class="slider-value" id="tensionValue">50</span>
@@ -71,6 +64,17 @@
         </div>
     </div>
 
+    <!-- First-use guidance -->
+    <div id="helpText" class="section">
+        <div style="color: #999; font-size: 10px; line-height: 1.6;">
+            <strong>Getting started:</strong><br>
+            1. Use Direct Selection (A) or Lasso to select anchor points<br>
+            2. Click <em>Average Selection</em> to classify and preview<br>
+            3. Adjust shape type or simplification if needed<br>
+            4. Click <em>Confirm</em> to place the cleaned path
+        </div>
+    </div>
+
     <!-- Action buttons -->
     <div class="section">
         <div class="action-buttons">
@@ -88,6 +92,14 @@
                 </button>
             </div>
         </div>
+    </div>
+
+    <!-- Isolation mode hint (shown after confirm) -->
+    <div id="isolationHint" class="section" style="display:none;">
+        <div style="color: #ff9800; font-size: 11px; padding: 4px 0;">
+            &#9888; Isolation mode active — press <strong>Esc</strong> to exit
+        </div>
+        <button class="btn btn-secondary" onclick="exitIsolation()" style="margin-top: 4px;">Exit Isolation Mode</button>
     </div>
 
     <!-- CSInterface library (stub from project shared/) -->
