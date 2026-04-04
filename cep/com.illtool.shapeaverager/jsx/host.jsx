@@ -33,7 +33,15 @@ $.evalFile(_SHARED + "ui.jsx");
 var _cachedSortedPoints = null;
 var _cachedClassification = null;
 var _cachedLOD = null;
-var _bboxOriginalPoints = null;
+
+/**
+ * Get info about the current selection.
+ * Returns pipe-delimited: "anchorCount|pathCount"
+ */
+function getSelectionInfo() {
+    var counts = getSelectionCounts();
+    return counts.anchorCount + "|" + counts.pathCount;
+}
 
 /**
  * Main entry point: read selected anchors, classify shape, place preview.
@@ -78,8 +86,6 @@ function reclassifyAs(shapeType) {
     _cachedClassification = result;
 
     placePreview(result.points, result.closed, "Cleaned Forms", result.handles || null);
-    // Re-snapshot originals so bbox transform matches new point count
-    storeBboxOriginals();
 
     logInteraction("shapeaverager", "reclassify",
         {shape: _cachedClassification ? _cachedClassification.shape : "unknown"},
@@ -106,8 +112,6 @@ function applyLODLevel(level) {
     }
 
     placePreview(best.points, false, "Cleaned Forms");
-    // Re-snapshot originals so bbox transform matches new point count
-    storeBboxOriginals();
     return best.count + "";
 }
 
@@ -144,7 +148,7 @@ function doConfirm() {
     _cachedClassification = null;
     _cachedLOD = null;
 
-    // Enter isolation mode on the confirmed path
+    // Enter isolation mode on the confirmed path and activate Free Transform
     if (pathName) {
         try {
             var doc = app.activeDocument;
@@ -155,6 +159,11 @@ function doConfirm() {
             app.executeMenuCommand("isolate");
         } catch (e) {
             // isolation mode not available or path not found — non-fatal
+        }
+        try {
+            app.executeMenuCommand("Live Free Transform");
+        } catch (e2) {
+            // Free Transform may not be available in all versions — non-fatal
         }
     }
 
@@ -172,43 +181,7 @@ function doUndoAverage() {
     _cachedSortedPoints = null;
     _cachedClassification = null;
     _cachedLOD = null;
-    _bboxOriginalPoints = null;
     return "undone";
-}
-
-/**
- * Return bounding box data for the cached sorted points.
- * Returns pipe-delimited: "cx|cy|width|height|angle"
- * On error: "error|message"
- */
-function getBboxData() {
-    if (!_cachedSortedPoints) return "error|No data";
-    var rect = minAreaRect(_cachedSortedPoints);
-    return rect.center[0] + "|" + rect.center[1] + "|" + rect.width + "|" + rect.height + "|" + rect.angle;
-}
-
-/**
- * Store original point positions for the preview path.
- * Must be called once before any applyBboxTransform calls (at bbox drag start).
- * Returns "ok|pointCount" or "error|message"
- */
-function storeBboxOriginals() {
-    try {
-        var lyr = app.activeDocument.layers.getByName("Cleaned Forms");
-        var preview = lyr.pathItems.getByName("__preview__");
-        _bboxOriginalPoints = [];
-        for (var i = 0; i < preview.pathPoints.length; i++) {
-            var pp = preview.pathPoints[i];
-            _bboxOriginalPoints.push({
-                anchor: [pp.anchor[0], pp.anchor[1]],
-                left: [pp.leftDirection[0], pp.leftDirection[1]],
-                right: [pp.rightDirection[0], pp.rightDirection[1]]
-            });
-        }
-        return "ok|" + _bboxOriginalPoints.length;
-    } catch (e) {
-        return "error|" + e.message;
-    }
 }
 
 /**
@@ -231,41 +204,3 @@ function cleanupOrphans() {
     } catch (e) { return "0"; }
 }
 
-/**
- * Apply an affine transform matrix to the current preview path.
- * Transforms FROM stored originals to prevent cumulative drift during drag.
- * Matrix form: [a b tx; c d ty; 0 0 1]
- *
- * @param {number} a  - scale/rotate component
- * @param {number} b  - shear/rotate component
- * @param {number} c  - shear/rotate component
- * @param {number} d  - scale/rotate component
- * @param {number} tx - translation X
- * @param {number} ty - translation Y
- * @returns {string} "ok" or "error|message"
- */
-function applyBboxTransform(a, b, c, d, tx, ty) {
-    if (!_bboxOriginalPoints) return "error|No originals stored";
-    try {
-        var lyr = app.activeDocument.layers.getByName("Cleaned Forms");
-        var preview = lyr.pathItems.getByName("__preview__");
-
-        for (var i = 0; i < preview.pathPoints.length; i++) {
-            var pp = preview.pathPoints[i];
-            var orig = _bboxOriginalPoints[i];
-
-            // Transform FROM originals, not from current position
-            pp.anchor = [a * orig.anchor[0] + b * orig.anchor[1] + tx,
-                         c * orig.anchor[0] + d * orig.anchor[1] + ty];
-            pp.leftDirection = [a * orig.left[0] + b * orig.left[1] + tx,
-                                c * orig.left[0] + d * orig.left[1] + ty];
-            pp.rightDirection = [a * orig.right[0] + b * orig.right[1] + tx,
-                                 c * orig.right[0] + d * orig.right[1] + ty];
-        }
-
-        app.redraw();
-        return "ok";
-    } catch (e) {
-        return "error|" + e.message;
-    }
-}
