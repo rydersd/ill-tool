@@ -7,9 +7,12 @@ Two-level clustering hierarchy:
 Outputs color-coded cluster assignments for ExtendScript visualization.
 """
 
+import collections
 import json
 import math
+import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -133,14 +136,23 @@ def enumerate_layer_paths(
 # ---------------------------------------------------------------------------
 
 
+def _mean_nearest_one_way(arr_from: np.ndarray, arr_to: np.ndarray) -> float:
+    """Mean nearest-point distance from *arr_from* to *arr_to* (one direction)."""
+    total_dist = 0.0
+    for pt in arr_from:
+        diffs = arr_to - pt
+        dists = np.sqrt(np.sum(diffs * diffs, axis=1))
+        total_dist += float(np.min(dists))
+    return total_dist / len(arr_from)
+
+
 def _spatial_distance(path_a: LayerPath, path_b: LayerPath) -> float:
-    """Mean nearest-point distance between two paths.
+    """Symmetric mean nearest-point distance between two paths.
+
+    Computes the mean nearest-point distance in both directions
+    (A->B and B->A) and returns the average, ensuring d(A,B)==d(B,A).
 
     Subsamples each path to max 20 points for performance.
-    For each point in A, finds the nearest point in B.
-    Returns the mean of all these nearest distances -- a smooth
-    approximation of Hausdorff distance.
-
     Returns infinity if either path has no points.
     """
     pts_a = path_a.points
@@ -161,14 +173,10 @@ def _spatial_distance(path_a: LayerPath, path_b: LayerPath) -> float:
     arr_a = np.array(pts_a, dtype=np.float64)
     arr_b = np.array(pts_b, dtype=np.float64)
 
-    # For each point in A, find nearest in B
-    total_dist = 0.0
-    for pt in arr_a:
-        diffs = arr_b - pt
-        dists = np.sqrt(np.sum(diffs * diffs, axis=1))
-        total_dist += float(np.min(dists))
-
-    return total_dist / len(arr_a)
+    # Symmetric: average both directions so d(A,B) == d(B,A)
+    d_a_to_b = _mean_nearest_one_way(arr_a, arr_b)
+    d_b_to_a = _mean_nearest_one_way(arr_b, arr_a)
+    return (d_a_to_b + d_b_to_a) / 2
 
 
 # ---------------------------------------------------------------------------
@@ -219,12 +227,13 @@ def _dbscan_cluster(paths: list, eps: float, min_samples: int = 1) -> list:
             labels[i] = -2  # noise
             continue
 
-        # Start new cluster and expand
+        # Start new cluster and expand using deque for O(1) popleft
         labels[i] = cluster_id
-        seed_set = list(neighbors)
+        seed_set = collections.deque(neighbors)
+        in_seed = set(neighbors)  # deduplicate additions
 
         while seed_set:
-            q = seed_set.pop(0)
+            q = seed_set.popleft()
             if labels[q] == -2:
                 labels[q] = cluster_id
             if labels[q] != -1:
@@ -232,7 +241,10 @@ def _dbscan_cluster(paths: list, eps: float, min_samples: int = 1) -> list:
             labels[q] = cluster_id
             q_neighbors = [j for j in range(n) if dist_matrix[q][j] <= eps and j != q]
             if len(q_neighbors) + 1 >= min_samples:
-                seed_set.extend(q_neighbors)
+                for nb in q_neighbors:
+                    if nb not in in_seed:
+                        seed_set.append(nb)
+                        in_seed.add(nb)
 
         cluster_id += 1
 
@@ -326,6 +338,7 @@ def cluster_paths(
     layer_paths: list,
     distance_threshold: float = 8.0,
     min_cluster_size: int = 2,
+    learned_thresholds: dict = None,
 ) -> list:
     """Two-level clustering of paths across extraction layers.
 
@@ -342,6 +355,11 @@ def cluster_paths(
         layer_paths: List of LayerPath objects (boundary_signature may be set).
         distance_threshold: DBSCAN eps in points (spatial distance threshold).
         min_cluster_size: Minimum number of paths to form a cluster.
+        learned_thresholds: Optional dict keyed by identity_key, each value
+            a dict with ``suggested_threshold``. When provided, the per-identity
+            threshold is used as DBSCAN eps instead of the global
+            distance_threshold. This closes the learning loop from
+            correction_learning.learn_cluster_thresholds().
 
     Returns:
         List of EdgeCluster objects, sorted by confidence descending.
@@ -354,6 +372,10 @@ def cluster_paths(
     for lp in layer_paths:
         if lp.boundary_signature is not None and hasattr(lp.boundary_signature, "identity_key"):
             key = lp.boundary_signature.identity_key()
+            # Guard: identity_key() may return None/empty for degenerate signatures
+            if not key:
+                sil_tag = "sil" if lp.is_silhouette else "int"
+                key = f"{lp.dominant_surface}_{sil_tag}"
         else:
             # Fallback: group by surface type + silhouette status
             sil_tag = "sil" if lp.is_silhouette else "int"
@@ -373,8 +395,15 @@ def cluster_paths(
             else:
                 continue
         else:
+            # Use per-identity learned threshold if available (S4)
+            eps = distance_threshold
+            if learned_thresholds and identity_key in learned_thresholds:
+                eps = learned_thresholds[identity_key].get(
+                    "suggested_threshold", distance_threshold
+                )
+            # min_samples >= 2 enables proper density-based noise detection (C3)
             sub_clusters = _dbscan_cluster(
-                group_paths, eps=distance_threshold, min_samples=1,
+                group_paths, eps=eps, min_samples=max(2, min_cluster_size),
             )
 
         for members in sub_clusters:
@@ -442,8 +471,16 @@ def generate_color_jsx(clusters: list) -> str:
         weight = stroke_weights.get(tier, 1)
 
         for member in cluster.members:
-            # Escape path name for JSX string literal
-            escaped_name = member.path_name.replace("\\", "\\\\").replace('"', '\\"')
+            # Escape path name for JSX string literal:
+            # backslashes, quotes, newlines, carriage returns, and other control chars
+            escaped_name = (
+                member.path_name
+                .replace("\\", "\\\\")
+                .replace('"', '\\"')
+                .replace("\n", "\\n")
+                .replace("\r", "\\r")
+                .replace("\t", "\\t")
+            )
             lines.append("try {")
             lines.append(f'    var p = doc.pathItems.getByName("{escaped_name}");')
             lines.append(f"    var c = new RGBColor(); c.red = {r}; c.green = {g}; c.blue = {b};")
@@ -459,13 +496,50 @@ def generate_color_jsx(clusters: list) -> str:
     return "\n".join(lines)
 
 
+def generate_cluster_json(clusters: list) -> str:
+    """Generate JSON for sa_colorClusters() in ExtendScript.
+
+    Produces the exact format the CEP panel expects:
+    [{
+        "cluster_id": int,
+        "path_names": [str, ...],
+        "color": [r, g, b],
+        "stroke_width": float,
+        "dashed": bool,
+        "identity_key": str,
+        "confidence_tier": str,
+        "member_count": int
+    }, ...]
+
+    Single quotes in path_names are escaped because the panel wraps
+    JSON in single-quoted evalScript calls.
+    """
+    result = []
+    for i, cluster in enumerate(clusters):
+        color = CLUSTER_COLORS[i % len(CLUSTER_COLORS)]
+        tier = cluster.confidence_tier
+        stroke_width = 2.0 if tier == "high" else (1.0 if tier == "medium" else 0.5)
+        dashed = tier == "low"
+        result.append({
+            "cluster_id": cluster.cluster_id,
+            "path_names": [m.path_name.replace("'", "\\'") for m in cluster.members],
+            "color": color,
+            "stroke_width": stroke_width,
+            "dashed": dashed,
+            "identity_key": cluster.identity_key,
+            "confidence_tier": tier,
+            "member_count": len(cluster.members),
+        })
+    return json.dumps(result)
+
+
 # ---------------------------------------------------------------------------
 # MCP tool registration
 # ---------------------------------------------------------------------------
 
 
 def register(mcp):
-    """Register the adobe_ai_cluster_paths tool."""
+    """Register edge clustering MCP tools."""
 
     @mcp.tool(
         name="adobe_ai_cluster_paths",
@@ -477,8 +551,9 @@ def register(mcp):
         },
     )
     async def cluster_paths_tool(
-        layer_names: list = None,
+        layer_paths_json: str,
         distance_threshold: float = 8.0,
+        sidecar_path: str = None,
         image_path: str = None,
     ) -> str:
         """Cluster paths across extraction layers into structural edge groups.
@@ -489,19 +564,105 @@ def register(mcp):
         spatial proximity (DBSCAN).
 
         Args:
-            layer_names: Optional list of layer names to include. If None,
-                all layers are considered.
+            layer_paths_json: JSON string from sa_readLayerPaths(). Array of
+                objects with ``name``, ``layer``, ``points`` (array of [x,y]).
             distance_threshold: DBSCAN eps in points. Paths closer than this
                 are considered spatially adjacent. Default: 8.0
+            sidecar_path: Optional path to the sidecar JSON file with
+                surface classification data (dominant_surface, mean_curvature,
+                is_silhouette per path).
             image_path: Optional path to the reference image, used to find
-                the sidecar JSON for surface classification data.
+                the sidecar JSON when sidecar_path is not given.
 
         Returns:
-            JSON with cluster assignments and visualization JSX.
+            JSON with cluster assignments in sa_colorClusters() format,
+            plus summary metadata.
         """
-        # Phase 3 will wire this to JSX path enumeration and the
-        # boundary signature computation from Phase 1.
+        from adobe_mcp.apps.illustrator.analysis.correction_learning import (
+            learn_cluster_thresholds,
+        )
+
+        try:
+            jsx_path_data = json.loads(layer_paths_json)
+        except (json.JSONDecodeError, TypeError) as e:
+            return json.dumps({"error": f"Invalid layer_paths_json: {e}"})
+
+        if not isinstance(jsx_path_data, list) or not jsx_path_data:
+            return json.dumps({"error": "layer_paths_json must be a non-empty array"})
+
+        # Load sidecar data if available
+        sidecar_data = None
+        sidecar = sidecar_path
+        if not sidecar and image_path:
+            # Convention: sidecar lives next to the image with _sidecar.json suffix
+            base, _ = os.path.splitext(image_path)
+            candidate = base + "_sidecar.json"
+            if os.path.isfile(candidate):
+                sidecar = candidate
+        if sidecar and os.path.isfile(sidecar):
+            try:
+                with open(sidecar) as f:
+                    sidecar_data = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                pass  # proceed without sidecar
+
+        # Parse into LayerPath objects
+        layer_paths = enumerate_layer_paths(jsx_path_data, sidecar_data=sidecar_data)
+
+        if not layer_paths:
+            return json.dumps({
+                "clusters": [],
+                "cluster_count": 0,
+                "path_count": 0,
+            })
+
+        # Compute boundary signatures if sidecar provides a normal map
+        # (boundary signatures are optional — clustering works without them
+        # using the fallback identity key from sidecar surface data)
+        if sidecar_data and image_path:
+            try:
+                import numpy as np
+                from adobe_mcp.apps.illustrator.analysis.boundary_signature import (
+                    compute_boundary_signature,
+                )
+                # Load normal map and surface type map if cached alongside image
+                base, _ = os.path.splitext(image_path)
+                nmap_path = base + "_normal_map.npy"
+                stmap_path = base + "_surface_type_map.npy"
+                if os.path.isfile(nmap_path) and os.path.isfile(stmap_path):
+                    normal_map = np.load(nmap_path)
+                    surface_type_map = np.load(stmap_path)
+                    for lp in layer_paths:
+                        if lp.points:
+                            lp.boundary_signature = compute_boundary_signature(
+                                contour_points=lp.points,
+                                normal_map=normal_map,
+                                surface_type_map=surface_type_map,
+                            )
+            except (ImportError, OSError, ValueError):
+                pass  # proceed without boundary signatures
+
+        # Load learned thresholds for per-identity eps (S4)
+        learned_thresholds = None
+        try:
+            learned_thresholds = learn_cluster_thresholds()
+        except Exception:
+            pass  # proceed without learned thresholds
+
+        # Cluster
+        clusters = cluster_paths(
+            layer_paths,
+            distance_threshold=distance_threshold,
+            learned_thresholds=learned_thresholds,
+        )
+
+        # Build response in sa_colorClusters() JSON format
+        cluster_json_str = generate_cluster_json(clusters)
+
         return json.dumps({
-            "status": "not_connected",
-            "message": "Clustering engine ready. Panel integration needed.",
+            "clusters": json.loads(cluster_json_str),
+            "cluster_count": len(clusters),
+            "path_count": len(layer_paths),
+            "distance_threshold": distance_threshold,
+            "jsx": generate_color_jsx(clusters),
         })

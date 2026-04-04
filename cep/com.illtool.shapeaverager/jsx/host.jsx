@@ -285,15 +285,32 @@ function sa_readLayerPaths(layerNames) {
             }
             if (!found) continue;
         } else {
-            // Auto-detect extraction layers by common prefixes
+            // Auto-detect extraction layers by exact name match
+            var EXTRACTION_LAYERS = [
+                "Scale Fine", "Scale Medium", "Scale Coarse",
+                "Ink Lines", "Forms 5%", "Forms 10%",
+                "Curvature", "Plane Boundaries", "contour_paths",
+                "Form Edges", "Form Edge Heuristic", "Form Edge Informative", "Form Edge DSINE"
+            ];
             var n = lyr.name;
-            if (n.indexOf("Scale") !== 0 && n.indexOf("Ink") !== 0 &&
-                n.indexOf("Form") !== 0 && n.indexOf("Curvature") !== 0 &&
-                n.indexOf("Plane") !== 0 && n !== "contour_paths") continue;
+            var isExtraction = false;
+            for (var ei = 0; ei < EXTRACTION_LAYERS.length; ei++) {
+                if (n === EXTRACTION_LAYERS[ei]) { isExtraction = true; break; }
+            }
+            if (!isExtraction) continue;
         }
 
+        // Ensure unique path names before collecting
+        var nameCount = {};
         for (var pi = 0; pi < lyr.pathItems.length; pi++) {
             var path = lyr.pathItems[pi];
+            if (!path.name || path.name === "") {
+                path.name = "__cluster_" + lyr.name.replace(/[^a-zA-Z0-9]/g, "_") + "_" + pi + "__";
+            } else if (nameCount[path.name]) {
+                path.name = path.name + "_" + nameCount[path.name];
+            }
+            nameCount[path.name] = (nameCount[path.name] || 0) + 1;
+
             var pts = [];
             for (var pp = 0; pp < path.pathPoints.length; pp++) {
                 pts.push([path.pathPoints[pp].anchor[0], path.pathPoints[pp].anchor[1]]);
@@ -326,7 +343,9 @@ function sa_colorClusters(clusterJson) {
 
     _sa_clusterMode = true;
     _sa_clusters = clusters;
-    _sa_origStrokes = [];
+
+    // Only save original strokes on the first call (not on re-color after accept/reject)
+    var isFirstColor = (_sa_origStrokes.length === 0);
 
     var colored = 0;
     for (var ci = 0; ci < clusters.length; ci++) {
@@ -342,13 +361,15 @@ function sa_colorClusters(clusterJson) {
             for (var li = 0; li < doc.layers.length; li++) {
                 try {
                     var p = doc.layers[li].pathItems.getByName(pathNames[ni]);
-                    // Save original stroke state before modifying
-                    _sa_origStrokes.push({
-                        path: p,
-                        color: p.strokeColor,
-                        width: p.strokeWidth,
-                        dashes: p.strokeDashes ? p.strokeDashes.slice(0) : []
-                    });
+                    // Save original stroke state only on first coloring pass
+                    if (isFirstColor) {
+                        _sa_origStrokes.push({
+                            path: p,
+                            color: p.strokeColor,
+                            width: p.strokeWidth,
+                            dashes: p.strokeDashes ? p.strokeDashes.slice(0) : []
+                        });
+                    }
                     p.strokeColor = clr;
                     p.strokeWidth = cluster.stroke_width || 1;
                     if (cluster.dashed) {
@@ -368,58 +389,86 @@ function sa_colorClusters(clusterJson) {
 }
 
 /**
- * Accept a single cluster: average all paths in that cluster.
- * Returns "accepted|shape|confidence|inputCount|outputCount" or "error|message"
+ * Accept a single cluster: collect anchors, classify, place preview, delete sources.
+ * Dedicated batch function — does NOT enter isolation mode or call sa_averageSelectedAnchors.
+ * Returns "accepted|shape|confidence" or "error|message"
  */
 function sa_acceptCluster(clusterIndex) {
-    if (!_sa_clusters || clusterIndex >= _sa_clusters.length) return "error|Invalid cluster";
+    if (!_sa_clusters || clusterIndex < 0 || clusterIndex >= _sa_clusters.length) return "error|Invalid cluster";
 
     var doc;
     try { doc = app.activeDocument; } catch(e) { return "error|No document"; }
 
     var cluster = _sa_clusters[clusterIndex];
-    var pathNames = cluster.path_names;
+    var names = cluster.path_names;
 
-    // Select all paths in this cluster
-    doc.selection = null;
-    var selected = [];
-    for (var ni = 0; ni < pathNames.length; ni++) {
+    // Collect all anchors from cluster paths
+    var anchors = [];
+    var sourcePaths = [];
+    for (var ni = 0; ni < names.length; ni++) {
         for (var li = 0; li < doc.layers.length; li++) {
             try {
-                var p = doc.layers[li].pathItems.getByName(pathNames[ni]);
-                p.selected = true;
-                selected.push(p);
+                var p = doc.layers[li].pathItems.getByName(names[ni]);
+                for (var pp = 0; pp < p.pathPoints.length; pp++) {
+                    anchors.push([p.pathPoints[pp].anchor[0], p.pathPoints[pp].anchor[1]]);
+                }
+                sourcePaths.push(p);
                 break;
             } catch(e) {}
         }
     }
 
-    if (selected.length < 2) return "error|Need at least 2 paths";
+    if (anchors.length < 2) return "error|Need at least 2 anchors";
 
-    // Use existing averaging pipeline
-    var result = sa_averageSelectedAnchors();
-    if (result.indexOf("error") === 0) return result;
+    // Sort, classify, place preview — reusing shared library functions
+    var sorted = sortByPCA(anchors);
+    var classification = classifyShape(sorted);
+    var previewPath = placePreview(classification.points, classification.closed, "Cleaned Forms", classification.handles || null);
 
-    // Auto-confirm the average
-    var confirmResult = sa_doConfirm();
+    // Rename from __preview__ to a permanent name
+    try {
+        previewPath.name = "clustered_" + new Date().getTime() + "_" + clusterIndex;
+    } catch(e) {}
+
+    // Delete source paths
+    for (var si = sourcePaths.length - 1; si >= 0; si--) {
+        try { sourcePaths[si].remove(); } catch(e) {}
+    }
+
+    // Clean up origStrokes for deleted paths
+    if (_sa_origStrokes) {
+        for (var oi = _sa_origStrokes.length - 1; oi >= 0; oi--) {
+            var found = false;
+            for (var sp = 0; sp < sourcePaths.length; sp++) {
+                if (_sa_origStrokes[oi].path === sourcePaths[sp]) { found = true; break; }
+            }
+            if (found) _sa_origStrokes.splice(oi, 1);
+        }
+    }
 
     logInteraction("shapeaverager", "cluster_accept",
-        {cluster_id: clusterIndex, identity_key: cluster.identity_key || "", member_count: pathNames.length},
+        {cluster_id: clusterIndex, identity_key: cluster.identity_key || "", member_count: names.length},
         null, null);
 
-    return "accepted|" + result;
+    app.redraw();
+    return "accepted|" + classification.shape + "|" + classification.confidence;
 }
 
 /**
- * Accept ALL clusters: batch average each cluster in sequence.
+ * Accept ALL clusters: batch process each cluster in sequence.
+ * Does NOT enter isolation mode — sa_acceptCluster handles placement directly.
  * Returns "accepted_all|count" or "error|message"
  */
 function sa_acceptAllClusters() {
     if (!_sa_clusters) return "error|No clusters";
 
+    var doc;
+    try { doc = app.activeDocument; } catch(e) { return "error|No document"; }
+
     var accepted = 0;
-    // Process in reverse so layer indices don't shift
+    // Process in reverse so indices don't shift as clusters are consumed
     for (var ci = _sa_clusters.length - 1; ci >= 0; ci--) {
+        doc.selection = null;  // clear between iterations
         var result = sa_acceptCluster(ci);
         if (result.indexOf("accepted") === 0) accepted++;
     }
@@ -439,7 +488,7 @@ function sa_acceptAllClusters() {
  * Returns "rejected|count" or "error|message"
  */
 function sa_rejectCluster(clusterIndex) {
-    if (!_sa_clusters || clusterIndex >= _sa_clusters.length) return "error|Invalid cluster";
+    if (!_sa_clusters || clusterIndex < 0 || clusterIndex >= _sa_clusters.length) return "error|Invalid cluster";
 
     var doc;
     try { doc = app.activeDocument; } catch(e) { return "error|No document"; }

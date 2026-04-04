@@ -41,7 +41,9 @@ class BoundarySignature:
         Curvature is bucketed to the nearest 0.1 to allow fuzzy grouping.
         """
         surfaces = sorted([self.surface_left, self.surface_right])
-        curv_bucket = round(self.boundary_curvature * 10) / 10
+        # Use half-up rounding instead of Python's banker's rounding to
+        # ensure symmetric bucket widths (e.g. 0.05 always rounds to 0.1).
+        curv_bucket = int(self.boundary_curvature * 10 + 0.5) / 10
         return f"{surfaces[0]}|{surfaces[1]}|{curv_bucket}"
 
     def similarity(self, other: "BoundarySignature") -> float:
@@ -117,21 +119,40 @@ def _tangents_at(points: np.ndarray) -> np.ndarray:
     if n > 2:
         tangents[1:-1] = points[2:] - points[:-2]
 
-    # Normalise; protect against zero-length tangents
+    # Normalise; detect zero-length tangents from duplicate consecutive points
     lengths = np.linalg.norm(tangents, axis=1, keepdims=True)
+
+    # Replace zero-length tangents with nearest non-zero tangent
+    zero_mask = (lengths.ravel() < 1e-12)
+    if np.any(zero_mask):
+        non_zero_indices = np.where(~zero_mask)[0]
+        if len(non_zero_indices) == 0:
+            # All tangents are zero — degenerate path, return arbitrary tangents
+            tangents[:] = [1.0, 0.0]
+            return tangents
+        for i in np.where(zero_mask)[0]:
+            # Find nearest non-zero tangent
+            nearest = non_zero_indices[np.argmin(np.abs(non_zero_indices - i))]
+            tangents[i] = tangents[nearest]
+        # Recompute lengths after replacement
+        lengths = np.linalg.norm(tangents, axis=1, keepdims=True)
+
     lengths = np.maximum(lengths, 1e-12)
     tangents /= lengths
     return tangents
 
 
 def _perpendiculars(tangents: np.ndarray) -> np.ndarray:
-    """Rotate tangent vectors 90 degrees CCW to get left-pointing perpendiculars.
+    """Rotate tangent vectors 90 degrees to get left-pointing perpendiculars.
 
-    If tangent is (tx, ty), the perpendicular is (-ty, tx).
+    In pixel coordinates (Y increases downward), the CCW rotation
+    ``(-ty, tx)`` actually points rightward. We use ``(ty, -tx)``
+    instead so that "left" consistently means the left side of the
+    path when walking along it in screen space.
     """
     perps = np.empty_like(tangents)
-    perps[:, 0] = -tangents[:, 1]
-    perps[:, 1] = tangents[:, 0]
+    perps[:, 0] = tangents[:, 1]
+    perps[:, 1] = -tangents[:, 0]
     return perps
 
 
@@ -158,10 +179,13 @@ def _majority_surface(type_values: np.ndarray) -> str:
     """Return the surface type name that appears most often.
 
     Uses numpy.bincount for fast majority vote over integer type codes (0-4).
+    Clamps values to valid range to prevent crashes on negative inputs.
     """
     if len(type_values) == 0:
         return "flat"
-    counts = np.bincount(type_values, minlength=5)
+    max_type = max(SURFACE_TYPE_NAMES.keys())
+    type_values = np.clip(type_values, 0, max_type)
+    counts = np.bincount(type_values, minlength=max_type + 1)
     winner = int(np.argmax(counts))
     return SURFACE_TYPE_NAMES.get(winner, "flat")
 
@@ -236,6 +260,10 @@ def compute_boundary_signature(
         return _default_signature()
 
     h, w = surface_type_map.shape[:2]
+
+    # Zero-dimension image guard
+    if h == 0 or w == 0:
+        return _default_signature()
 
     # 1. Sample indices along the path
     indices = _sample_indices(n_pts, sample_count)

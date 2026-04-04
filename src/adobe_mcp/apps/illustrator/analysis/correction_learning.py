@@ -22,6 +22,7 @@ import json
 import math
 import os
 import statistics
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -674,9 +675,21 @@ def record_cluster_correction(
     if len(corrections) > 2000:
         corrections = corrections[-2000:]
 
-    # Ensure parent dir exists
+    # Atomic write: write to temp file, then os.replace (L1)
     CLUSTER_CORRECTIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CLUSTER_CORRECTIONS_PATH.write_text(json.dumps(corrections, indent=2))
+    tmp_fd, tmp_path = tempfile.mkstemp(
+        dir=CLUSTER_CORRECTIONS_PATH.parent, suffix=".tmp"
+    )
+    try:
+        with os.fdopen(tmp_fd, "w") as f:
+            json.dump(corrections, f, indent=2)
+        os.replace(tmp_path, CLUSTER_CORRECTIONS_PATH)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
     return entry
 
@@ -724,7 +737,8 @@ def learn_cluster_thresholds(
         rejects = [e for e in entries if e["action"] == "reject"]
         adjusts = [e for e in entries if e["action"] == "slider_adjust"]
 
-        total = len(accepts) + len(splits) + len(rejects)
+        # L6: Include slider_adjust in total denominator
+        total = len(accepts) + len(splits) + len(rejects) + len(adjusts)
         if total == 0:
             continue
 
@@ -734,20 +748,22 @@ def learn_cluster_thresholds(
         # Accept distances are lower bounds, split distances are upper bounds
         accept_distances = [e["context"].get("distance_threshold", 8.0) for e in accepts]
         split_distances = [e["context"].get("distance_threshold", 8.0) for e in splits]
-        adjust_distances = [e["context"].get("distance_threshold", 8.0) for e in adjusts]
 
         suggested = 8.0  # default
         if accept_distances:
-            # Use the median accept distance as baseline
-            sorted_accepts = sorted(accept_distances)
-            suggested = sorted_accepts[len(sorted_accepts) // 2]
+            # L3: Use statistics.median instead of biased manual median
+            suggested = statistics.median(accept_distances)
         if split_distances:
             # Split means threshold was too loose — cap below minimum split distance
             min_split = min(split_distances)
             suggested = min(suggested, min_split * 0.8)  # 20% margin below split point
-        if adjust_distances:
-            # User-adjusted slider is the strongest signal
-            suggested = adjust_distances[-1]  # most recent adjustment
+        if adjusts:
+            # L5: Sort by timestamp before taking most recent adjustment
+            sorted_adjusts = sorted(adjusts, key=lambda e: e.get("timestamp", ""))
+            suggested = sorted_adjusts[-1]["context"].get("distance_threshold", 8.0)
+
+        # L4: Floor on split threshold — prevent degenerate near-zero values
+        suggested = max(suggested, 1.0)
 
         # Compute reject confidence threshold
         reject_confidences = [e["context"].get("confidence", 0.0) for e in rejects]
@@ -885,8 +901,44 @@ def register(mcp):
                 "suggestion": result,
             })
 
+        elif action == "record_cluster_correction":
+            # S3: Wire learning loop — record accept/split/reject/slider_adjust
+            ctx = params.context or {}
+            identity_key = ctx.get("identity_key", "unknown")
+            cluster_action = ctx.get("cluster_action", "accept")
+            try:
+                entry = record_cluster_correction(
+                    action=cluster_action,
+                    identity_key=identity_key,
+                    context=ctx,
+                )
+                return json.dumps({
+                    "action": "record_cluster_correction",
+                    "entry": entry,
+                })
+            except Exception as e:
+                return json.dumps({"error": f"Failed to record cluster correction: {e}"})
+
+        elif action == "get_cluster_thresholds":
+            # S3: Wire learning loop — return learned per-identity thresholds
+            try:
+                thresholds = learn_cluster_thresholds()
+                convergence = get_convergence_signal()
+                return json.dumps({
+                    "action": "get_cluster_thresholds",
+                    "thresholds": thresholds,
+                    "convergence": convergence,
+                })
+            except Exception as e:
+                return json.dumps({"error": f"Failed to compute thresholds: {e}"})
+
         else:
             return json.dumps({
                 "error": f"Unknown action: {action}",
-                "valid_actions": ["record_correction", "suggest_from_corrections"],
+                "valid_actions": [
+                    "record_correction",
+                    "suggest_from_corrections",
+                    "record_cluster_correction",
+                    "get_cluster_thresholds",
+                ],
             })

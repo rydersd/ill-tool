@@ -450,8 +450,14 @@ function displayClusters(clusters) {
     document.getElementById("btnAcceptAll").disabled = false;
 
     // Apply color-coding on the artboard
+    // Safe escaping: JSON uses " for strings (never '), so escape \ ' \n \r for safe single-quote wrapping
     var clusterJson = JSON.stringify(clusters);
-    csInterface.evalScript("sa_colorClusters('" + clusterJson.replace(/\\/g, "\\\\").replace(/'/g, "\\'") + "')", function(result) {
+    var safeJson = clusterJson
+        .replace(/\\/g, '\\\\')
+        .replace(/'/g, "\\'")
+        .replace(/\n/g, '\\n')
+        .replace(/\r/g, '\\r');
+    csInterface.evalScript("sa_colorClusters('" + safeJson + "')", function(result) {
         if (result && result.indexOf("colored") === 0) {
             var coloredCount = result.split("|")[1];
             readout.textContent += " — " + coloredCount + " paths colored";
@@ -553,7 +559,8 @@ document.addEventListener("keydown", function(e) {
     // Clustering shortcuts (only when cluster section is visible)
     var clusterVisible = document.getElementById("clusterSection").style.display !== "none";
     if (clusterVisible) {
-        if (e.key === "a" || e.key === "A") {
+        if (e.key === "A" && e.shiftKey) {
+            e.preventDefault();
             acceptAllClusters();
         } else if ((e.key === "Delete" || e.key === "Backspace") && selectedCluster >= 0) {
             rejectSelectedCluster();
