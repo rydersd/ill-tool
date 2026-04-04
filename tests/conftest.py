@@ -143,7 +143,7 @@ def tmp_rig_dir(tmp_path, monkeypatch):
         return str(rig_dir / f"{character_name}.json")
 
     monkeypatch.setattr(
-        "adobe_mcp.apps.illustrator.rig_data._rig_path", _patched_rig_path
+        "adobe_mcp.apps.illustrator.rigging.rig_data._rig_path", _patched_rig_path
     )
     return rig_dir
 

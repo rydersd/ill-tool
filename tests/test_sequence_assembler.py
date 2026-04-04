@@ -8,14 +8,14 @@ import json
 
 import pytest
 
-from adobe_mcp.apps.illustrator.sequence_assembler import (
+from adobe_mcp.apps.illustrator.production.sequence_assembler import (
     _ensure_sequence,
     _get_act,
     compute_summary,
     generate_outline,
     _format_runtime,
 )
-from adobe_mcp.apps.illustrator.rig_data import _load_rig, _save_rig
+from adobe_mcp.apps.illustrator.rigging.rig_data import _load_rig, _save_rig
 
 
 # ---------------------------------------------------------------------------

@@ -8,11 +8,11 @@ import os
 
 import pytest
 
-from adobe_mcp.apps.illustrator.batch_rig import (
+from adobe_mcp.apps.illustrator.utility.batch_rig import (
     batch_apply_template,
     batch_status,
 )
-from adobe_mcp.apps.illustrator.rig_data import _load_rig, _save_rig
+from adobe_mcp.apps.illustrator.rigging.rig_data import _load_rig, _save_rig
 
 
 # ---------------------------------------------------------------------------

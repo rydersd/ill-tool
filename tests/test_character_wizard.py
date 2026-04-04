@@ -12,7 +12,7 @@ import cv2
 import numpy as np
 import pytest
 
-from adobe_mcp.apps.illustrator.character_wizard import (
+from adobe_mcp.apps.illustrator.character.character_wizard import (
     run_wizard,
     wizard_status,
     _compute_depth,

@@ -8,13 +8,13 @@ import json
 
 import pytest
 
-from adobe_mcp.apps.illustrator.lighting_notation import (
+from adobe_mcp.apps.illustrator.production.lighting_notation import (
     _ensure_lighting,
     direction_to_angle,
     DIRECTION_ANGLES,
     MOOD_TINTS,
 )
-from adobe_mcp.apps.illustrator.rig_data import _load_rig, _save_rig
+from adobe_mcp.apps.illustrator.rigging.rig_data import _load_rig, _save_rig
 
 
 # ---------------------------------------------------------------------------

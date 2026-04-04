@@ -6,7 +6,7 @@ All tests are pure Python -- no JSX or Adobe required.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.constraint_system import (
+from adobe_mcp.apps.illustrator.rigging.constraint_system import (
     create_constraint,
     validate_pose,
     clamp_to_constraints,

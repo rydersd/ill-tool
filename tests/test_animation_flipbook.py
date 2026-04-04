@@ -7,7 +7,7 @@ All tests are pure Python -- no JSX or Adobe required.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.animation_flipbook import (
+from adobe_mcp.apps.illustrator.animation.animation_flipbook import (
     create_flipbook,
     flipbook_info,
 )

@@ -7,7 +7,7 @@ All tests are pure Python — no JSX or Adobe required.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.aspect_adapter import (
+from adobe_mcp.apps.illustrator.ui.aspect_adapter import (
     adapt_panel,
     batch_adapt,
 )

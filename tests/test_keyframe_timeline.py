@@ -8,11 +8,11 @@ import json
 
 import pytest
 
-from adobe_mcp.apps.illustrator.keyframe_timeline import (
+from adobe_mcp.apps.illustrator.animation.keyframe_timeline import (
     _ensure_timeline,
     _timing_info,
 )
-from adobe_mcp.apps.illustrator.rig_data import _load_rig, _save_rig
+from adobe_mcp.apps.illustrator.rigging.rig_data import _load_rig, _save_rig
 
 
 # ---------------------------------------------------------------------------

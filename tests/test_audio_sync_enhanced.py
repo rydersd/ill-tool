@@ -13,7 +13,7 @@ import wave
 import numpy as np
 import pytest
 
-from adobe_mcp.apps.illustrator.audio_sync_enhanced import (
+from adobe_mcp.apps.illustrator.production.audio_sync_enhanced import (
     compute_rms_envelope,
     rms_to_db,
     detect_silence_gaps,
@@ -90,7 +90,7 @@ def test_rms_envelope_shape():
 
 def test_detect_silence_in_synthetic_audio(tone_silence_wav):
     """Detects silence gaps in a synthetic tone+silence WAV file."""
-    from adobe_mcp.apps.illustrator.audio_sync_enhanced import read_wav_data
+    from adobe_mcp.apps.illustrator.production.audio_sync_enhanced import read_wav_data
 
     wav = read_wav_data(tone_silence_wav)
     rms, win_s = compute_rms_envelope(wav["samples"], wav["sample_rate"], window_ms=20)
@@ -107,7 +107,7 @@ def test_detect_silence_in_synthetic_audio(tone_silence_wav):
 
 def test_detect_speech_segments(tone_silence_wav):
     """Detects speech/tone segments between silence gaps."""
-    from adobe_mcp.apps.illustrator.audio_sync_enhanced import read_wav_data
+    from adobe_mcp.apps.illustrator.production.audio_sync_enhanced import read_wav_data
 
     wav = read_wav_data(tone_silence_wav)
     rms, win_s = compute_rms_envelope(wav["samples"], wav["sample_rate"], window_ms=20)

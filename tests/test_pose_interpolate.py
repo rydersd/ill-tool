@@ -6,7 +6,7 @@ without Illustrator interaction.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.pose_interpolate import (
+from adobe_mcp.apps.illustrator.animation.pose_interpolate import (
     _lerp,
     _interpolate_joints,
     _interpolate_path_states,

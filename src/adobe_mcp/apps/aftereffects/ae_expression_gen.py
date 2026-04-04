@@ -16,7 +16,7 @@ from adobe_mcp.engine import _async_run_jsx
 from adobe_mcp.jsx.templates import escape_jsx_string
 from adobe_mcp.apps.aftereffects._helpers import ae_comp_selector
 from adobe_mcp.apps.aftereffects.models import AeExpressionGenInput
-from adobe_mcp.apps.illustrator.rig_data import _load_rig
+from adobe_mcp.apps.illustrator.rigging.rig_data import _load_rig
 
 
 # Expression templates for each type of procedural animation.

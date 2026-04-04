@@ -12,13 +12,13 @@ import cv2
 import numpy as np
 import pytest
 
-from adobe_mcp.apps.illustrator.constraint_solver import (
+from adobe_mcp.apps.illustrator.rigging.constraint_solver import (
     extract_silhouette_edges,
     resolve_edge_constraint,
     resolve_shape_constraint,
     snap_to_vanishing_point,
 )
-from adobe_mcp.apps.illustrator.landmark_axis import compute_transform, pixel_to_ai
+from adobe_mcp.apps.illustrator.analysis.landmark_axis import compute_transform, pixel_to_ai
 
 
 # ---------------------------------------------------------------------------

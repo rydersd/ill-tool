@@ -6,7 +6,7 @@ and elongated bridges as slides.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.joint_geometry import (
+from adobe_mcp.apps.illustrator.rigging.joint_geometry import (
     infer_joint_type,
     infer_rotation_range,
 )

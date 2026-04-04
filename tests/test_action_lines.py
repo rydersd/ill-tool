@@ -8,7 +8,7 @@ import math
 
 import pytest
 
-from adobe_mcp.apps.illustrator.action_lines import (
+from adobe_mcp.apps.illustrator.ui.action_lines import (
     generate_action_lines,
     generate_impact_lines,
 )

@@ -9,7 +9,7 @@ import math
 
 import pytest
 
-from adobe_mcp.apps.illustrator.camera_3d import (
+from adobe_mcp.apps.illustrator.threed.camera_3d import (
     focal_length_to_fov,
     fov_to_frame_width,
     suggest_camera,

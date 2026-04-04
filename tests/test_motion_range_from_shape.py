@@ -7,7 +7,7 @@ All tests are pure Python — no JSX or Adobe required.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.motion_range_from_shape import (
+from adobe_mcp.apps.illustrator.animation.motion_range_from_shape import (
     estimate_range,
     _overlap_fraction,
     _gap_distance,

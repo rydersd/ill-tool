@@ -6,7 +6,7 @@ scaling, and proportion-maintaining matching to target parts.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.template_scaling import (
+from adobe_mcp.apps.illustrator.utility.template_scaling import (
     scale_template,
     maintain_proportions,
     adjust_constraints,

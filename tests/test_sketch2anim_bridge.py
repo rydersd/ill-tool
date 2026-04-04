@@ -6,7 +6,7 @@ all pure Python, no Adobe or ML service required.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.sketch2anim_bridge import (
+from adobe_mcp.apps.illustrator.utility.sketch2anim_bridge import (
     parse_storyboard_for_animation,
     validate_animation_output,
     REQUIRED_ANIMATION_FIELDS,

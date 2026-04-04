@@ -7,7 +7,7 @@ All tests are pure Python — no JSX or Adobe required.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.transition_validator import (
+from adobe_mcp.apps.illustrator.ui.transition_validator import (
     validate_transition,
     validate_sequence,
 )

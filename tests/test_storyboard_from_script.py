@@ -7,7 +7,7 @@ All tests are pure Python -- no JSX or Adobe required.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.storyboard_from_script import (
+from adobe_mcp.apps.illustrator.storyboard.storyboard_from_script import (
     parse_script,
     generate_panel_specs,
     count_panels,

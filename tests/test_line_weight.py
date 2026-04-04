@@ -7,7 +7,7 @@ import math
 
 import pytest
 
-from adobe_mcp.apps.illustrator.line_weight import (
+from adobe_mcp.apps.illustrator.drawing.line_weight import (
     compute_segment_normal,
     compute_line_weights,
     LIGHT_VECTORS,

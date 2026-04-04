@@ -8,7 +8,7 @@ import math
 
 import pytest
 
-from adobe_mcp.apps.illustrator.pose_preview_3d import (
+from adobe_mcp.apps.illustrator.threed.pose_preview_3d import (
     joint_angles_to_bone_transforms,
     compose_transforms,
     _identity_4x4,

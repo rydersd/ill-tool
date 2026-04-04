@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 import pytest
 
-from adobe_mcp.apps.illustrator.color_sampler import (
+from adobe_mcp.apps.illustrator.core.color_sampler import (
     _sample_at_position,
     _generate_grid_positions,
 )

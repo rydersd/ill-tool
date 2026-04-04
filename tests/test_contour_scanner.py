@@ -12,7 +12,7 @@ import cv2
 import numpy as np
 import pytest
 
-from adobe_mcp.apps.illustrator.contour_scanner import (
+from adobe_mcp.apps.illustrator.drawing.contour_scanner import (
     _load_grayscale,
     _pixel_in_bounds,
     _compute_gradient_magnitude,
@@ -25,7 +25,7 @@ from adobe_mcp.apps.illustrator.contour_scanner import (
     pixels_to_ai_coords,
     scan_feature,
 )
-from adobe_mcp.apps.illustrator.landmark_axis import compute_transform
+from adobe_mcp.apps.illustrator.analysis.landmark_axis import compute_transform
 
 
 # ---------------------------------------------------------------------------

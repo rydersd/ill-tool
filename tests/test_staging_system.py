@@ -6,7 +6,7 @@ character position calculations. All tests are pure Python.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.staging_system import (
+from adobe_mcp.apps.illustrator.storyboard.staging_system import (
     suggest_staging,
     STAGING_FUNCTIONS,
     VALID_SCENE_TYPES,

@@ -10,7 +10,7 @@ import time
 
 import pytest
 
-from adobe_mcp.apps.illustrator.revision_tracker import (
+from adobe_mcp.apps.illustrator.production.revision_tracker import (
     _load_metadata,
     _save_metadata,
     _next_version,
@@ -28,7 +28,7 @@ def tmp_revisions(tmp_path, monkeypatch):
     rev_dir.mkdir()
 
     monkeypatch.setattr(
-        "adobe_mcp.apps.illustrator.revision_tracker.REVISIONS_BASE",
+        "adobe_mcp.apps.illustrator.production.revision_tracker.REVISIONS_BASE",
         str(rev_dir),
     )
     return rev_dir

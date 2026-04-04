@@ -5,7 +5,7 @@ Tests tag-based search, empty results, and multi-criteria filtering.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.template_library_search import (
+from adobe_mcp.apps.illustrator.utility.template_library_search import (
     search_templates,
     tag_template,
 )

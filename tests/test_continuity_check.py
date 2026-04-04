@@ -11,7 +11,7 @@ import json
 
 import pytest
 
-from adobe_mcp.apps.illustrator.continuity_check import (
+from adobe_mcp.apps.illustrator.production.continuity_check import (
     _compare_colors,
     _compare_proportions,
     _check_costume_elements,

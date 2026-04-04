@@ -6,7 +6,7 @@ and symmetry scoring.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.cv_confidence import (
+from adobe_mcp.apps.illustrator.analysis.cv_confidence import (
     score_segmentation,
     score_connection,
     score_symmetry,

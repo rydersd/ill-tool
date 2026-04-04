@@ -6,7 +6,7 @@ All tests are pure Python -- no JSX or Adobe required.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.part_questioner import (
+from adobe_mcp.apps.illustrator.rigging.part_questioner import (
     generate_questions,
     apply_answers,
 )

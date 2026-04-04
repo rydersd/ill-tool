@@ -6,7 +6,7 @@ quadruped-like, and vehicle-like part configurations.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.object_classifier import classify_object
+from adobe_mcp.apps.illustrator.analysis.object_classifier import classify_object
 
 
 # ---------------------------------------------------------------------------

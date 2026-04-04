@@ -7,7 +7,7 @@ all pure Python, no Adobe or ML required.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.one_click_character import (
+from adobe_mcp.apps.illustrator.character.one_click_character import (
     plan_pipeline,
     pipeline_report,
     compute_resume_plan,

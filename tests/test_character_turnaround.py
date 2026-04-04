@@ -6,7 +6,7 @@ All tests are pure Python — no JSX or Adobe required.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.character_turnaround import (
+from adobe_mcp.apps.illustrator.character.character_turnaround import (
     VIEW_TRANSFORMS,
     _get_view_transform,
     _parse_views,

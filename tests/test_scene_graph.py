@@ -6,7 +6,7 @@ detecting circular conflicts.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.scene_graph import (
+from adobe_mcp.apps.illustrator.storyboard.scene_graph import (
     add_relationship,
     get_relationships,
     validate_scene,

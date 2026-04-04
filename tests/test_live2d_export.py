@@ -6,7 +6,7 @@ All tests are pure Python — no Live2D SDK required.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.live2d_export import (
+from adobe_mcp.apps.illustrator.export_formats.live2d_export import (
     LIVE2D_CONVENTIONS,
     rig_to_live2d_layers,
     validate_live2d_structure,

@@ -5,7 +5,7 @@ Tests pure Python expression preset lookup and delta application.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.character_expression import (
+from adobe_mcp.apps.illustrator.character.character_expression import (
     get_expression_deltas,
     apply_expression_deltas,
     EXPRESSION_PRESETS,

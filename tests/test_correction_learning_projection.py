@@ -9,7 +9,7 @@ import os
 
 import pytest
 
-from adobe_mcp.apps.illustrator.correction_learning import (
+from adobe_mcp.apps.illustrator.analysis.correction_learning import (
     store_projection_delta,
     pre_correct_projection,
     _load_projection_corrections,
@@ -340,7 +340,7 @@ class TestPreCorrectProjection:
         proj_path = str(tmp_path / "proj.json")
         dwpose_dir = str(tmp_path / "dwpose")
         monkeypatch.setattr(
-            "adobe_mcp.apps.illustrator.correction_learning._DWPOSE_CORRECTIONS_DIR",
+            "adobe_mcp.apps.illustrator.analysis.correction_learning._DWPOSE_CORRECTIONS_DIR",
             dwpose_dir,
         )
 
@@ -358,7 +358,7 @@ class TestPreCorrectProjection:
         )
 
         # Store a DWPose correction
-        from adobe_mcp.apps.illustrator.correction_learning import store_correction
+        from adobe_mcp.apps.illustrator.analysis.correction_learning import store_correction
         store_correction(
             character_name="test_char",
             joint_name="shoulder",
@@ -372,7 +372,7 @@ class TestPreCorrectProjection:
         assert len(proj_data) == 1
         assert proj_data[0]["correction_type"] == "projection_delta"
 
-        from adobe_mcp.apps.illustrator.correction_learning import _load_dwpose_corrections
+        from adobe_mcp.apps.illustrator.analysis.correction_learning import _load_dwpose_corrections
         dwpose_data = _load_dwpose_corrections("test_char")
         assert len(dwpose_data) == 1
         assert "joint_name" in dwpose_data[0]

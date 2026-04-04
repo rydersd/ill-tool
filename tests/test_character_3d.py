@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 import pytest
 
-from adobe_mcp.apps.illustrator.character_3d import (
+from adobe_mcp.apps.illustrator.character.character_3d import (
     ML_AVAILABLE,
     TRIMESH_AVAILABLE,
     VALID_COMPONENTS,
@@ -117,7 +117,7 @@ def test_merge_or_split_meshes():
 
 def test_graceful_fallback():
     """_decompose without ML deps returns error with install instructions."""
-    with patch("adobe_mcp.apps.illustrator.character_3d.ML_AVAILABLE", False):
+    with patch("adobe_mcp.apps.illustrator.character.character_3d.ML_AVAILABLE", False):
         result = _decompose("/tmp/test.png", None, ["body", "clothes", "hair"])
 
     assert "error" in result

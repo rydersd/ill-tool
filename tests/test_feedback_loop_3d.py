@@ -13,14 +13,14 @@ import cv2
 import numpy as np
 import pytest
 
-from adobe_mcp.apps.illustrator.feedback_loop_3d import (
+from adobe_mcp.apps.illustrator.threed.feedback_loop_3d import (
     FeedbackLoop3D,
     _compute_displacements,
     _compute_image_hash,
     _extract_reference_contours,
     _match_by_centroid,
 )
-from adobe_mcp.apps.illustrator.correction_learning import (
+from adobe_mcp.apps.illustrator.analysis.correction_learning import (
     _load_projection_corrections,
 )
 
@@ -443,7 +443,7 @@ class TestPreCorrection:
 
         # Manually store deltas to ensure something is stored
         # (in case the contour normalization produces no significant delta)
-        from adobe_mcp.apps.illustrator.correction_learning import store_projection_delta
+        from adobe_mcp.apps.illustrator.analysis.correction_learning import store_projection_delta
         store_projection_delta(
             face_group_label="front_face",
             projected_contour=[[10, 20], [30, 40]],
@@ -506,7 +506,7 @@ class TestClearDeltas:
         delta_path = test_env["delta_path"]
 
         # Manually store deltas to guarantee a file exists
-        from adobe_mcp.apps.illustrator.correction_learning import store_projection_delta
+        from adobe_mcp.apps.illustrator.analysis.correction_learning import store_projection_delta
         store_projection_delta(
             face_group_label="front_face",
             projected_contour=[[10, 20]],

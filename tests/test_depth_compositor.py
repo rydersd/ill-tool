@@ -6,7 +6,7 @@ All tests are pure Python — no 3D deps required.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.depth_compositor import (
+from adobe_mcp.apps.illustrator.threed.depth_compositor import (
     assign_z_index,
     sort_by_depth,
 )

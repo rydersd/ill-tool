@@ -8,8 +8,8 @@ import json
 
 import pytest
 
-from adobe_mcp.apps.illustrator.rig_data import _load_rig, _save_rig
-from adobe_mcp.apps.illustrator.beat_sheet import (
+from adobe_mcp.apps.illustrator.rigging.rig_data import _load_rig, _save_rig
+from adobe_mcp.apps.illustrator.storyboard.beat_sheet import (
     STANDARD_BEATS,
     _auto_distribute,
     _ensure_beat_sheet,

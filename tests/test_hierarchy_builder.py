@@ -7,7 +7,7 @@ All tests are pure Python -- no JSX or Adobe required.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.hierarchy_builder import (
+from adobe_mcp.apps.illustrator.rigging.hierarchy_builder import (
     build_hierarchy,
     hierarchy_to_dict,
     hierarchy_to_flat,

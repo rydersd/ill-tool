@@ -9,7 +9,7 @@ import os
 
 import pytest
 
-from adobe_mcp.apps.illustrator.smart_dispatcher import (
+from adobe_mcp.apps.illustrator.pipeline.smart_dispatcher import (
     suggest,
     log_use,
     get_stats,
@@ -35,10 +35,10 @@ def isolated_storage(tmp_path, monkeypatch):
     storage_file = os.path.join(storage_dir, "tool_usage.json")
 
     monkeypatch.setattr(
-        "adobe_mcp.apps.illustrator.smart_dispatcher.STORAGE_DIR", storage_dir
+        "adobe_mcp.apps.illustrator.pipeline.smart_dispatcher.STORAGE_DIR", storage_dir
     )
     monkeypatch.setattr(
-        "adobe_mcp.apps.illustrator.smart_dispatcher.STORAGE_FILE", storage_file
+        "adobe_mcp.apps.illustrator.pipeline.smart_dispatcher.STORAGE_FILE", storage_file
     )
     return storage_file
 
@@ -216,7 +216,7 @@ def test_learn_pattern(isolated_storage):
 
     # Now suggest should include the pattern continuation
     # We need to patch storage so suggest reads the same file
-    import adobe_mcp.apps.illustrator.smart_dispatcher as sd
+    import adobe_mcp.apps.illustrator.pipeline.smart_dispatcher as sd
     original_load = sd._load_storage
 
     def _patched_load(path=None):

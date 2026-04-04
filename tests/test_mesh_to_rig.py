@@ -9,7 +9,7 @@ import math
 
 import pytest
 
-from adobe_mcp.apps.illustrator.mesh_to_rig import (
+from adobe_mcp.apps.illustrator.threed.mesh_to_rig import (
     find_nearest_vertex,
     project_3d_to_2d,
 )

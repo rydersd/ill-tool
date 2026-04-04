@@ -6,7 +6,7 @@ partial labeling shifts priority, and fully labeled produces no questions.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.active_learning import (
+from adobe_mcp.apps.illustrator.analysis.active_learning import (
     compute_information_gain,
     prioritize_questions,
     estimate_remaining_uncertainty,

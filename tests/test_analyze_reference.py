@@ -9,7 +9,7 @@ import json
 import numpy as np
 import pytest
 
-from adobe_mcp.apps.illustrator.analyze_reference import (
+from adobe_mcp.apps.illustrator.ml_vision.analyze_reference import (
     _classify_shape,
     _edge_lengths,
     _edge_ratios,

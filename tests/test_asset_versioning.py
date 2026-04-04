@@ -7,7 +7,7 @@ import copy
 
 import pytest
 
-from adobe_mcp.apps.illustrator.asset_versioning import (
+from adobe_mcp.apps.illustrator.production.asset_versioning import (
     bump_version,
     get_version_history,
     rollback,

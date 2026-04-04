@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 import pytest
 
-from adobe_mcp.apps.illustrator.diffvg_correct import (
+from adobe_mcp.apps.illustrator.ml_vision.diffvg_correct import (
     TORCH_AVAILABLE,
     DIFFVG_AVAILABLE,
     _ml_status,
@@ -84,8 +84,8 @@ def test_status_reports_torch_and_diffvg_separately():
 
 def test_status_without_torch():
     """When torch is unavailable, status reports correct hints."""
-    with patch("adobe_mcp.apps.illustrator.diffvg_correct.TORCH_AVAILABLE", False), \
-         patch("adobe_mcp.apps.illustrator.diffvg_correct.DIFFVG_AVAILABLE", False):
+    with patch("adobe_mcp.apps.illustrator.ml_vision.diffvg_correct.TORCH_AVAILABLE", False), \
+         patch("adobe_mcp.apps.illustrator.ml_vision.diffvg_correct.DIFFVG_AVAILABLE", False):
         status = _ml_status()
 
     assert status["torch_available"] is False
@@ -97,8 +97,8 @@ def test_status_without_torch():
 
 def test_status_torch_without_diffvg():
     """When torch available but diffvg not, status shows partial availability."""
-    with patch("adobe_mcp.apps.illustrator.diffvg_correct.TORCH_AVAILABLE", True), \
-         patch("adobe_mcp.apps.illustrator.diffvg_correct.DIFFVG_AVAILABLE", False):
+    with patch("adobe_mcp.apps.illustrator.ml_vision.diffvg_correct.TORCH_AVAILABLE", True), \
+         patch("adobe_mcp.apps.illustrator.ml_vision.diffvg_correct.DIFFVG_AVAILABLE", False):
         # Need to mock torch module attributes for the status function
         import types
         mock_torch = types.ModuleType("torch")
@@ -107,7 +107,7 @@ def test_status_torch_without_diffvg():
         mock_torch.backends = types.SimpleNamespace(
             mps=types.SimpleNamespace(is_available=lambda: False)
         )
-        with patch("adobe_mcp.apps.illustrator.diffvg_correct.torch", mock_torch):
+        with patch("adobe_mcp.apps.illustrator.ml_vision.diffvg_correct.torch", mock_torch):
             status = _ml_status()
 
     assert status["torch_available"] is True
@@ -124,8 +124,8 @@ def test_status_torch_without_diffvg():
 
 def test_graceful_fallback_no_ml():
     """_optimize_paths without any ML deps returns error with install instructions."""
-    with patch("adobe_mcp.apps.illustrator.diffvg_correct.TORCH_AVAILABLE", False), \
-         patch("adobe_mcp.apps.illustrator.diffvg_correct.DIFFVG_AVAILABLE", False):
+    with patch("adobe_mcp.apps.illustrator.ml_vision.diffvg_correct.TORCH_AVAILABLE", False), \
+         patch("adobe_mcp.apps.illustrator.ml_vision.diffvg_correct.DIFFVG_AVAILABLE", False):
         # Create a temporary SVG and target file so file-not-found doesn't trigger
         with tempfile.NamedTemporaryFile(suffix=".svg", delete=False, mode="w") as f:
             f.write('<svg><path d="M 0 0 L 10 10"/></svg>')
@@ -233,7 +233,7 @@ def test_diffvg_optimize_roundtrip():
 
     Only runs when diffvg is actually installed.
     """
-    from adobe_mcp.apps.illustrator.diffvg_correct import optimize_paths_diffvg
+    from adobe_mcp.apps.illustrator.ml_vision.diffvg_correct import optimize_paths_diffvg
 
     # Create a simple SVG with one path
     svg_content = '''<?xml version="1.0"?>
@@ -276,7 +276,7 @@ def test_diffvg_loss_decreases():
 
     Only runs when diffvg is actually installed.
     """
-    from adobe_mcp.apps.illustrator.diffvg_correct import optimize_paths_diffvg
+    from adobe_mcp.apps.illustrator.ml_vision.diffvg_correct import optimize_paths_diffvg
 
     svg_content = '''<?xml version="1.0"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">

@@ -7,7 +7,7 @@ All tests are pure Python — no Rive runtime required.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.rive_export import (
+from adobe_mcp.apps.illustrator.export_formats.rive_export import (
     convert_css_to_presentation,
     strip_unsupported_rive,
     validate_rive_svg,

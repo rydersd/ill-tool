@@ -8,12 +8,12 @@ import json
 
 import pytest
 
-from adobe_mcp.apps.illustrator.director_markup import (
+from adobe_mcp.apps.illustrator.production.director_markup import (
     _ensure_markup,
     _get_panel_markup,
     _set_panel_markup,
 )
-from adobe_mcp.apps.illustrator.rig_data import _load_rig, _save_rig
+from adobe_mcp.apps.illustrator.rigging.rig_data import _load_rig, _save_rig
 
 
 # ---------------------------------------------------------------------------

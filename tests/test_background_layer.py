@@ -8,8 +8,8 @@ import json
 
 import pytest
 
-from adobe_mcp.apps.illustrator.rig_data import _load_rig, _save_rig
-from adobe_mcp.apps.illustrator.background_layer import (
+from adobe_mcp.apps.illustrator.rigging.rig_data import _load_rig, _save_rig
+from adobe_mcp.apps.illustrator.ui.background_layer import (
     _ensure_backgrounds,
     _validate_color,
 )

@@ -6,7 +6,7 @@ clear logic. All tests are pure Python -- no JSX or Adobe required.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.visual_debugger import (
+from adobe_mcp.apps.illustrator.utility.visual_debugger import (
     generate_debug_overlay,
     clear_debug,
 )

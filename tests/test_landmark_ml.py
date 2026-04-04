@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-from adobe_mcp.apps.illustrator.landmark_ml import (
+from adobe_mcp.apps.illustrator.ml_vision.landmark_ml import (
     ML_AVAILABLE,
     LANDMARK_NAMES,
     SDPOSE_TO_LANDMARK,
@@ -94,7 +94,7 @@ def test_map_sdpose_to_landmarks():
 
 def test_graceful_fallback():
     """_detect_landmarks without ML deps returns error with install instructions."""
-    with patch("adobe_mcp.apps.illustrator.landmark_ml.ML_AVAILABLE", False):
+    with patch("adobe_mcp.apps.illustrator.ml_vision.landmark_ml.ML_AVAILABLE", False):
         result = _detect_landmarks("/tmp/test.png", 0.3)
 
     assert "error" in result
@@ -111,7 +111,7 @@ def test_graceful_fallback():
 def test_input_validation():
     """_detect_landmarks with nonexistent image returns error."""
     # Force ML_AVAILABLE=True so we hit the file-check path
-    with patch("adobe_mcp.apps.illustrator.landmark_ml.ML_AVAILABLE", True):
+    with patch("adobe_mcp.apps.illustrator.ml_vision.landmark_ml.ML_AVAILABLE", True):
         result = _detect_landmarks("/nonexistent/path/fake.png", 0.3)
 
     assert "error" in result

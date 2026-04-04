@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 import pytest
 
-from adobe_mcp.apps.illustrator.contour_labeler import (
+from adobe_mcp.apps.illustrator.drawing.contour_labeler import (
     extract_labeled_contours,
     classify_contour,
     connect_contours_to_shape,

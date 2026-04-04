@@ -6,7 +6,7 @@ and HTML output — all pure Python, no Adobe required.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.project_dashboard_3d import (
+from adobe_mcp.apps.illustrator.production.project_dashboard_3d import (
     collect_3d_status,
     collect_pipeline_status,
     generate_dashboard_html,

@@ -7,7 +7,7 @@ All tests are pure Python — no JSX or Adobe required.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.ik_chain_auto import (
+from adobe_mcp.apps.illustrator.rigging.ik_chain_auto import (
     detect_ik_chains,
     label_chains,
     _has_cycle,

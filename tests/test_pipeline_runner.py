@@ -10,7 +10,7 @@ import os
 
 import pytest
 
-from adobe_mcp.apps.illustrator.pipeline_runner import (
+from adobe_mcp.apps.illustrator.pipeline.pipeline_runner import (
     define_pipeline,
     run_pipeline,
     list_pipelines,

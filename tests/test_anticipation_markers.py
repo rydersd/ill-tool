@@ -6,7 +6,7 @@ All tests are pure Python — no JSX or Adobe required.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.anticipation_markers import (
+from adobe_mcp.apps.illustrator.animation.anticipation_markers import (
     assign_timing_offsets,
 )
 

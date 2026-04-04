@@ -6,7 +6,7 @@ merging two templates, deriving templates, and name collision handling.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.template_inheritance import (
+from adobe_mcp.apps.illustrator.utility.template_inheritance import (
     add_parts,
     remove_parts,
     merge_templates,

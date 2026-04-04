@@ -9,7 +9,7 @@ import json
 
 import pytest
 
-from adobe_mcp.apps.illustrator.lottie_workflow import (
+from adobe_mcp.apps.illustrator.export_formats.lottie_workflow import (
     check_bodymovin_compatibility,
     generate_bodymovin_settings,
     optimize_lottie,

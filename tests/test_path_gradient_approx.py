@@ -8,7 +8,7 @@ import numpy as np
 import cv2
 import pytest
 
-from adobe_mcp.apps.illustrator.path_gradient_approx import (
+from adobe_mcp.apps.illustrator.ml_vision.path_gradient_approx import (
     rasterize_contours,
     compute_loss,
     estimate_gradient,

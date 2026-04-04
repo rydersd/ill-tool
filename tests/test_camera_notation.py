@@ -8,14 +8,14 @@ import json
 
 import pytest
 
-from adobe_mcp.apps.illustrator.camera_notation import (
+from adobe_mcp.apps.illustrator.ui.camera_notation import (
     INTENSITY_SCALE,
     _get_intensity_scale,
     _ensure_camera_notations,
     _movement_label,
     _arrow_direction,
 )
-from adobe_mcp.apps.illustrator.rig_data import _load_rig, _save_rig
+from adobe_mcp.apps.illustrator.rigging.rig_data import _load_rig, _save_rig
 
 
 # ---------------------------------------------------------------------------

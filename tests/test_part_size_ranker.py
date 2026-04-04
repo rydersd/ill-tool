@@ -6,7 +6,7 @@ areas, size ratio calculations, and hierarchy role suggestions.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.part_size_ranker import (
+from adobe_mcp.apps.illustrator.utility.part_size_ranker import (
     rank_parts,
     compute_size_ratios,
     suggest_hierarchy_roles,

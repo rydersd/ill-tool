@@ -8,7 +8,7 @@ import os
 
 import pytest
 
-from adobe_mcp.apps.illustrator.drawing_spinup_bridge import (
+from adobe_mcp.apps.illustrator.pipeline.drawing_spinup_bridge import (
     validate_drawing_input,
     map_spinup_output,
     SUPPORTED_EXTENSIONS,

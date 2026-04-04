@@ -8,7 +8,7 @@ import math
 
 import pytest
 
-from adobe_mcp.apps.illustrator.scene_composition import (
+from adobe_mcp.apps.illustrator.storyboard.scene_composition import (
     compute_thirds,
     compute_golden_ratio_points,
     compute_depth_zones,

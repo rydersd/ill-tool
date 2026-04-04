@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import pytest
 
-from adobe_mcp.apps.illustrator.vectorize_ml import (
+from adobe_mcp.apps.illustrator.ml_vision.vectorize_ml import (
     ML_AVAILABLE,
     _ml_status,
     _check_model,
@@ -62,7 +62,7 @@ def test_graceful_fallback():
     We force ML_AVAILABLE=False to test the fallback path even if torch
     happens to be installed in the test environment.
     """
-    with patch("adobe_mcp.apps.illustrator.vectorize_ml.ML_AVAILABLE", False):
+    with patch("adobe_mcp.apps.illustrator.ml_vision.vectorize_ml.ML_AVAILABLE", False):
         result = _vectorize_image("/tmp/test.png", "starvector/starvector-1b-im2svg", 4096)
 
     assert "error" in result
@@ -84,7 +84,7 @@ def test_input_validation_missing_image():
     # Only test when ML is available — otherwise the ML_AVAILABLE check fires first
     if not ML_AVAILABLE:
         # Force ML_AVAILABLE=True to test the file-check path
-        with patch("adobe_mcp.apps.illustrator.vectorize_ml.ML_AVAILABLE", True):
+        with patch("adobe_mcp.apps.illustrator.ml_vision.vectorize_ml.ML_AVAILABLE", True):
             result = _vectorize_image(
                 "/nonexistent/path/fake.png",
                 "starvector/starvector-1b-im2svg",
@@ -104,7 +104,7 @@ def test_input_validation_missing_image():
 def test_input_validation_none_image():
     """_vectorize_image with None image_path returns an error."""
     if not ML_AVAILABLE:
-        with patch("adobe_mcp.apps.illustrator.vectorize_ml.ML_AVAILABLE", True):
+        with patch("adobe_mcp.apps.illustrator.ml_vision.vectorize_ml.ML_AVAILABLE", True):
             result = _vectorize_image(None, "starvector/starvector-1b-im2svg", 4096)
     else:
         result = _vectorize_image(None, "starvector/starvector-1b-im2svg", 4096)
@@ -114,7 +114,7 @@ def test_input_validation_none_image():
 
 def test_check_model_without_ml():
     """_check_model without ML returns helpful error."""
-    with patch("adobe_mcp.apps.illustrator.vectorize_ml.ML_AVAILABLE", False):
+    with patch("adobe_mcp.apps.illustrator.ml_vision.vectorize_ml.ML_AVAILABLE", False):
         result = _check_model("starvector/starvector-1b-im2svg")
 
     assert result["available"] is False

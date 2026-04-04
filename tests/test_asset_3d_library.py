@@ -9,7 +9,7 @@ import os
 
 import pytest
 
-from adobe_mcp.apps.illustrator.asset_3d_library import (
+from adobe_mcp.apps.illustrator.threed.asset_3d_library import (
     save_asset_metadata,
     load_asset_metadata,
     search_assets,

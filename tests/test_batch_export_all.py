@@ -10,7 +10,7 @@ import os
 
 import pytest
 
-from adobe_mcp.apps.illustrator.batch_export_all import (
+from adobe_mcp.apps.illustrator.production.batch_export_all import (
     export_all,
     export_manifest,
     ALL_FORMATS,

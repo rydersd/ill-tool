@@ -5,7 +5,7 @@ Tests pure Python compute_grid_layout function.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.thumbnail_grid import compute_grid_layout
+from adobe_mcp.apps.illustrator.ui.thumbnail_grid import compute_grid_layout
 
 
 # ---------------------------------------------------------------------------

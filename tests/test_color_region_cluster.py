@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 import pytest
 
-from adobe_mcp.apps.illustrator.color_region_cluster import (
+from adobe_mcp.apps.illustrator.analysis.color_region_cluster import (
     cluster_colors,
     merge_similar_clusters,
 )

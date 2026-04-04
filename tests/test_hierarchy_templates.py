@@ -9,7 +9,7 @@ import json
 
 import pytest
 
-from adobe_mcp.apps.illustrator.hierarchy_templates import (
+from adobe_mcp.apps.illustrator.rigging.hierarchy_templates import (
     save_template,
     load_template,
     list_templates,

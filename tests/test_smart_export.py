@@ -10,7 +10,7 @@ import os
 
 import pytest
 
-from adobe_mcp.apps.illustrator.smart_export import (
+from adobe_mcp.apps.illustrator.export_formats.smart_export import (
     prepare_ae_export,
     export_manifest,
 )

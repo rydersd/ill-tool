@@ -8,7 +8,7 @@ import math
 
 import pytest
 
-from adobe_mcp.apps.illustrator.gesture_line import compute_gesture_handles
+from adobe_mcp.apps.illustrator.drawing.gesture_line import compute_gesture_handles
 
 
 # ---------------------------------------------------------------------------

@@ -9,14 +9,14 @@ import json
 
 import pytest
 
-from adobe_mcp.apps.illustrator.asset_registry import (
+from adobe_mcp.apps.illustrator.production.asset_registry import (
     _ensure_assets,
     _find_asset,
     _get_assets_for_panel,
     _get_panels_for_asset,
     _build_summary,
 )
-from adobe_mcp.apps.illustrator.rig_data import _load_rig, _save_rig
+from adobe_mcp.apps.illustrator.rigging.rig_data import _load_rig, _save_rig
 
 
 # ---------------------------------------------------------------------------

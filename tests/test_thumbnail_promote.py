@@ -6,7 +6,7 @@ All tests are pure Python — no JSX or Adobe required.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.thumbnail_promote import (
+from adobe_mcp.apps.illustrator.ui.thumbnail_promote import (
     calculate_scale_factor,
     scale_landmarks,
 )

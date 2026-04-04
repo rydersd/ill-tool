@@ -8,7 +8,7 @@ import xml.etree.ElementTree as ET
 
 import pytest
 
-from adobe_mcp.apps.illustrator.edl_export import (
+from adobe_mcp.apps.illustrator.export_formats.edl_export import (
     frames_to_timecode,
     generate_edl,
     generate_fcpxml,

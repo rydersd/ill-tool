@@ -10,12 +10,12 @@ import os
 
 import pytest
 
-from adobe_mcp.apps.illustrator.correction_learning import (
+from adobe_mcp.apps.illustrator.analysis.correction_learning import (
     record_correction,
     suggest_from_corrections,
     _load_corrections,
 )
-from adobe_mcp.apps.illustrator import correction_learning
+from adobe_mcp.apps.illustrator.analysis import correction_learning
 
 
 # ---------------------------------------------------------------------------

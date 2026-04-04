@@ -2,7 +2,7 @@
 import json
 import os
 
-from adobe_mcp.apps.illustrator.shape_recipes import (
+from adobe_mcp.apps.illustrator.analysis.shape_recipes import (
     _load_library,
     _save_library,
     _normalize_point,

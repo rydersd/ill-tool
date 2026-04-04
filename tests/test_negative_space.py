@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 import pytest
 
-from adobe_mcp.apps.illustrator.negative_space import analyze_negative_space
+from adobe_mcp.apps.illustrator.drawing.negative_space import analyze_negative_space
 
 
 # ---------------------------------------------------------------------------

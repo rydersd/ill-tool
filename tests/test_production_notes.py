@@ -9,13 +9,13 @@ import json
 
 import pytest
 
-from adobe_mcp.apps.illustrator.production_notes import (
+from adobe_mcp.apps.illustrator.production.production_notes import (
     _ensure_production_notes,
     _filter_by_priority,
     _export_notes,
     _get_panel_notes,
 )
-from adobe_mcp.apps.illustrator.rig_data import _load_rig, _save_rig
+from adobe_mcp.apps.illustrator.rigging.rig_data import _load_rig, _save_rig
 
 
 # ---------------------------------------------------------------------------

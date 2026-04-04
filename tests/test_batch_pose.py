@@ -5,7 +5,7 @@ Tests pure Python t-value computation and verifies interpolation behaviour.
 
 import pytest
 
-from adobe_mcp.apps.illustrator.batch_pose import compute_panel_t_values
+from adobe_mcp.apps.illustrator.animation.batch_pose import compute_panel_t_values
 
 
 # ---------------------------------------------------------------------------
