@@ -234,6 +234,68 @@ def test_learn_pattern(isolated_storage):
         sd._load_storage = original_load
 
 
+# ---------------------------------------------------------------------------
+# test_suggest_form_edge_rules: new form edge context rules
+# ---------------------------------------------------------------------------
+
+
+def test_suggest_wants_form_structure():
+    """Context flag wants_form_structure suggests form edge tools."""
+    result = suggest(json.dumps({"wants_form_structure": True}))
+
+    assert "error" not in result
+    assert "wants_form_structure" in result["matched_rules"]
+
+    expected = CONTEXT_RULES["wants_form_structure"]
+    for tool in expected:
+        assert tool in result["suggestions"]
+
+
+def test_suggest_wants_shadow_free_reference():
+    """Context flag wants_shadow_free_reference suggests normal reference tools."""
+    result = suggest(json.dumps({"wants_shadow_free_reference": True}))
+
+    assert "error" not in result
+    assert "wants_shadow_free_reference" in result["matched_rules"]
+    assert "normal_reference" in result["suggestions"]
+    assert "form_edge_extract" in result["suggestions"]
+
+
+def test_suggest_no_3d_reconstruction():
+    """When 3D reconstruction is unavailable, suggest form edge alternatives."""
+    result = suggest(json.dumps({"no_3d_reconstruction": True}))
+
+    assert "error" not in result
+    assert "no_3d_reconstruction" in result["matched_rules"]
+    assert "form_edge_extract" in result["suggestions"]
+    assert "normal_reference" in result["suggestions"]
+
+
+def test_suggest_form_vs_shadow_analysis():
+    """Requesting form vs shadow analysis suggests the right combination."""
+    result = suggest(json.dumps({"wants_form_vs_shadow_analysis": True}))
+
+    assert "error" not in result
+    assert "wants_form_vs_shadow_analysis" in result["matched_rules"]
+    assert "normal_reference" in result["suggestions"]
+    assert "form_edge_extract" in result["suggestions"]
+    assert "tonal_analyzer" in result["suggestions"]
+
+
+def test_suggest_form_edge_with_reference_image():
+    """Combining form edge flags with reference image produces no duplicates."""
+    result = suggest(json.dumps({
+        "has_reference_image": True,
+        "wants_form_structure": True,
+    }))
+
+    assert "has_reference_image" in result["matched_rules"]
+    assert "wants_form_structure" in result["matched_rules"]
+
+    # No duplicates
+    assert len(result["suggestions"]) == len(set(result["suggestions"]))
+
+
 def test_learn_pattern_invalid_sequence(isolated_storage):
     """Learning with fewer than 2 tools returns an error."""
     result = learn_pattern(

@@ -74,6 +74,26 @@ CONTEXT_RULES: dict[str, list[str]] = {
         "trace_workflow.setup",
         "storyboard_template",
     ],
+    # Form edge pipeline — shadow-free structural analysis tools
+    "wants_form_structure": [
+        "form_edge_extract",
+        "normal_reference",
+        "contour_to_path",
+    ],
+    "wants_shadow_free_reference": [
+        "normal_reference",
+        "form_edge_extract",
+    ],
+    "no_3d_reconstruction": [
+        "form_edge_extract",
+        "normal_reference",
+        "analyze_reference",
+    ],
+    "wants_form_vs_shadow_analysis": [
+        "normal_reference",
+        "form_edge_extract",
+        "tonal_analyzer",
+    ],
 }
 
 

@@ -13,6 +13,7 @@ import json
 import math
 import os
 import tempfile
+from typing import Optional
 
 import cv2
 import numpy as np
@@ -48,11 +49,31 @@ class DrawingOrchestratorInput(BaseModel):
 
     reference_path: str = Field(..., description="Absolute path to the reference image")
     shape_index: int = Field(default=0, description="Index of the shape in the manifest to draw")
-    shape_manifest: str = Field(..., description="Full JSON manifest from analyze_reference")
-    image_size: str = Field(..., description="JSON [width, height] of the source image")
+    shape_manifest: str = Field(default="{}", description="Full JSON manifest from analyze_reference")
+    image_size: str = Field(default="[800,600]", description="JSON [width, height] of the source image")
     layer_name: str = Field(default="Drawing", description="Target layer for the path")
     auto_correct_passes: int = Field(default=2, description="Max correction iterations", ge=0, le=5)
     convergence_target: float = Field(default=0.85, description="Stop when convergence exceeds this", ge=0, le=1)
+    source: str = Field(
+        default="manifest",
+        description=(
+            "Pipeline source: 'manifest' (default) uses shape manifest + auto_correct. "
+            "'3d_pipeline' delegates to FeedbackLoop3D for 3D-to-2D feedback correction. "
+            "'form_edge' extracts form edges (ignoring shadows) and draws them."
+        ),
+    )
+    mesh_path: Optional[str] = Field(
+        default=None,
+        description="OBJ mesh path (required when source='3d_pipeline')",
+    )
+    max_rounds: int = Field(
+        default=5,
+        description="Max feedback loop rounds (only used with source='3d_pipeline')",
+    )
+    damping: float = Field(
+        default=0.3,
+        description="Damping factor for 3D pipeline corrections (0-1)",
+    )
 
 
 def register(mcp):
@@ -75,6 +96,140 @@ def register(mcp):
         until convergence reaches the target or passes are exhausted.
         Returns the final convergence score and shape metadata.
         """
+        # ── 0a. Route to 3D pipeline if source="3d_pipeline" ─────────
+        if params.source == "3d_pipeline":
+            from adobe_mcp.apps.illustrator.feedback_loop_3d import FeedbackLoop3D
+
+            if not params.mesh_path:
+                return json.dumps({"error": "mesh_path is required when source='3d_pipeline'"})
+
+            loop = FeedbackLoop3D()
+            result = loop.run_cycle(
+                reference_path=params.reference_path,
+                mesh_path=params.mesh_path,
+                max_rounds=params.max_rounds,
+                convergence_target=params.convergence_target,
+                damping=params.damping,
+            )
+            return json.dumps(result, indent=2)
+
+        # ── 0b. Route to form edge pipeline if source="form_edge" ─────
+        if params.source == "form_edge":
+            from adobe_mcp.apps.illustrator.form_edge_pipeline import (
+                extract_form_edges,
+                edge_mask_to_contours,
+                contours_to_ai_points,
+            )
+            from adobe_mcp.apps.illustrator.path_validation import (
+                validate_safe_path as _validate_safe,
+                validate_image_path_size as _validate_img_size,
+            )
+
+            if not params.reference_path:
+                return json.dumps({"error": "reference_path is required when source='form_edge'"})
+
+            # Validate the reference image path
+            try:
+                safe_ref = _validate_safe(params.reference_path)
+            except ValueError as exc:
+                return json.dumps({"error": f"Path validation failed: {exc}"})
+
+            try:
+                _validate_img_size(safe_ref)
+            except ValueError as exc:
+                return json.dumps({"error": str(exc)})
+            except Exception:
+                pass  # PIL may not recognize all formats; let cv2 try
+
+            # Extract form edges
+            edge_result = extract_form_edges(safe_ref, backend="auto")
+            if "error" in edge_result:
+                return json.dumps(edge_result, indent=2)
+
+            form_mask = edge_result["form_edges"]
+            contours = edge_mask_to_contours(form_mask)
+            if not contours:
+                return json.dumps({
+                    "error": "No form edge contours found in reference image.",
+                    "backend": edge_result.get("backend"),
+                })
+
+            # Query artboard dimensions
+            jsx_info = """
+(function() {
+    var doc = app.activeDocument;
+    var ab = doc.artboards[doc.artboards.getActiveArtboardIndex()].artboardRect;
+    return JSON.stringify({left: ab[0], top: ab[1], right: ab[2], bottom: ab[3]});
+})();
+"""
+            ab_result = await _async_run_jsx("illustrator", jsx_info)
+            if not ab_result["success"]:
+                return json.dumps({"error": f"Could not query artboard: {ab_result['stderr']}"})
+
+            try:
+                artboard = json.loads(ab_result["stdout"])
+            except (json.JSONDecodeError, TypeError):
+                return json.dumps({"error": f"Bad artboard response: {ab_result['stdout']}"})
+
+            img_h, img_w = form_mask.shape[:2]
+            ai_contours = contours_to_ai_points(
+                contours, (img_w, img_h), artboard
+            )
+
+            # Place paths in Illustrator using the same JSX pattern as form_edge_extract
+            from adobe_mcp.apps.illustrator.form_edge_extract import _build_place_jsx
+            jsx = _build_place_jsx(ai_contours, params.layer_name, smooth=True)
+            place_result = await _async_run_jsx("illustrator", jsx)
+
+            if not place_result["success"]:
+                return json.dumps({
+                    "error": f"Path placement failed: {place_result['stderr']}",
+                    "contour_count": len(ai_contours),
+                })
+
+            try:
+                placed = json.loads(place_result["stdout"])
+            except (json.JSONDecodeError, TypeError):
+                placed = {"paths_placed": len(ai_contours)}
+
+            # Score initial convergence against the reference
+            ref_img = cv2.imread(safe_ref)
+            initial_convergence = 0.0
+            if ref_img is not None:
+                ref_h, ref_w = ref_img.shape[:2]
+                min_area = ref_h * ref_w * 0.005
+
+                tmp_export = tempfile.NamedTemporaryFile(
+                    suffix=".png", prefix="ai_orch_fe_", delete=False
+                ).name
+                try:
+                    export_jsx = _build_export_jsx(tmp_export)
+                    export_result = await _async_run_jsx("illustrator", export_jsx)
+                    if export_result["success"]:
+                        draw_img = cv2.imread(tmp_export)
+                        if draw_img is not None:
+                            draw_img = cv2.resize(draw_img, (ref_w, ref_h))
+                            initial_convergence, _, _, _ = _score_convergence(
+                                ref_img, draw_img, min_area,
+                            )
+                finally:
+                    try:
+                        if os.path.isfile(tmp_export):
+                            os.remove(tmp_export)
+                    except OSError:
+                        pass
+
+            return json.dumps({
+                "source": "form_edge",
+                "backend": edge_result.get("backend", "auto"),
+                "contour_count": len(ai_contours),
+                "paths_placed": placed.get("paths_placed", len(ai_contours)),
+                "layer_name": params.layer_name,
+                "initial_convergence": round(initial_convergence, 3),
+                "image_size": [img_w, img_h],
+                "metadata": edge_result.get("metadata", {}),
+            }, indent=2)
+
         # ── 1. Validate inputs ──────────────────────────────────────────
         if not os.path.isfile(params.reference_path):
             return json.dumps({"error": f"Reference image not found: {params.reference_path}"})
@@ -213,7 +368,7 @@ def register(mcp):
                 created = {"name": shape_name}
 
             # ── 5. Score initial convergence ────────────────────────────
-            tmp_export = tempfile.mktemp(suffix=".png", prefix="ai_orch_")
+            tmp_export = tempfile.NamedTemporaryFile(suffix=".png", prefix="ai_orch_", delete=False).name
             temp_files.append(tmp_export)
 
             export_jsx = _build_export_jsx(tmp_export)
@@ -264,7 +419,7 @@ def register(mcp):
                         break
 
                     # Export current state
-                    tmp_iter = tempfile.mktemp(suffix=".png", prefix="ai_orch_iter_")
+                    tmp_iter = tempfile.NamedTemporaryFile(suffix=".png", prefix="ai_orch_iter_", delete=False).name
                     temp_files.append(tmp_iter)
                     iter_export = _build_export_jsx(tmp_iter)
                     iter_result = await _async_run_jsx("illustrator", iter_export)
@@ -326,7 +481,7 @@ def register(mcp):
                                 total_points_moved += len(corr["points"])
 
                     # Re-score
-                    tmp_rescore = tempfile.mktemp(suffix=".png", prefix="ai_orch_rescore_")
+                    tmp_rescore = tempfile.NamedTemporaryFile(suffix=".png", prefix="ai_orch_rescore_", delete=False).name
                     temp_files.append(tmp_rescore)
                     rescore_jsx = _build_export_jsx(tmp_rescore)
                     rescore_result = await _async_run_jsx("illustrator", rescore_jsx)

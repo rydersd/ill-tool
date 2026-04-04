@@ -13,6 +13,10 @@ from typing import Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 from adobe_mcp.apps.illustrator.rig_data import _load_rig, _save_rig
+from adobe_mcp.apps.illustrator.pixel_deviation_scorer import (
+    score_pixel_deviation,
+    PixelDeviationInput,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -25,7 +29,7 @@ class AiCvConfidenceInput(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
     action: str = Field(
         ...,
-        description="Action: score_segmentation, score_connection, score_symmetry",
+        description="Action: score_segmentation, score_connection, score_symmetry, score_pixel_deviation",
     )
     # For score_segmentation
     parts: Optional[list[dict]] = Field(
@@ -45,6 +49,19 @@ class AiCvConfidenceInput(BaseModel):
     symmetry_result: Optional[dict] = Field(
         default=None,
         description="Symmetry result dict with ssim_score (0-1)",
+    )
+    # For score_pixel_deviation
+    reference_contours: Optional[list[list[list[float]]]] = Field(
+        default=None,
+        description="Reference contours as list of Nx2 arrays ([[x,y], ...])",
+    )
+    test_contours: Optional[list[list[list[float]]]] = Field(
+        default=None,
+        description="Test contours as list of Nx2 arrays ([[x,y], ...])",
+    )
+    reference_scale: Optional[float] = Field(
+        default=None,
+        description="Scale for deviation normalization (image diagonal in px)",
     )
 
 
@@ -258,6 +275,20 @@ def register(mcp):
             result = score_symmetry(params.symmetry_result)
             return json.dumps({"action": "score_symmetry", **result})
 
+        elif action == "score_pixel_deviation":
+            if params.reference_contours is None or params.test_contours is None:
+                return json.dumps({
+                    "error": "score_pixel_deviation requires reference_contours and test_contours"
+                })
+            import numpy as _np
+            ref_arrays = [_np.array(c, dtype=_np.float64) for c in params.reference_contours]
+            test_arrays = [_np.array(c, dtype=_np.float64) for c in params.test_contours]
+            result = score_pixel_deviation(
+                ref_arrays, test_arrays,
+                reference_scale=params.reference_scale,
+            )
+            return json.dumps({"action": "score_pixel_deviation", **result})
+
         else:
             return json.dumps({
                 "error": f"Unknown action: {action}",
@@ -265,5 +296,6 @@ def register(mcp):
                     "score_segmentation",
                     "score_connection",
                     "score_symmetry",
+                    "score_pixel_deviation",
                 ],
             })
