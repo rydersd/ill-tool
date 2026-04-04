@@ -177,11 +177,12 @@
   },
   "active": "918ec29a2b1e930c",
   "lastOpenFiles": [
+    "Untitled.md",
+    "Untitled 1.md",
     "concepts/smart-merge.md",
     "concepts/future-tools.md",
     "concepts/expanded-normal-renderings.md",
     "concepts/adversarial-review-findings.md",
-    "Untitled 1.md",
     "references/spatial-ai-research-2026.md",
     "references/constructive-drawing-methods.md",
     "references/adding-tools-guide.md",
@@ -202,7 +203,6 @@
     "concepts/ml-backends.md",
     "concepts/llm-spatial-reasoning.md",
     "concepts/extendscript-guide.md",
-    "concepts/design-dna.md",
-    "concepts/correction-learning.md"
+    "concepts/design-dna.md"
   ]
 }
