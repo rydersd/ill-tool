@@ -35,9 +35,13 @@ PLUGINS_DIR="$PROJECT_ROOT/plugins"
 # CEP extensions directory (macOS)
 CEP_EXTENSIONS_DIR="$HOME/Library/Application Support/Adobe/CEP/extensions"
 
-# Panels to install
+# MCP relay panels (in plugins/)
 PANELS=("adobe-mcp-ps" "adobe-mcp-ai" "adobe-mcp-ae")
 SHARED_NAME="adobe-mcp-shared"
+
+# Standalone CEP tool panels (in cep/)
+CEP_DIR="$PROJECT_ROOT/cep"
+CEP_PANELS=("com.illtool.shapeaverager" "com.illtool.pathrefine" "com.illtool.smartmerge")
 
 # ── Uninstall mode ────────────────────────────────────────────────────
 
@@ -46,6 +50,19 @@ if [[ "${1:-}" == "--uninstall" ]]; then
     echo ""
 
     for panel in "${PANELS[@]}"; do
+        target="$CEP_EXTENSIONS_DIR/$panel"
+        if [[ -L "$target" ]]; then
+            rm "$target"
+            echo "  Removed: $target"
+        elif [[ -e "$target" ]]; then
+            echo "  WARNING: $target exists but is not a symlink. Skipping."
+        else
+            echo "  Already removed: $target"
+        fi
+    done
+
+    # Remove standalone CEP panels
+    for panel in "${CEP_PANELS[@]}"; do
         target="$CEP_EXTENSIONS_DIR/$panel"
         if [[ -L "$target" ]]; then
             rm "$target"
@@ -150,13 +167,35 @@ for panel in "${PANELS[@]}"; do
     ln -s "$source" "$target"
     echo "  Linked: $panel -> $target"
 done
+
+# Symlink standalone CEP tool panels (from cep/ directory)
+for panel in "${CEP_PANELS[@]}"; do
+    target="$CEP_EXTENSIONS_DIR/$panel"
+    source="$CEP_DIR/$panel"
+
+    if [[ ! -d "$source" ]]; then
+        echo "  SKIP: $panel (source not found)"
+        continue
+    fi
+
+    if [[ -L "$target" ]]; then
+        rm "$target"
+        echo "  Replaced existing symlink: $panel"
+    elif [[ -e "$target" ]]; then
+        echo "  WARNING: $target already exists (not a symlink). Skipping."
+        continue
+    fi
+
+    ln -s "$source" "$target"
+    echo "  Linked: $panel -> $target"
+done
 echo ""
 
 # Step 5: Verify symlinks
 echo "Step 5: Verifying installation..."
 ALL_OK=1
 
-for panel in "${PANELS[@]}" "$SHARED_NAME"; do
+for panel in "${PANELS[@]}" "${CEP_PANELS[@]}" "$SHARED_NAME"; do
     target="$CEP_EXTENSIONS_DIR/$panel"
     if [[ -L "$target" ]]; then
         resolved=$(readlink "$target")
