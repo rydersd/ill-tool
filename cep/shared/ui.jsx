@@ -30,12 +30,17 @@ function ensureLayer(name) {
  * Removes any existing preview (named "__preview__") first.
  * Draws a dashed dark-orange stroke for visibility.
  *
+ * If explicit handles are provided, uses createPathWithHandles() for
+ * precise bezier control. Otherwise falls back to auto-computed
+ * Catmull-Rom handles via createPath().
+ *
  * @param {Array} points - array of [x, y]
  * @param {boolean} closed - whether to close the path
  * @param {string} layerName - target layer name
+ * @param {Array} handles - optional array of {left:[x,y], right:[x,y]} parallel to points
  * @returns {PathItem} the created preview path
  */
-function placePreview(points, closed, layerName) {
+function placePreview(points, closed, layerName, handles) {
     var lyr = ensureLayer(layerName);
 
     // Remove existing preview
@@ -45,16 +50,38 @@ function placePreview(points, closed, layerName) {
         // No existing preview
     }
 
-    var path = createPath(lyr, points, {
-        name: "__preview__",
-        closed: closed,
-        stroked: true,
-        strokeColor: [200, 100, 30],   // dark orange per user preference
-        strokeWidth: 1.5,
-        strokeDashes: [4, 4],
-        computeHandles: true,
-        tension: 1 / 6
-    });
+    var path;
+    if (handles && handles.length === points.length) {
+        // Use explicit handles from shape fitters
+        var pointData = [];
+        for (var i = 0; i < points.length; i++) {
+            pointData.push({
+                anchor: points[i],
+                left: handles[i].left,
+                right: handles[i].right
+            });
+        }
+        path = createPathWithHandles(lyr, pointData, {
+            name: "__preview__",
+            closed: closed,
+            stroked: true,
+            strokeColor: [200, 100, 30],
+            strokeWidth: 1.5,
+            strokeDashes: [4, 4]
+        });
+    } else {
+        // Original: auto-compute Catmull-Rom handles
+        path = createPath(lyr, points, {
+            name: "__preview__",
+            closed: closed,
+            stroked: true,
+            strokeColor: [200, 100, 30],
+            strokeWidth: 1.5,
+            strokeDashes: [4, 4],
+            computeHandles: true,
+            tension: 1 / 6
+        });
+    }
 
     app.redraw();
     return path;
@@ -64,7 +91,7 @@ function placePreview(points, closed, layerName) {
  * Confirm a preview path: rename, solidify stroke, remove dashes.
  *
  * @param {string} layerName - layer containing the preview
- * @returns {boolean} true if confirmed
+ * @returns {string|null} the new path name, or null on failure
  */
 function confirmPreview(layerName) {
     try {
@@ -72,7 +99,8 @@ function confirmPreview(layerName) {
         var preview = lyr.pathItems.getByName("__preview__");
 
         // Rename with timestamp
-        preview.name = "avg_" + new Date().getTime();
+        var newName = "avg_" + new Date().getTime();
+        preview.name = newName;
 
         // Solid dark stroke
         preview.strokeDashes = [];
@@ -84,9 +112,9 @@ function confirmPreview(layerName) {
         preview.opacity = 70;
 
         app.redraw();
-        return true;
+        return newName;
     } catch (e) {
-        return false;
+        return null;
     }
 }
 

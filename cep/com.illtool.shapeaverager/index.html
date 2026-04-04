@@ -2,14 +2,14 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>Shape Averager</title>
+    <title>Shape Cleanup</title>
     <link rel="stylesheet" href="./css/style.css">
 </head>
 <body>
 
     <!-- Header with status -->
     <div class="header">
-        <span class="header-title">Shape Averager</span>
+        <span class="header-title">Shape Cleanup</span>
         <div class="status-indicator">
             <div id="statusDot" class="status-dot ready"></div>
             <span id="statusLabel" class="status-label ready">ready</span>
@@ -54,6 +54,19 @@
             </div>
             <div class="point-count-display">
                 Points: <span id="simplifiedCount" class="simplified-count">--</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bounding Box interactive canvas -->
+    <div class="section" id="bboxSection" style="display:none;">
+        <div class="section-label">Bounding Box</div>
+        <canvas id="bboxCanvas" width="250" height="180" style="border: 1px solid #444; border-radius: 3px; background: #2a2a2a; cursor: crosshair;"></canvas>
+        <div class="slider-group" style="margin-top: 6px;">
+            <div class="slider-row">
+                <span class="slider-label">Rotation</span>
+                <input type="number" id="rotationInput" value="0" step="1" style="width: 50px; background: #3a3a3a; border: 1px solid #555; color: #e0e0e0; border-radius: 2px; padding: 2px 4px; font-size: 10px;">
+                <span class="slider-value">deg</span>
             </div>
         </div>
     </div>

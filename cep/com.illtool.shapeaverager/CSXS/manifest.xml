@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-    CEP 12 Manifest — Shape Averager Panel for Illustrator.
+    CEP 12 Manifest — Shape Cleanup Panel for Illustrator.
 
-    This panel provides a shape averaging palette that classifies selected
-    paths, averages them via a WebSocket-connected backend, and previews
-    the cleaned result on a "Cleaned Forms" layer.
+    Classifies selected paths, averages them into minimal geometric
+    primitives, and previews the cleaned result on a "Cleaned Forms" layer.
+    Surface-aware shape suggestion from DSINE normal sidecar.
 
     Panel ID:    com.illtool.shapeaverager
     Host:        Illustrator CC 2024+ (ILST 28.0+)
@@ -16,7 +16,7 @@
 <ExtensionManifest Version="7.0"
                    ExtensionBundleId="com.illtool.shapeaverager"
                    ExtensionBundleVersion="1.0.0"
-                   ExtensionBundleName="Shape Averager"
+                   ExtensionBundleName="Shape Cleanup"
                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
 
     <ExtensionList>
@@ -54,7 +54,7 @@
                 </Lifecycle>
                 <UI>
                     <Type>Panel</Type>
-                    <Menu>Shape Averager</Menu>
+                    <Menu>Shape Cleanup</Menu>
                     <Geometry>
                         <Size>
                             <Height>420</Height>

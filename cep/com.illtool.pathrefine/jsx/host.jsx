@@ -10,6 +10,8 @@
 
 // Include shared libraries
 var _SHARED = "/Users/ryders/Developer/GitHub/ill_tool/cep/shared/";
+$.evalFile(_SHARED + "json_es3.jsx");
+$.evalFile(_SHARED + "logging.jsx");
 $.evalFile(_SHARED + "math2d.jsx");
 $.evalFile(_SHARED + "geometry.jsx");
 $.evalFile(_SHARED + "shapes.jsx");
@@ -139,6 +141,9 @@ function detachAndPrecompute() {
         _lodCache = precomputeLOD(sorted, 20);
     }
 
+    logInteraction("pathrefine", "detach", null,
+        {detachedCount: detachedCount, totalPoints: allAnchorsFlat.length}, null);
+
     app.redraw();
     return detachedCount + "|" + allAnchorsFlat.length + "|done";
 }
@@ -178,6 +183,10 @@ function applySimplifyLevel(level) {
         _detachedPaths = [path];
     }
 
+    logInteraction("pathrefine", "simplify",
+        {originalPoints: _originalPointCount},
+        {simplifiedPoints: best.count, level: level}, null);
+
     app.redraw();
     return best.count + "";
 }
@@ -206,6 +215,8 @@ function doApply() {
             // Path may have been removed
         }
     }
+
+    logInteraction("pathrefine", "apply", null, {count: count}, null);
 
     removeBoundingBox();
     _detachedPaths = [];

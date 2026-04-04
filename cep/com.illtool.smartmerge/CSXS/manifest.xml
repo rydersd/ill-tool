@@ -1,31 +1,27 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-    CEP 12 Manifest — Grouping Tools Panel for Illustrator.
+    CEP 12 Manifest — Smart Merge Panel for Illustrator.
 
-    Path detachment, simplification, and grouping tools. Extracts selected
-    anchor points into new paths, computes rotated bounding boxes, and applies
-    Douglas-Peucker simplification. Evolving into full grouping/organization.
+    Form-edge-aware path endpoint merging with normal map intelligence.
+    Merges open paths by proximity, weighted by surface coherence from
+    DSINE normal sidecar data.
 
-    Panel ID:    com.illtool.pathrefine
+    Panel ID:    com.illtool.smartmerge
     Host:        Illustrator CC 2024+ (ILST 28.0+)
     Size:        280x480 (min 250x400)
-
-    Installation:
-        Run scripts/install-cep-panels.sh to symlink into the CEP extensions directory.
 -->
 <ExtensionManifest Version="7.0"
-                   ExtensionBundleId="com.illtool.pathrefine"
+                   ExtensionBundleId="com.illtool.smartmerge"
                    ExtensionBundleVersion="1.0.0"
-                   ExtensionBundleName="Grouping Tools"
+                   ExtensionBundleName="Smart Merge"
                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
 
     <ExtensionList>
-        <Extension Id="com.illtool.pathrefine.panel" Version="1.0.0" />
+        <Extension Id="com.illtool.smartmerge.panel" Version="1.0.0" />
     </ExtensionList>
 
     <ExecutionEnvironment>
         <HostList>
-            <!-- Illustrator CC 2024+ (v28.0) through future versions -->
             <Host Name="ILST" Version="[28.0,99.9]" />
         </HostList>
         <LocaleList>
@@ -37,7 +33,7 @@
     </ExecutionEnvironment>
 
     <DispatchInfoList>
-        <Extension Id="com.illtool.pathrefine.panel">
+        <Extension Id="com.illtool.smartmerge.panel">
             <DispatchInfo>
                 <Resources>
                     <MainPath>./index.html</MainPath>
@@ -54,7 +50,7 @@
                 </Lifecycle>
                 <UI>
                     <Type>Panel</Type>
-                    <Menu>Grouping Tools</Menu>
+                    <Menu>Smart Merge</Menu>
                     <Geometry>
                         <Size>
                             <Height>480</Height>

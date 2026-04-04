@@ -12,9 +12,10 @@
  * Classify a sorted point array into a shape type.
  *
  * @param {Array} sortedPoints - PCA-sorted array of [x, y]
- * @returns {Object} {shape: string, points: [[x,y],...], closed: boolean, confidence: number}
+ * @param {string} surfaceHint - optional surface type: "flat", "cylindrical", "convex", "concave", "saddle"
+ * @returns {Object} {shape: string, points: [[x,y],...], closed: boolean, confidence: number, handles: Array|undefined}
  */
-function classifyShape(sortedPoints) {
+function classifyShape(sortedPoints, surfaceHint) {
     if (!sortedPoints || sortedPoints.length < 2) {
         return { shape: "freeform", points: sortedPoints || [], closed: false, confidence: 0 };
     }
@@ -35,6 +36,29 @@ function classifyShape(sortedPoints) {
     for (var i = 0; i < candidates.length; i++) {
         if (candidates[i].confidence > best.confidence) {
             best = candidates[i];
+        }
+    }
+
+    // Apply surface hint bonus if provided
+    if (surfaceHint && best.shape !== "freeform") {
+        var hintMapping = {
+            "flat": "line",
+            "cylindrical": "arc",
+            "convex": "arc",
+            "concave": "arc",
+            "saddle": "scurve"
+        };
+        var suggestedShape = hintMapping[surfaceHint];
+        if (suggestedShape && best.shape === suggestedShape) {
+            best.confidence = Math.min(1.0, best.confidence + 0.15);
+        }
+        // Also boost the suggested shape in the candidate list if it scores higher
+        for (var h = 0; h < candidates.length; h++) {
+            if (candidates[h].shape === suggestedShape && candidates[h].confidence > best.confidence) {
+                best = candidates[h];
+                best.confidence = Math.min(1.0, best.confidence + 0.15);
+                break;
+            }
         }
     }
 
@@ -265,25 +289,54 @@ function _fitArc(pts, confidence) {
         return { shape: "arc", points: pts.slice(0), closed: false, confidence: confidence };
     }
 
-    var ang1 = Math.atan2(p1[1] - circle.center[1], p1[0] - circle.center[0]);
-    var ang3 = Math.atan2(p3[1] - circle.center[1], p3[0] - circle.center[0]);
-    var angMid = Math.atan2(p2[1] - circle.center[1], p2[0] - circle.center[0]);
+    var cx = circle.center[0], cy = circle.center[1], r = circle.radius;
+
+    // Compute angles for start, mid, end on the circle
+    var ang1 = Math.atan2(p1[1] - cy, p1[0] - cx);
+    var ang3 = Math.atan2(p3[1] - cy, p3[0] - cx);
     var sweep = ang3 - ang1;
     while (sweep > Math.PI) sweep -= 2 * Math.PI;
     while (sweep < -Math.PI) sweep += 2 * Math.PI;
 
-    var numPts = Math.max(n, 8);
-    var arcPoints = [];
-    for (var i = 0; i < numPts; i++) {
-        var t = i / (numPts - 1);
-        var a = ang1 + sweep * t;
-        arcPoints.push([
-            circle.center[0] + circle.radius * Math.cos(a),
-            circle.center[1] + circle.radius * Math.sin(a)
-        ]);
+    var angMid = ang1 + sweep * 0.5;
+
+    // 3 output points: start, midpoint (apex), end — on the arc
+    var arcPoints = [
+        [cx + r * Math.cos(ang1), cy + r * Math.sin(ang1)],
+        [cx + r * Math.cos(angMid), cy + r * Math.sin(angMid)],
+        [cx + r * Math.cos(ang1 + sweep), cy + r * Math.sin(ang1 + sweep)]
+    ];
+
+    // Cubic bezier arc approximation: handle length for a half-sweep segment
+    // Formula: (4/3) * tan(halfSweep / 2) * radius
+    var halfSweep = sweep / 2;
+    var hLen = (4.0 / 3.0) * Math.tan(halfSweep / 2.0) * r;
+    var sweepSign = (sweep >= 0) ? 1 : -1;
+
+    // Build handles: tangent at angle theta is perpendicular to radius
+    // For CCW sweep: tangent = [-sin(theta), cos(theta)]
+    // For CW sweep: tangent = [sin(theta), -cos(theta)]
+    var handles = [];
+    var angles = [ang1, angMid, ang1 + sweep];
+    for (var i = 0; i < 3; i++) {
+        var theta = angles[i];
+        var tx = -Math.sin(theta) * sweepSign;
+        var ty = Math.cos(theta) * sweepSign;
+
+        var pt = arcPoints[i];
+        handles.push({
+            left:  [pt[0] - tx * hLen, pt[1] - ty * hLen],
+            right: [pt[0] + tx * hLen, pt[1] + ty * hLen]
+        });
     }
 
-    return { shape: "arc", points: arcPoints, closed: false, confidence: confidence };
+    return {
+        shape: "arc",
+        points: arcPoints,
+        handles: handles,
+        closed: false,
+        confidence: confidence
+    };
 }
 
 function _fitLShape(pts, confidence) {
@@ -325,11 +378,61 @@ function _fitRectangle(pts, confidence) {
 
 function _fitSCurve(pts, confidence) {
     if (confidence === undefined) confidence = 0.5;
-    var simplified = douglasPeucker(pts, dist2d(pts[0], pts[pts.length - 1]) * 0.02);
-    if (simplified.length < 3) simplified = pts.slice(0);
+    var n = pts.length;
+
+    // Find the inflection point: where cross-product sign changes
+    var inflIdx = Math.floor(n / 2); // fallback to midpoint
+    var prevSign = 0;
+    for (var i = 1; i < n - 1; i++) {
+        var v1 = sub2d(pts[i], pts[i - 1]);
+        var v2 = sub2d(pts[i + 1], pts[i]);
+        var cp = cross2d(v1, v2);
+        var sign = cp > 0 ? 1 : (cp < 0 ? -1 : 0);
+        if (sign !== 0 && prevSign !== 0 && sign !== prevSign) {
+            inflIdx = i;
+            break;
+        }
+        if (sign !== 0) prevSign = sign;
+    }
+
+    // 3 output points: first, inflection, last
+    var first = pts[0];
+    var inflPt = pts[inflIdx];
+    var last = pts[n - 1];
+    var scurvePoints = [first.slice(0), inflPt.slice(0), last.slice(0)];
+
+    // Catmull-Rom tangent handles at each point: handle = (next - prev) * tension
+    var tension = 1.0 / 6.0;
+    var handles = [];
+
+    // Start point: tangent from first toward inflection
+    var t0x = (inflPt[0] - first[0]) * tension;
+    var t0y = (inflPt[1] - first[1]) * tension;
+    handles.push({
+        left:  [first[0] - t0x, first[1] - t0y],
+        right: [first[0] + t0x, first[1] + t0y]
+    });
+
+    // Inflection point: tangent from first toward last
+    var t1x = (last[0] - first[0]) * tension;
+    var t1y = (last[1] - first[1]) * tension;
+    handles.push({
+        left:  [inflPt[0] - t1x, inflPt[1] - t1y],
+        right: [inflPt[0] + t1x, inflPt[1] + t1y]
+    });
+
+    // End point: tangent from inflection toward last
+    var t2x = (last[0] - inflPt[0]) * tension;
+    var t2y = (last[1] - inflPt[1]) * tension;
+    handles.push({
+        left:  [last[0] - t2x, last[1] - t2y],
+        right: [last[0] + t2x, last[1] + t2y]
+    });
+
     return {
         shape: "scurve",
-        points: simplified,
+        points: scurvePoints,
+        handles: handles,
         closed: false,
         confidence: confidence
     };
@@ -356,8 +459,8 @@ function _fitEllipse(pts, confidence) {
     var ev1 = trace / 2 + Math.sqrt(discrim);
     var ev2 = trace / 2 - Math.sqrt(discrim);
 
-    var a = Math.sqrt(Math.max(0, ev1)) * 2;
-    var b = Math.sqrt(Math.max(0, ev2)) * 2;
+    var a = Math.sqrt(Math.max(0, ev1)) * 2;  // semi-major axis
+    var b = Math.sqrt(Math.max(0, ev2)) * 2;  // semi-minor axis
 
     var angle;
     if (Math.abs(cxy) > 1e-10) {
@@ -366,20 +469,55 @@ function _fitEllipse(pts, confidence) {
         angle = cxx >= cyy ? 0 : Math.PI / 2;
     }
 
-    var numPts = Math.max(n, 16);
+    var cosA = Math.cos(angle);
+    var sinA = Math.sin(angle);
+
+    // Kappa constant for bezier circle approximation
+    var k = (4.0 / 3.0) * (Math.sqrt(2) - 1);  // ~0.5523
+
+    // 4 cardinal points at 0, 90, 180, 270 degrees in the ellipse's rotated frame
+    var cardinalAngles = [0, Math.PI / 2, Math.PI, 3 * Math.PI / 2];
     var ellipsePoints = [];
-    for (var j = 0; j < numPts; j++) {
-        var t = (j / numPts) * 2 * Math.PI;
+    var handles = [];
+
+    for (var j = 0; j < 4; j++) {
+        var t = cardinalAngles[j];
+        // Point on ellipse in local frame
         var ex = a * Math.cos(t);
         var ey = b * Math.sin(t);
-        var rx = ex * Math.cos(angle) - ey * Math.sin(angle) + c[0];
-        var ry = ex * Math.sin(angle) + ey * Math.cos(angle) + c[1];
-        ellipsePoints.push([rx, ry]);
+        // Rotate to world frame
+        var px = ex * cosA - ey * sinA + c[0];
+        var py = ex * sinA + ey * cosA + c[1];
+        ellipsePoints.push([px, py]);
+
+        // Handle direction is perpendicular to the radius in the ellipse's frame
+        // At cardinal angle t, the tangent direction in local frame is [-a*sin(t), b*cos(t)]
+        var ltx = -a * Math.sin(t);
+        var lty = b * Math.cos(t);
+        // Rotate tangent to world frame
+        var wtx = ltx * cosA - lty * sinA;
+        var wty = ltx * sinA + lty * cosA;
+        // Normalize tangent and scale by kappa * appropriate semi-axis
+        var tLen = Math.sqrt(wtx * wtx + wty * wty);
+        if (tLen > 1e-10) {
+            wtx /= tLen;
+            wty /= tLen;
+        }
+
+        // Handle length: kappa * the semi-axis perpendicular to the cardinal direction
+        // At 0/180 deg: perpendicular axis is b; at 90/270 deg: perpendicular axis is a
+        var hLen = (j % 2 === 0) ? k * b : k * a;
+
+        handles.push({
+            left:  [px - wtx * hLen, py - wty * hLen],
+            right: [px + wtx * hLen, py + wty * hLen]
+        });
     }
 
     return {
         shape: "ellipse",
         points: ellipsePoints,
+        handles: handles,
         closed: true,
         confidence: confidence
     };
