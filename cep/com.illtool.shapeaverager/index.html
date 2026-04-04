@@ -7,18 +7,17 @@
 </head>
 <body>
 
-    <!-- Header with status -->
+    <!-- Header with status + help toggle -->
     <div class="header">
         <span class="header-title">Shape Cleanup</span>
-        <div class="status-indicator">
-            <div id="statusDot" class="status-dot ready"></div>
-            <span id="statusLabel" class="status-label ready">ready</span>
+        <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="color: #aaa; font-size: 10px; font-family: 'SF Mono', Consolas, monospace;" id="selectionInfo">0 anchors</span>
+            <div class="status-indicator">
+                <div id="statusDot" class="status-dot ready"></div>
+                <span id="statusLabel" class="status-label ready">ready</span>
+            </div>
+            <span id="helpToggle" onclick="toggleHelp()" style="cursor: pointer; color: #888; font-size: 14px; line-height: 1;" title="Help">&#8943;</span>
         </div>
-    </div>
-
-    <!-- Selection info -->
-    <div class="section" style="padding-bottom: 6px;">
-        <span style="color: #aaa; font-size: 10px;" id="selectionInfo">No selection</span>
     </div>
 
     <!-- Shape type buttons -->
@@ -56,14 +55,16 @@
         </div>
     </div>
 
-    <!-- First-use guidance -->
-    <div id="helpText" class="section">
+    <!-- Help (hidden by default, toggled via ⋯ button) -->
+    <div id="helpText" class="section" style="display: none;">
         <div style="color: #aaa; font-size: 10px; line-height: 1.6;">
             <strong>Getting started:</strong><br>
             1. Use Direct Selection (A) or Lasso to select anchor points<br>
             2. Click <em>Average Selection</em> to classify and preview<br>
-            3. Adjust shape type or simplification if needed<br>
-            4. Click <em>Confirm</em> to place the cleaned path
+            3. Shift-click anchors to deselect — preview updates live<br>
+            4. Click <em>Confirm</em> to place the cleaned path<br>
+            <br>
+            <strong>Shortcuts:</strong> Enter=Confirm, Esc=Cancel, 1-7=Shape type
         </div>
     </div>
 

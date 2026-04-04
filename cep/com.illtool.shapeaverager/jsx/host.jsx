@@ -63,7 +63,13 @@ function averageSelectedAnchors() {
     _cachedLOD = precomputeLOD(sorted, 20);
 
     // Place preview path on "Cleaned Forms" layer (pass handles if available)
-    placePreview(classification.points, classification.closed, "Cleaned Forms", classification.handles || null);
+    var previewPath = placePreview(classification.points, classification.closed, "Cleaned Forms", classification.handles || null);
+
+    // Select the preview so user can see anchor handles
+    try {
+        app.activeDocument.selection = null;
+        previewPath.selected = true;
+    } catch (e) {}
 
     // Compute and draw bounding box
     var rect = minAreaRect(anchors);

@@ -347,6 +347,13 @@ document.addEventListener("keydown", function(e) {
     }
 });
 
+// ── Help Toggle ───────────────────────────────────────────────────
+
+function toggleHelp() {
+    var el = document.getElementById("helpText");
+    el.style.display = el.style.display === "none" ? "block" : "none";
+}
+
 // ── Initialization ─────────────────────────────────────────────────
 
 (function init() {
@@ -354,5 +361,7 @@ document.addEventListener("keydown", function(e) {
     initSliders();
     csInterface.evalScript("cleanupOrphans()", function() {});
     startSelectionPolling();
+    // Run an immediate poll so selection shows right away
+    pollSelection();
     updateStatus("ready");
 })();
