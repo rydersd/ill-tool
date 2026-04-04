@@ -29,7 +29,7 @@
     <!-- Detach button -->
     <div class="section">
         <div class="action-buttons">
-            <button class="btn btn-primary" id="btnDetach" onclick="detachSelection()">
+            <button class="btn btn-primary" id="btnDetach" onclick="detachSelection()" title="Copy selected anchors to Refined Forms layer">
                 Detach to New Layer
             </button>
         </div>
@@ -72,14 +72,14 @@
     <div class="section">
         <div class="action-buttons">
             <div class="btn-row">
-                <button class="btn btn-primary" id="btnApply" onclick="applyDetached()" disabled>
-                    Apply
+                <button class="btn btn-primary" id="btnApply" onclick="applyDetached()" disabled title="Solidify detached paths (Enter)">
+                    Confirm
                 </button>
-                <button class="btn btn-secondary" id="btnReset" onclick="resetDetached()" disabled>
+                <button class="btn btn-secondary" id="btnReset" onclick="resetDetached()" disabled title="Restore original point positions">
                     Reset
                 </button>
-                <button class="btn btn-secondary" id="btnUndo" onclick="undoDetach()" disabled>
-                    Undo
+                <button class="btn btn-secondary" id="btnUndo" onclick="undoDetach()" disabled title="Remove detached paths (Esc)">
+                    Cancel
                 </button>
             </div>
         </div>

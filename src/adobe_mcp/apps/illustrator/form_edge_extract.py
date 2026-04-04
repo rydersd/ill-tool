@@ -31,14 +31,10 @@ import cv2
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 
-from adobe_mcp.apps.illustrator.path_validation import validate_image_size
-
 from adobe_mcp.apps.illustrator.form_edge_pipeline import (
     contours_to_ai_points,
-    dsine_form_edges,
     edge_mask_to_contours,
     extract_form_edges,
-    heuristic_form_edges,
 )
 from adobe_mcp.apps.illustrator.normal_renderings import (
     cross_contour_field,

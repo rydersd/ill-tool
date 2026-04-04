@@ -21,7 +21,7 @@ PR #2 (`feat/normal-intelligence`) was reviewed by 5 adversarial agents after im
 | HIGH-5 | HIGH | Ellipse semi-axes 41% too large — `2*sqrt(ev)` vs correct `sqrt(2*ev)` | Wrong variance-to-axis relationship for uniform perimeter distribution | Fixed: `a = sqrt(2 * ev1)` |
 | HIGH-7 | HIGH | weldPoints doesn't swap left/right handles when reversing paths | Reversing traversal direction swaps incoming/outgoing handles | Added handle swap loop after each `.reverse()` |
 | HIGH-2 | HIGH | RK4 streamline direction flips between substeps (180-degree line field ambiguity) | Principal directions are line fields, not vector fields — sign is arbitrary | Added `dot(ki, k1) < 0` coherence check on k2/k3/k4 |
-| MED-1 | MEDIUM | curvature_line_weight has hard transitions at H=±0.02, not smooth sigmoid | Boolean masks create discontinuity at threshold | Replaced with single smooth formula: `0.3 + 0.4 * sigmoid(-H * 50)` |
+| MED-1 | MEDIUM | curvature_line_weight has hard transitions at H=±0.02, not smooth sigmoid | Boolean masks create discontinuity at threshold | Replaced with `np.where` valley/ridge masks + sigmoid blending from 0.5 base: valleys `0.5 + 0.2 * sigmoid(-H*50)`, ridges `0.5 - 0.2 * sigmoid(H*50)`, silhouettes max'd to 1.0 |
 | HIGH-8 | HIGH | Greedy endpoint matching misses better global pairings | O(n²) greedy picks first-found, not globally optimal | Acknowledged — greedy is acceptable for interactive use. Added to future improvements. |
 
 **Pattern to watch:** Bezier handle formulas for multi-segment approximations. The formula changes based on how many segments cover the sweep. Always verify: `handle_length = (4/3) * tan(segment_angle / 4) * radius` where segment_angle is the angle PER SEGMENT, not total.

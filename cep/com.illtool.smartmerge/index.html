@@ -39,15 +39,15 @@
         <div class="section-label">Options</div>
         <div class="checkbox-row">
             <input type="checkbox" id="chkFormAware" checked>
-            <label for="chkFormAware">Form-aware (use normal sidecar)</label>
+            <label for="chkFormAware" title="Use 3D surface analysis to prefer merging paths on the same geometric surface">Surface-aware merge</label>
         </div>
         <div class="checkbox-row">
             <input type="checkbox" id="chkChainMerge">
-            <label for="chkChainMerge">Chain merge (A→B→C)</label>
+            <label for="chkChainMerge" title="Iteratively merge connected paths: if A&#8594;B merges and B&#8594;C are close, also merge B&#8594;C">Chain merge (A&#8594;B&#8594;C)</label>
         </div>
         <div class="checkbox-row">
             <input type="checkbox" id="chkPreserveHandles">
-            <label for="chkPreserveHandles">Preserve handles (angular contours)</label>
+            <label for="chkPreserveHandles" title="Keep original handle directions at merge points — preserves angular contours like GIR's eyes">Preserve handles (angular)</label>
         </div>
     </div>
 
@@ -55,12 +55,12 @@
     <div class="section">
         <div class="action-buttons">
             <div class="btn-row">
-                <button class="btn btn-primary" id="btnScan" onclick="doScan()">Scan</button>
-                <button class="btn btn-secondary" id="btnPreview" onclick="doPreview()" disabled>Preview</button>
+                <button class="btn btn-primary" id="btnScan" onclick="doScan()" title="Find mergeable endpoint pairs in selection">Scan</button>
+                <button class="btn btn-secondary" id="btnPreview" onclick="doPreview()" disabled title="Show merge connection lines (Space)">Preview</button>
             </div>
             <div class="btn-row">
-                <button class="btn btn-merge" id="btnMerge" onclick="doMerge()" disabled>Merge</button>
-                <button class="btn btn-secondary" id="btnUndo" onclick="doUndoMerge()" disabled>Undo</button>
+                <button class="btn btn-merge" id="btnMerge" onclick="doMerge()" disabled title="Execute merge — originals will be replaced (Enter)">Merge</button>
+                <button class="btn btn-secondary" id="btnUndo" onclick="doUndoMerge()" disabled title="Remove preview lines (Esc)">Cancel Preview</button>
             </div>
         </div>
     </div>

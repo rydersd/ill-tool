@@ -117,11 +117,28 @@ def load_sidecar(sidecar_path: str | Path) -> Optional[SidecarData]:
 
 
 def find_sidecar(
-    doc_name: str, cache_dir: str | Path = "/tmp/illtool_cache"
+    doc_name: str, cache_dir: str | Path | None = None
 ) -> Optional[Path]:
-    """Find the sidecar file for a document."""
-    cache = Path(cache_dir)
-    candidate = cache / f"{doc_name}_normals.json"
-    if candidate.exists():
-        return candidate
+    """Find the sidecar file for a document.
+
+    Searches multiple possible locations if cache_dir is not specified.
+    """
+    if cache_dir:
+        candidate = Path(cache_dir) / f"{doc_name}_normals.json"
+        if candidate.exists():
+            return candidate
+        return None
+
+    # Search common locations
+    import os
+
+    uid = os.getuid()
+    candidates = [
+        Path(f"/tmp/ai_form_edges_{uid}/{doc_name}_normals.json"),
+        Path(f"/tmp/illtool_cache/{doc_name}_normals.json"),
+        Path(f"~/Library/Application Support/illtool/cache/{doc_name}_normals.json").expanduser(),
+    ]
+    for c in candidates:
+        if c.exists():
+            return c
     return None

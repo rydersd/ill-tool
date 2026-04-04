@@ -68,7 +68,7 @@ body {
 }
 
 .status-label {
-    color: #999;
+    color: #aaa;
 }
 .status-label.ready      { color: #4caf50; }
 .status-label.processing { color: #ff9800; }
@@ -88,7 +88,7 @@ body {
 }
 
 .section-label {
-    color: #999;
+    color: #aaa;
     font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -105,17 +105,36 @@ body {
 .shape-btn {
     flex: 1;
     min-width: 0;
-    height: 32px;
+    height: 44px;
     background: #4a4a4a;
     border: 1px solid #555;
     border-radius: 3px;
     color: #d0d0d0;
-    font-size: 14px;
+    font-size: 11px;
     cursor: pointer;
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
+    gap: 1px;
+    padding: 2px 0;
     transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.shape-icon {
+    font-size: 20px;
+    line-height: 1;
+}
+
+.shape-label {
+    font-size: 8px;
+    color: #aaa;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+.shape-btn.active .shape-label {
+    color: #ccc;
 }
 
 .shape-btn:hover {
@@ -151,7 +170,7 @@ body {
 }
 
 .detected-readout .confidence {
-    color: #999;
+    color: #aaa;
 }
 
 /* ── Sliders ────────────────────────────────────────────────────── */
@@ -180,7 +199,7 @@ body {
     text-align: right;
     font-family: "SF Mono", "Fira Code", Consolas, monospace;
     font-size: 10px;
-    color: #888;
+    color: #aaa;
 }
 
 input[type="range"] {
@@ -320,7 +339,7 @@ input[type="range"]::-webkit-slider-thumb:active {
 .point-count-display {
     font-family: "SF Mono", "Fira Code", Consolas, monospace;
     font-size: 10px;
-    color: #888;
+    color: #aaa;
     padding: 2px 0 0 0;
 }
 

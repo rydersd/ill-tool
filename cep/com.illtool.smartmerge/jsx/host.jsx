@@ -38,8 +38,6 @@ var _previewPaths = [];         // references to preview pathItems
 var _lastTolerance = 5;         // tolerance from most recent scan
 
 // JSON parsing now provided by json_es3.jsx (jsonParse function)
-// Legacy alias for backward compatibility
-function _parseJSON(str) { return jsonParse(str); }
 
 /**
  * Attempt to load the normal sidecar file for the current document.
@@ -107,6 +105,26 @@ function loadSidecar() {
     }
 
     return "notfound";
+}
+
+/**
+ * Clean up orphaned merge preview paths left from a previous session or crash.
+ * Called on panel load. Returns the count of removed items as a string.
+ */
+function cleanupOrphans() {
+    try {
+        var lyr = app.activeDocument.layers.getByName("Merge Preview");
+        var toRemove = [];
+        for (var i = 0; i < lyr.pathItems.length; i++) {
+            var name = lyr.pathItems[i].name;
+            if (name.indexOf("__merge_preview_") === 0) {
+                toRemove.push(lyr.pathItems[i]);
+            }
+        }
+        for (var j = toRemove.length - 1; j >= 0; j--) toRemove[j].remove();
+        if (toRemove.length > 0) app.redraw();
+        return toRemove.length + "";
+    } catch (e) { return "0"; }
 }
 
 /**

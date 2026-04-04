@@ -69,7 +69,7 @@ body {
 }
 
 .status-label {
-    color: #999;
+    color: #aaa;
 }
 .status-label.ready      { color: #4caf50; }
 .status-label.processing { color: #ff9800; }
@@ -89,7 +89,7 @@ body {
 }
 
 .section-label {
-    color: #999;
+    color: #aaa;
     font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -110,7 +110,7 @@ body {
 }
 
 .info-readout .dimmed {
-    color: #888;
+    color: #aaa;
 }
 
 /* ── Sliders ────────────────────────────────────────────────────── */
@@ -139,7 +139,7 @@ body {
     text-align: right;
     font-family: "SF Mono", "Fira Code", Consolas, monospace;
     font-size: 10px;
-    color: #888;
+    color: #aaa;
 }
 
 input[type="range"] {
@@ -298,7 +298,7 @@ input[type="range"]:disabled::-webkit-slider-thumb {
 }
 
 .point-count-display .original-count {
-    color: #888;
+    color: #aaa;
 }
 
 .point-count-display .simplified-count {
