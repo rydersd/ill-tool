@@ -1,9 +1,9 @@
 # Normal Map as Shadow-Free Reference
 
-> Brief: Use ML-predicted surface normals to generate 5 shadow-free renderings that improve every existing tool without modification — the architectural centerpiece of the lightweight form extraction pipeline.
-> Tags: normals, shadow-free, reference, preprocessing, dsine, architecture
+> Brief: Use ML-predicted surface normals to generate 15 shadow-free renderings that improve every existing tool without modification — the architectural centerpiece of the lightweight form extraction pipeline. Now with full differential geometry via shape operator eigendecomposition.
+> Tags: normals, shadow-free, reference, preprocessing, dsine, architecture, eigendecomposition
 > Created: 2026-04-03
-> Updated: 2026-04-03
+> Updated: 2026-04-04
 
 ## Motivation
 
@@ -74,7 +74,19 @@ Plus the form edge extraction tool:
 - Coordinate transforms, contour extraction, edge quality
 - Graceful fallback when ML unavailable
 
+## Expansion: Full Differential Geometry (2026-04-04)
+
+The original 5 renderings used only `det(S)` of the shape operator. Eigendecomposing S yields principal curvatures (κ1, κ2), mean curvature (H), principal directions (eigenvectors), and surface type classification — 10 additional renderings with zero extra ML cost. See [[Expanded Normal Renderings]] for the full set.
+
+Key additions:
+- **Normal sidecar file**: per-path surface metadata written by form_edge_extract
+- **Form-aware Smart Merge**: merge decisions weighted by surface coherence
+- **Auto line weight**: strokeWidth varies by curvature (silhouettes thickest, ridges thinnest)
+- **Cross-contour guides**: streamlines along principal directions as locked guide paths
+
 ## See Also
+- [[Expanded Normal Renderings]] — The 10 new eigendecomposition-derived renderings
+- [[Smart Merge Architecture]] — Form-aware merge using normal sidecar
 - [[Shadow vs Form Problem]]
 - [[Spatial 3D-to-2D Pipeline]]
 - [[ML Backends]]

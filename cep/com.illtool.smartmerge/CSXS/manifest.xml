@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    CEP 12 Manifest — Smart Merge Panel for Illustrator.
+
+    Form-edge-aware path endpoint merging with normal map intelligence.
+    Merges open paths by proximity, weighted by surface coherence from
+    DSINE normal sidecar data.
+
+    Panel ID:    com.illtool.smartmerge
+    Host:        Illustrator CC 2024+ (ILST 28.0+)
+    Size:        280x480 (min 250x400)
+-->
+<ExtensionManifest Version="7.0"
+                   ExtensionBundleId="com.illtool.smartmerge"
+                   ExtensionBundleVersion="1.0.0"
+                   ExtensionBundleName="Smart Merge"
+                   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+
+    <ExtensionList>
+        <Extension Id="com.illtool.smartmerge.panel" Version="1.0.0" />
+    </ExtensionList>
+
+    <ExecutionEnvironment>
+        <HostList>
+            <Host Name="ILST" Version="[28.0,99.9]" />
+        </HostList>
+        <LocaleList>
+            <Locale Code="All" />
+        </LocaleList>
+        <RequiredRuntimeList>
+            <RequiredRuntime Name="CSXS" Version="11.0" />
+        </RequiredRuntimeList>
+    </ExecutionEnvironment>
+
+    <DispatchInfoList>
+        <Extension Id="com.illtool.smartmerge.panel">
+            <DispatchInfo>
+                <Resources>
+                    <MainPath>./index.html</MainPath>
+                    <ScriptPath>./jsx/host.jsx</ScriptPath>
+                    <CEFCommandLine>
+                        <Parameter>--allow-file-access-from-files</Parameter>
+                    </CEFCommandLine>
+                </Resources>
+                <Lifecycle>
+                    <AutoVisible>true</AutoVisible>
+                    <StartOn>
+                        <Event>com.adobe.csxs.events.ApplicationActivate</Event>
+                    </StartOn>
+                </Lifecycle>
+                <UI>
+                    <Type>Panel</Type>
+                    <Menu>Smart Merge</Menu>
+                    <Geometry>
+                        <Size>
+                            <Height>480</Height>
+                            <Width>280</Width>
+                        </Size>
+                        <MinSize>
+                            <Height>400</Height>
+                            <Width>250</Width>
+                        </MinSize>
+                    </Geometry>
+                </UI>
+            </DispatchInfo>
+        </Extension>
+    </DispatchInfoList>
+</ExtensionManifest>

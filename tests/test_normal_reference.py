@@ -148,10 +148,10 @@ class TestGenerate:
     """Verify the generate action produces renderings and metadata."""
 
     def test_generate_all_renderings(self, sphere_image_png, mock_estimator):
-        """Generate with all renderings should produce 5 output PNGs."""
+        """Generate with all renderings should produce outputs for each."""
         result = _generate(sphere_image_png)
         assert "error" not in result, f"Generate failed: {result.get('error')}"
-        assert len(result["rendering_paths"]) == 5
+        assert len(result["rendering_paths"]) == len(ALL_RENDERING_NAMES)
         assert set(result["renderings_generated"]) == set(ALL_RENDERING_NAMES)
 
     def test_generate_saves_normal_map_png(self, sphere_image_png, mock_estimator):
@@ -166,12 +166,19 @@ class TestGenerate:
         assert img.shape[1] == 64
 
     def test_generate_saves_rendering_pngs(self, sphere_image_png, mock_estimator):
-        """All rendering PNGs must exist on disk after generate."""
+        """All rendering outputs must exist on disk after generate."""
         result = _generate(sphere_image_png)
         for name, path in result["rendering_paths"].items():
             assert os.path.isfile(path), f"Rendering {name} not saved at {path}"
-            img = cv2.imread(path)
-            assert img is not None, f"Rendering {name} is not a valid image"
+            if name == "cross_contours":
+                # cross_contours outputs JSON, not an image
+                import json as json_mod
+                with open(path) as f:
+                    data = json_mod.load(f)
+                assert "polylines" in data
+            else:
+                img = cv2.imread(path)
+                assert img is not None, f"Rendering {name} is not a valid image"
 
     def test_generate_returns_correct_metadata(self, sphere_image_png, mock_estimator):
         """Generate result must include normal estimation and timing metadata."""
@@ -225,10 +232,13 @@ class TestGenerate:
     def test_generate_rendering_images_are_3channel(
         self, sphere_image_png, mock_estimator
     ):
-        """All saved rendering PNGs should be 3-channel BGR images."""
+        """All saved rendering PNGs should be 3-channel BGR images (except cross_contours)."""
         result = _generate(sphere_image_png)
         for name, path in result["rendering_paths"].items():
+            if name == "cross_contours":
+                continue  # cross_contours outputs JSON polylines, not PNG
             img = cv2.imread(path)
+            assert img is not None, f"Rendering {name} could not be read"
             assert img.ndim == 3, f"Rendering {name} is not 3-channel"
             assert img.shape[2] == 3, f"Rendering {name} has {img.shape[2]} channels"
 

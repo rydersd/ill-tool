@@ -42,11 +42,21 @@ from adobe_mcp.apps.illustrator.path_validation import (
     validate_safe_path,
 )
 from adobe_mcp.apps.illustrator.normal_renderings import (
+    ambient_occlusion_approx,
+    cross_contour_field,
+    curvature_line_weight,
     curvature_map,
     depth_discontinuities,
+    depth_facing_map,
     flat_planes,
     form_lines,
+    form_vs_material_boundaries,
+    principal_curvatures,
     relit_reference,
+    ridge_valley_map,
+    silhouette_contours,
+    surface_flow_field,
+    surface_type_map,
 )
 
 
@@ -78,6 +88,47 @@ RENDERING_REGISTRY = {
         "description": "Depth/occlusion boundary detection from normal discontinuities",
         "needs_image": False,
     },
+    "principal_curvatures": {
+        "description": "Per-pixel principal curvatures (H, kappa1, kappa2) from shape operator eigendecomposition",
+        "needs_image": False,
+    },
+    "surface_type": {
+        "description": "Per-pixel surface classification: flat/convex/concave/saddle/cylindrical",
+        "needs_image": False,
+    },
+    "ridge_valley": {
+        "description": "Ridge and valley detection from mean curvature — convex ridges vs concave valleys",
+        "needs_image": False,
+    },
+    "silhouette": {
+        "description": "Silhouette contour extraction where surface is near-perpendicular to view",
+        "needs_image": False,
+    },
+    "depth_facing": {
+        "description": "Front-facing intensity map from normal z-component — camera-facing = bright",
+        "needs_image": False,
+    },
+    "surface_flow": {
+        "description": "Principal curvature direction vectors — shows surface flow field",
+        "needs_image": False,
+    },
+    "ambient_occlusion": {
+        "description": "Approximate ambient occlusion from local normal variance — crevice/corner darkness",
+        "needs_image": False,
+    },
+    "form_material_boundaries": {
+        "description": "Separate normal discontinuities into form boundaries (geometry) vs material boundaries (paint/decal)",
+        "needs_image": False,
+    },
+    "cross_contours": {
+        "description": "Cross-contour streamlines perpendicular to max curvature — returns polylines, not image",
+        "needs_image": False,
+        "returns_polylines": True,
+    },
+    "line_weight": {
+        "description": "Per-pixel adaptive line weight from curvature + silhouette (0=thin, 1=thick)",
+        "needs_image": False,
+    },
 }
 
 # Human-readable display names for layer titles
@@ -87,6 +138,16 @@ DISPLAY_NAMES = {
     "curvature": "Curvature",
     "relit": "Relit",
     "depth_edges": "Depth Edges",
+    "principal_curvatures": "Principal Curvatures",
+    "surface_type": "Surface Type",
+    "ridge_valley": "Ridge Valley",
+    "silhouette": "Silhouette",
+    "depth_facing": "Depth Facing",
+    "surface_flow": "Surface Flow",
+    "ambient_occlusion": "Ambient Occlusion",
+    "form_material_boundaries": "Form Material Boundaries",
+    "cross_contours": "Cross Contours",
+    "line_weight": "Line Weight",
 }
 
 ALL_RENDERING_NAMES = list(RENDERING_REGISTRY.keys())
@@ -123,7 +184,10 @@ class NormalReferenceInput(BaseModel):
         default=ALL_RENDERING_NAMES,
         description=(
             "Which renderings to generate. Options: "
-            "flat_planes, form_lines, curvature, relit, depth_edges."
+            "flat_planes, form_lines, curvature, relit, depth_edges, "
+            "principal_curvatures, surface_type, ridge_valley, silhouette, "
+            "depth_facing, surface_flow, ambient_occlusion, "
+            "form_material_boundaries, cross_contours, line_weight."
         ),
     )
     k_planes: int = Field(
@@ -299,6 +363,77 @@ def _generate(
             img = depth_discontinuities(normal_map)
             if img.ndim == 2:
                 img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+        elif name == "principal_curvatures":
+            pc = principal_curvatures(normal_map)
+            # Visualize mean curvature H (channel 0) with diverging colormap
+            H = pc[:, :, 0]
+            abs_max = max(np.abs(H).max(), 1e-8)
+            normalized = ((H / abs_max) + 1.0) * 0.5
+            gray = (normalized * 255).clip(0, 255).astype(np.uint8)
+            img = cv2.applyColorMap(gray, cv2.COLORMAP_TWILIGHT_SHIFTED)
+        elif name == "surface_type":
+            stype = surface_type_map(normal_map)
+            # Color palette: flat=gray, convex=green, concave=red, saddle=blue, cylindrical=yellow
+            palette = np.array([
+                [128, 128, 128],  # 0 = flat (gray)
+                [60, 180, 60],    # 1 = convex (green)
+                [60, 60, 200],    # 2 = concave (red in BGR)
+                [200, 100, 60],   # 3 = saddle (blue in BGR)
+                [30, 200, 200],   # 4 = cylindrical (yellow in BGR)
+            ], dtype=np.uint8)
+            img = palette[stype]
+        elif name == "ridge_valley":
+            rv = ridge_valley_map(normal_map)
+            # Channel 0 = ridges (red), channel 1 = valleys (blue)
+            img = np.zeros((*rv.shape[:2], 3), dtype=np.uint8)
+            img[:, :, 2] = rv[:, :, 0]  # ridges -> red channel (BGR)
+            img[:, :, 0] = rv[:, :, 1]  # valleys -> blue channel (BGR)
+        elif name == "silhouette":
+            img = silhouette_contours(normal_map)
+            if img.ndim == 2:
+                img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+        elif name == "depth_facing":
+            facing = depth_facing_map(normal_map)
+            gray = (facing * 255).clip(0, 255).astype(np.uint8)
+            img = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        elif name == "surface_flow":
+            flow = surface_flow_field(normal_map)
+            # Visualize direction 1 as hue (angle), magnitude as value
+            dx = flow[:, :, 0].astype(np.float64)
+            dy = flow[:, :, 1].astype(np.float64)
+            angle = (np.arctan2(dy, dx) + np.pi) / (2 * np.pi)  # [0, 1]
+            mag = np.sqrt(dx ** 2 + dy ** 2)
+            mag_norm = np.clip(mag / max(mag.max(), 1e-8), 0, 1)
+            hsv = np.zeros((*flow.shape[:2], 3), dtype=np.uint8)
+            hsv[:, :, 0] = (angle * 179).astype(np.uint8)
+            hsv[:, :, 1] = 200
+            hsv[:, :, 2] = (mag_norm * 255).astype(np.uint8)
+            img = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+        elif name == "ambient_occlusion":
+            ao = ambient_occlusion_approx(normal_map)
+            gray = (ao * 255).clip(0, 255).astype(np.uint8)
+            img = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        elif name == "form_material_boundaries":
+            fb = form_vs_material_boundaries(normal_map)
+            # Channel 0 = form (green), channel 1 = material (magenta)
+            img = np.zeros((*fb.shape[:2], 3), dtype=np.uint8)
+            img[:, :, 1] = fb[:, :, 0]  # form -> green (BGR)
+            img[:, :, 0] = fb[:, :, 1]  # material -> blue (BGR)
+            img[:, :, 2] = fb[:, :, 1]  # material -> red (BGR) = magenta
+        elif name == "cross_contours":
+            # Returns polylines, not an image — save as JSON instead of PNG
+            polylines = cross_contour_field(normal_map)
+            out_path = os.path.join(OUTPUT_DIR, f"{name}.json")
+            import json as json_mod
+            with open(out_path, "w") as f:
+                json_mod.dump({"polylines": polylines, "count": len(polylines)}, f)
+            rendering_paths[name] = out_path
+            rendering_timings[name] = round(time.time() - t_r, 3)
+            continue  # Skip the common PNG write path below
+        elif name == "line_weight":
+            lw = curvature_line_weight(normal_map)
+            gray = (lw * 255).clip(0, 255).astype(np.uint8)
+            img = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
 
         out_path = os.path.join(OUTPUT_DIR, f"{name}.png")
         cv2.imwrite(out_path, img)

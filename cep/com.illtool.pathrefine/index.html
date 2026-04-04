@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Grouping Tools</title>
+    <link rel="stylesheet" href="./css/style.css">
+</head>
+<body>
+
+    <!-- Header with status -->
+    <div class="header">
+        <span class="header-title">Grouping Tools</span>
+        <div class="status-indicator">
+            <div id="statusDot" class="status-dot ready"></div>
+            <span id="statusLabel" class="status-label ready">ready</span>
+        </div>
+    </div>
+
+    <!-- Selection info -->
+    <div class="section">
+        <div class="info-readout">
+            Selected: <span id="anchorCount" class="highlight">0</span> anchors
+        </div>
+        <div class="info-readout">
+            From: <span id="pathCount" class="highlight">0</span> paths
+        </div>
+    </div>
+
+    <!-- Detach button -->
+    <div class="section">
+        <div class="action-buttons">
+            <button class="btn btn-primary" id="btnDetach" onclick="detachSelection()">
+                Detach to New Layer
+            </button>
+        </div>
+    </div>
+
+    <!-- Simplification slider -->
+    <div class="section" id="simplifySection">
+        <div class="section-label">Simplification</div>
+        <div class="slider-group">
+            <div class="slider-row">
+                <span class="slider-label">Level</span>
+                <input type="range" id="simplifySlider" min="0" max="100" value="0" disabled>
+                <span class="slider-value" id="simplifyValue">0</span>
+            </div>
+        </div>
+        <div class="point-count-display">
+            Points: <span id="originalCount" class="original-count">--</span>
+            <span class="arrow">&rarr;</span>
+            <span id="simplifiedCount" class="simplified-count">--</span>
+        </div>
+    </div>
+
+    <!-- Bounding box options -->
+    <div class="section">
+        <div class="section-label">Bounding Box</div>
+        <div class="checkbox-row">
+            <input type="checkbox" id="showBBox" checked>
+            <label for="showBBox">Show Bounding Box</label>
+        </div>
+        <div class="slider-group" style="margin-top: 6px;">
+            <div class="slider-row">
+                <span class="slider-label">Padding</span>
+                <input type="range" id="paddingSlider" min="0" max="50" value="5">
+                <span class="slider-value" id="paddingValue">5pt</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Action buttons -->
+    <div class="section">
+        <div class="action-buttons">
+            <div class="btn-row">
+                <button class="btn btn-primary" id="btnApply" onclick="applyDetached()" disabled>
+                    Apply
+                </button>
+                <button class="btn btn-secondary" id="btnReset" onclick="resetDetached()" disabled>
+                    Reset
+                </button>
+                <button class="btn btn-secondary" id="btnUndo" onclick="undoDetach()" disabled>
+                    Undo
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- CSInterface library -->
+    <script src="./CSInterface.js"></script>
+    <!-- Panel logic -->
+    <script src="./js/main.js"></script>
+</body>
+</html>

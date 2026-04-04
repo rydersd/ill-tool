@@ -7,12 +7,29 @@ Skip with: uv run pytest tests/ -k "not ai" -v
 import inspect
 import json
 import os
+import subprocess
 
 import pytest
 
 from adobe_mcp.server import mcp
 
-pytestmark = pytest.mark.ai
+
+def _illustrator_is_running() -> bool:
+    """Check if Illustrator is running via process list."""
+    try:
+        result = subprocess.run(
+            ["pgrep", "-x", "Adobe Illustrator"],
+            capture_output=True, timeout=5,
+        )
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+
+
+pytestmark = [
+    pytest.mark.ai,
+    pytest.mark.skipif(not _illustrator_is_running(), reason="Adobe Illustrator is not running"),
+]
 
 # ---------------------------------------------------------------------------
 # Reference image fixture

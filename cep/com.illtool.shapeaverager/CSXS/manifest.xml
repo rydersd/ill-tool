@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    CEP 12 Manifest — Shape Cleanup Panel for Illustrator.
+
+    Classifies selected paths, averages them into minimal geometric
+    primitives, and previews the cleaned result on a "Cleaned Forms" layer.
+    Surface-aware shape suggestion from DSINE normal sidecar.
+
+    Panel ID:    com.illtool.shapeaverager
+    Host:        Illustrator CC 2024+ (ILST 28.0+)
+    Size:        280x420 (min 250x350)
+
+    Installation:
+        Run scripts/install-cep-panels.sh to symlink into the CEP extensions directory.
+-->
+<ExtensionManifest Version="7.0"
+                   ExtensionBundleId="com.illtool.shapeaverager"
+                   ExtensionBundleVersion="1.0.0"
+                   ExtensionBundleName="Shape Cleanup"
+                   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+
+    <ExtensionList>
+        <Extension Id="com.illtool.shapeaverager.panel" Version="1.0.0" />
+    </ExtensionList>
+
+    <ExecutionEnvironment>
+        <HostList>
+            <!-- Illustrator CC 2024+ (v28.0) through future versions -->
+            <Host Name="ILST" Version="[28.0,99.9]" />
+        </HostList>
+        <LocaleList>
+            <Locale Code="All" />
+        </LocaleList>
+        <RequiredRuntimeList>
+            <RequiredRuntime Name="CSXS" Version="11.0" />
+        </RequiredRuntimeList>
+    </ExecutionEnvironment>
+
+    <DispatchInfoList>
+        <Extension Id="com.illtool.shapeaverager.panel">
+            <DispatchInfo>
+                <Resources>
+                    <MainPath>./index.html</MainPath>
+                    <ScriptPath>./jsx/host.jsx</ScriptPath>
+                    <CEFCommandLine>
+                        <Parameter>--allow-file-access-from-files</Parameter>
+                    </CEFCommandLine>
+                </Resources>
+                <Lifecycle>
+                    <AutoVisible>true</AutoVisible>
+                    <StartOn>
+                        <Event>com.adobe.csxs.events.ApplicationActivate</Event>
+                    </StartOn>
+                </Lifecycle>
+                <UI>
+                    <Type>Panel</Type>
+                    <Menu>Shape Cleanup</Menu>
+                    <Geometry>
+                        <Size>
+                            <Height>420</Height>
+                            <Width>280</Width>
+                        </Size>
+                        <MinSize>
+                            <Height>350</Height>
+                            <Width>250</Width>
+                        </MinSize>
+                    </Geometry>
+                </UI>
+            </DispatchInfo>
+        </Extension>
+    </DispatchInfoList>
+</ExtensionManifest>
