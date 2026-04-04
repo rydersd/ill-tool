@@ -85,7 +85,8 @@ function detachSelection() {
     updateStatus("processing");
 
     var padding = parseInt(document.getElementById("paddingSlider").value, 10) || 5;
-    csInterface.evalScript("pr_detachAndPrecompute(" + padding + ")", function (result) {
+    var groupName = document.getElementById("groupName").value.replace(/'/g, "\\'").replace(/\\/g, "\\\\") || "";
+    csInterface.evalScript("pr_detachAndPrecompute(" + padding + ", '" + groupName + "')", function (result) {
         if (!result || result.indexOf("error") === 0) {
             updateStatus("ready");
             var errMsg = result ? result.replace(/^error\|/, "") : "No selection";

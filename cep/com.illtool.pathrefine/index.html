@@ -26,11 +26,15 @@
         </div>
     </div>
 
-    <!-- Detach button -->
+    <!-- Group name + Detach -->
     <div class="section">
+        <div class="slider-row" style="margin-bottom: 6px;">
+            <span class="slider-label">Group Name</span>
+            <input type="text" id="groupName" value="" placeholder="e.g. left arm contour" style="flex:1; background:#333; color:#eee; border:1px solid #555; border-radius:3px; padding:2px 6px; font-size:11px; font-family:'SF Mono',Consolas,monospace;">
+        </div>
         <div class="action-buttons">
-            <button class="btn btn-primary" id="btnDetach" onclick="detachSelection()" title="Copy selected anchors to Refined Forms layer">
-                Detach to New Layer
+            <button class="btn btn-primary" id="btnDetach" onclick="detachSelection()" title="Copy selected anchors to a named group on Refined Forms layer">
+                Detach to Group
             </button>
         </div>
     </div>

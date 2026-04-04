@@ -91,8 +91,11 @@ function pr_getSelectionInfo() {
  * Returns pipe-delimited: "detachedCount|totalPoints|done"
  * On error: "error|message"
  */
-function pr_detachAndPrecompute(padding) {
+var _pr_group = null;  // reference to the current detach group
+
+function pr_detachAndPrecompute(padding, groupName) {
     if (padding === undefined || padding === null) padding = 5;
+    if (groupName === undefined || groupName === null) groupName = "";
     var doc;
     try {
         doc = app.activeDocument;
@@ -109,18 +112,26 @@ function pr_detachAndPrecompute(padding) {
     // Clear any previous detached state
     _pr_cleanDetachedPaths();
 
+    // Create a top-level group for the detached paths
+    _pr_group = lyr.groupItems.add();
+    _pr_group.name = groupName || ("detach_" + new Date().getTime());
+
     _pr_detachedPaths = [];
     _pr_originalAnchors = [];
     var detachedCount = 0;
     var allAnchorsFlat = [];  // [x,y] pairs for LOD and bounding box
 
+    // Track source paths and which points to remove after copying
+    var _sourcesToClean = [];  // [{path, selectedIndices}]
+
     for (var i = 0; i < sel.length; i++) {
         if (sel[i].typename !== "PathItem") continue;
         var path = sel[i];
 
-        // Find contiguous runs of selected points
+        // Find contiguous runs of selected points and track indices
         var runs = [];
         var currentRun = null;
+        var selectedIndices = [];
 
         for (var j = 0; j < path.pathPoints.length; j++) {
             var pp = path.pathPoints[j];
@@ -133,6 +144,7 @@ function pr_detachAndPrecompute(padding) {
                     type: pp.pointType
                 });
                 allAnchorsFlat.push([pp.anchor[0], pp.anchor[1]]);
+                selectedIndices.push(j);
             } else {
                 if (currentRun) {
                     runs.push(currentRun);
@@ -142,12 +154,16 @@ function pr_detachAndPrecompute(padding) {
         }
         if (currentRun) runs.push(currentRun);
 
-        // Create detached paths from each run
+        if (selectedIndices.length > 0) {
+            _sourcesToClean.push({ path: path, selectedIndices: selectedIndices });
+        }
+
+        // Create detached paths from each run, inside the group
         for (var r = 0; r < runs.length; r++) {
             var run = runs[r];
             if (run.points.length < 2) continue;
 
-            // Save originals for reset
+            // Save originals for undo (restore to source)
             var origCopy = [];
             for (var oc = 0; oc < run.points.length; oc++) {
                 origCopy.push({
@@ -158,7 +174,7 @@ function pr_detachAndPrecompute(padding) {
             }
             _pr_originalAnchors.push(origCopy);
 
-            var newPath = createPathWithHandles(lyr, run.points, {
+            var newPath = createPathWithHandles(_pr_group, run.points, {
                 name: "__detached_" + detachedCount + "__",
                 closed: false,
                 stroked: true,
@@ -172,7 +188,27 @@ function pr_detachAndPrecompute(padding) {
         }
     }
 
-    if (detachedCount === 0) return "error|No contiguous runs with 2+ points";
+    // Remove selected points from source paths (reverse order to preserve indices)
+    for (var si = 0; si < _sourcesToClean.length; si++) {
+        var srcPath = _sourcesToClean[si].path;
+        var indices = _sourcesToClean[si].selectedIndices;
+        // If ALL points selected, remove the entire path
+        if (indices.length >= srcPath.pathPoints.length) {
+            try { srcPath.remove(); } catch(e) {}
+        } else {
+            // Remove selected points in reverse order
+            for (var ri = indices.length - 1; ri >= 0; ri--) {
+                try { srcPath.pathPoints[indices[ri]].remove(); } catch(e) {}
+            }
+        }
+    }
+
+    if (detachedCount === 0) {
+        // Remove the empty group
+        try { _pr_group.remove(); } catch(e) {}
+        _pr_group = null;
+        return "error|No contiguous runs with 2+ points";
+    }
 
     _pr_originalPointCount = allAnchorsFlat.length;
 
@@ -216,8 +252,8 @@ function pr_applySimplifyLevel(level) {
     _pr_cleanDetachedPaths();
 
     if (best.points.length >= 2) {
-        var lyr = ensureLayer("Refined Forms");
-        var path = createPath(lyr, best.points, {
+        var target = _pr_group || ensureLayer("Refined Forms");
+        var path = createPath(target, best.points, {
             name: "__detached_0__",
             closed: false,
             stroked: true,
@@ -263,9 +299,11 @@ function pr_doApply() {
         }
     }
 
-    logInteraction("pathrefine", "apply", null, {count: count}, null);
+    logInteraction("pathrefine", "apply", null, {count: count, group: _pr_group ? _pr_group.name : ""}, null);
 
     removeBoundingBox("Refined Forms");
+    // Keep the group — it's now a permanent named group with solid paths
+    _pr_group = null;
     _pr_detachedPaths = [];
     _pr_originalAnchors = [];
     _pr_lodCache = null;
@@ -283,7 +321,8 @@ function pr_doReset() {
     // Remove current detached paths and recreate from originals
     _pr_cleanDetachedPaths();
 
-    var lyr = ensureLayer("Refined Forms");
+    // Recreate inside the group (or layer if group was lost)
+    var target = _pr_group || ensureLayer("Refined Forms");
     _pr_detachedPaths = [];
     var totalPoints = 0;
 
@@ -291,7 +330,7 @@ function pr_doReset() {
         var origPts = _pr_originalAnchors[i];
         if (origPts.length < 2) continue;
 
-        var newPath = createPathWithHandles(lyr, origPts, {
+        var newPath = createPathWithHandles(target, origPts, {
             name: "__detached_" + i + "__",
             closed: false,
             stroked: true,
@@ -314,6 +353,15 @@ function pr_doReset() {
  */
 function pr_doUndoDetach() {
     _pr_cleanDetachedPaths();
+    // Remove the group if it's empty after cleaning
+    if (_pr_group) {
+        try {
+            if (_pr_group.pathItems.length === 0 && _pr_group.groupItems.length === 0) {
+                _pr_group.remove();
+            }
+        } catch(e) {}
+        _pr_group = null;
+    }
     removeBoundingBox("Refined Forms");
     _pr_detachedPaths = [];
     _pr_originalAnchors = [];
