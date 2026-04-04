@@ -91,7 +91,8 @@ function pr_getSelectionInfo() {
  * Returns pipe-delimited: "detachedCount|totalPoints|done"
  * On error: "error|message"
  */
-var _pr_group = null;  // reference to the current detach group
+var _pr_group = null;          // reference to the current detach group (working copy)
+var _pr_originalGroup = null;  // hidden+locked backup of original art
 
 function pr_detachAndPrecompute(padding, groupName) {
     if (padding === undefined || padding === null) padding = 5;
@@ -112,26 +113,54 @@ function pr_detachAndPrecompute(padding, groupName) {
     // Clear any previous detached state
     _pr_cleanDetachedPaths();
 
-    // Create a top-level group for the detached paths
+    // ── Non-destructive: hide+lock originals, work on duplicates ──
+
+    // 1. Group the original selected paths, hide and lock them
+    _pr_originalGroup = lyr.groupItems.add();
+    _pr_originalGroup.name = "__originals_backup__";
+
+    // Collect selected PathItems (snapshot before moving)
+    var selPaths = [];
+    for (var si = 0; si < sel.length; si++) {
+        if (sel[si].typename === "PathItem") selPaths.push(sel[si]);
+    }
+
+    // 2. Duplicate each selected path, move original into backup group
+    var duplicates = [];
+    for (var di = 0; di < selPaths.length; di++) {
+        var dup = selPaths[di].duplicate();
+        // Move original into backup group
+        selPaths[di].move(_pr_originalGroup, ElementPlacement.PLACEATEND);
+        duplicates.push(dup);
+    }
+
+    // 3. Hide and lock the backup group
+    _pr_originalGroup.hidden = true;
+    _pr_originalGroup.locked = true;
+
+    // 4. Select the duplicates so the rest of the pipeline works on them
+    doc.selection = null;
+    for (var sd = 0; sd < duplicates.length; sd++) {
+        duplicates[sd].selected = true;
+    }
+
+    // ── Now detach from the duplicates (originals are safe) ──
+
+    // Create a top-level group for the detached result paths
     _pr_group = lyr.groupItems.add();
     _pr_group.name = groupName || ("detach_" + new Date().getTime());
 
     _pr_detachedPaths = [];
     _pr_originalAnchors = [];
     var detachedCount = 0;
-    var allAnchorsFlat = [];  // [x,y] pairs for LOD and bounding box
+    var allAnchorsFlat = [];
 
-    // Track source paths and which points to remove after copying
-    var _sourcesToClean = [];  // [{path, selectedIndices}]
+    for (var i = 0; i < duplicates.length; i++) {
+        var path = duplicates[i];
 
-    for (var i = 0; i < sel.length; i++) {
-        if (sel[i].typename !== "PathItem") continue;
-        var path = sel[i];
-
-        // Find contiguous runs of selected points and track indices
+        // Find contiguous runs of selected points
         var runs = [];
         var currentRun = null;
-        var selectedIndices = [];
 
         for (var j = 0; j < path.pathPoints.length; j++) {
             var pp = path.pathPoints[j];
@@ -144,7 +173,6 @@ function pr_detachAndPrecompute(padding, groupName) {
                     type: pp.pointType
                 });
                 allAnchorsFlat.push([pp.anchor[0], pp.anchor[1]]);
-                selectedIndices.push(j);
             } else {
                 if (currentRun) {
                     runs.push(currentRun);
@@ -154,16 +182,11 @@ function pr_detachAndPrecompute(padding, groupName) {
         }
         if (currentRun) runs.push(currentRun);
 
-        if (selectedIndices.length > 0) {
-            _sourcesToClean.push({ path: path, selectedIndices: selectedIndices });
-        }
-
-        // Create detached paths from each run, inside the group
+        // Create detached paths from each run, inside the result group
         for (var r = 0; r < runs.length; r++) {
             var run = runs[r];
             if (run.points.length < 2) continue;
 
-            // Save originals for undo (restore to source)
             var origCopy = [];
             for (var oc = 0; oc < run.points.length; oc++) {
                 origCopy.push({
@@ -178,7 +201,7 @@ function pr_detachAndPrecompute(padding, groupName) {
                 name: "__detached_" + detachedCount + "__",
                 closed: false,
                 stroked: true,
-                strokeColor: [200, 100, 30],  // dark orange
+                strokeColor: [200, 100, 30],
                 strokeWidth: 1.0,
                 strokeDashes: [3, 3]
             });
@@ -186,27 +209,16 @@ function pr_detachAndPrecompute(padding, groupName) {
             _pr_detachedPaths.push(newPath);
             detachedCount++;
         }
-    }
 
-    // Remove selected points from source paths (reverse order to preserve indices)
-    for (var si = 0; si < _sourcesToClean.length; si++) {
-        var srcPath = _sourcesToClean[si].path;
-        var indices = _sourcesToClean[si].selectedIndices;
-        // If ALL points selected, remove the entire path
-        if (indices.length >= srcPath.pathPoints.length) {
-            try { srcPath.remove(); } catch(e) {}
-        } else {
-            // Remove selected points in reverse order
-            for (var ri = indices.length - 1; ri >= 0; ri--) {
-                try { srcPath.pathPoints[indices[ri]].remove(); } catch(e) {}
-            }
-        }
+        // Remove the duplicate (we've extracted what we need into the group)
+        try { path.remove(); } catch(e) {}
     }
 
     if (detachedCount === 0) {
-        // Remove the empty group
+        // Nothing detached — restore originals
         try { _pr_group.remove(); } catch(e) {}
         _pr_group = null;
+        _pr_restoreOriginals();
         return "error|No contiguous runs with 2+ points";
     }
 
@@ -302,8 +314,16 @@ function pr_doApply() {
     logInteraction("pathrefine", "apply", null, {count: count, group: _pr_group ? _pr_group.name : ""}, null);
 
     removeBoundingBox("Refined Forms");
-    // Keep the group — it's now a permanent named group with solid paths
+    // Keep the result group — it's now permanent with solid paths
     _pr_group = null;
+    // Delete the hidden originals — user accepted the result
+    if (_pr_originalGroup) {
+        try {
+            _pr_originalGroup.locked = false;
+            _pr_originalGroup.remove();
+        } catch(e) {}
+        _pr_originalGroup = null;
+    }
     _pr_detachedPaths = [];
     _pr_originalAnchors = [];
     _pr_lodCache = null;
@@ -353,15 +373,13 @@ function pr_doReset() {
  */
 function pr_doUndoDetach() {
     _pr_cleanDetachedPaths();
-    // Remove the group if it's empty after cleaning
+    // Remove the working group
     if (_pr_group) {
-        try {
-            if (_pr_group.pathItems.length === 0 && _pr_group.groupItems.length === 0) {
-                _pr_group.remove();
-            }
-        } catch(e) {}
+        try { _pr_group.remove(); } catch(e) {}
         _pr_group = null;
     }
+    // Restore the hidden originals
+    _pr_restoreOriginals();
     removeBoundingBox("Refined Forms");
     _pr_detachedPaths = [];
     _pr_originalAnchors = [];
@@ -369,6 +387,25 @@ function pr_doUndoDetach() {
     _pr_originalPointCount = 0;
     app.redraw();
     return "undone";
+}
+
+/**
+ * Restore hidden original art: unlock, unhide, ungroup back to layer.
+ */
+function _pr_restoreOriginals() {
+    if (!_pr_originalGroup) return;
+    try {
+        _pr_originalGroup.locked = false;
+        _pr_originalGroup.hidden = false;
+        // Move paths out of backup group back to the layer
+        var lyr = _pr_originalGroup.layer;
+        while (_pr_originalGroup.pathItems.length > 0) {
+            _pr_originalGroup.pathItems[0].move(lyr, ElementPlacement.PLACEATEND);
+        }
+        // Remove the now-empty backup group
+        _pr_originalGroup.remove();
+    } catch(e) {}
+    _pr_originalGroup = null;
 }
 
 // ── Internal helpers ─────────────────────────────────────────────
