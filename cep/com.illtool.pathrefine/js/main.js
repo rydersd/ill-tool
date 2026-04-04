@@ -1,5 +1,5 @@
 /**
- * Path Detach & Refine — Panel logic
+ * Grouping Tools — Panel logic
  *
  * Fully standalone: all math runs in ExtendScript via shared libraries.
  * No WebSocket dependency. Communicates with Illustrator via

@@ -32,11 +32,11 @@ class TransformContext:
 
     @property
     def ab_width(self) -> float:
-        return self.ab_right - self.ab_left
+        return abs(self.ab_right - self.ab_left)
 
     @property
     def ab_height(self) -> float:
-        return self.ab_top - self.ab_bottom  # always positive for valid artboards
+        return abs(self.ab_top - self.ab_bottom)
 
     @property
     def scale(self) -> float:
@@ -45,7 +45,7 @@ class TransformContext:
             return 1.0
         scale_x = self.ab_width / self.img_width
         scale_y = self.ab_height / self.img_height
-        return min(abs(scale_x), abs(scale_y))
+        return min(scale_x, scale_y)
 
     @property
     def offset_x(self) -> float:

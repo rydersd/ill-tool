@@ -1,5 +1,5 @@
 /**
- * Path Detach & Refine — ExtendScript host functions for Illustrator.
+ * Grouping Tools — ExtendScript host functions for Illustrator.
  *
  * Thin file that #includes shared libraries and adds panel-specific
  * workflow functions. All math runs locally in ExtendScript — no
@@ -9,7 +9,24 @@
  */
 
 // Include shared libraries
-var _SHARED = "/Users/ryders/Developer/GitHub/ill_tool/cep/shared/";
+// Derive shared library path from this script's location
+var _SHARED = (function() {
+    // $.fileName gives the path of the currently executing script
+    // host.jsx is at: .../com.illtool.pathrefine/jsx/host.jsx
+    // shared is at:   .../shared/
+    var thisFile = new File($.fileName);
+    var jsxDir = thisFile.parent;        // .../jsx/
+    var panelDir = jsxDir.parent;        // .../com.illtool.pathrefine/
+    var cepDir = panelDir.parent;        // .../cep/ (or CEP extensions dir)
+    var sharedDir = new Folder(cepDir.fsName + "/shared");
+
+    if (sharedDir.exists) {
+        return sharedDir.fsName + "/";
+    }
+
+    // Fallback: hardcoded path for development
+    return "/Users/ryders/Developer/GitHub/ill_tool/cep/shared/";
+})();
 $.evalFile(_SHARED + "json_es3.jsx");
 $.evalFile(_SHARED + "logging.jsx");
 $.evalFile(_SHARED + "math2d.jsx");
@@ -132,7 +149,7 @@ function detachAndPrecompute() {
     // Compute and draw bounding box
     if (allAnchorsFlat.length >= 2) {
         var rect = minAreaRect(allAnchorsFlat);
-        drawBoundingBox(rect.center[0], rect.center[1], rect.width, rect.height, rect.angle, 5);
+        drawBoundingBox(rect.center[0], rect.center[1], rect.width, rect.height, rect.angle, 5, "Refined Forms");
     }
 
     // Precompute LOD levels
@@ -218,7 +235,7 @@ function doApply() {
 
     logInteraction("pathrefine", "apply", null, {count: count}, null);
 
-    removeBoundingBox();
+    removeBoundingBox("Refined Forms");
     _detachedPaths = [];
     _originalAnchors = [];
     _lodCache = null;
@@ -267,7 +284,7 @@ function doReset() {
  */
 function doUndoDetach() {
     _cleanDetachedPaths();
-    removeBoundingBox();
+    removeBoundingBox("Refined Forms");
     _detachedPaths = [];
     _originalAnchors = [];
     _lodCache = null;

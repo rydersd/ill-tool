@@ -9,7 +9,24 @@
  */
 
 // Include shared libraries
-var _SHARED = "/Users/ryders/Developer/GitHub/ill_tool/cep/shared/";
+// Derive shared library path from this script's location
+var _SHARED = (function() {
+    // $.fileName gives the path of the currently executing script
+    // host.jsx is at: .../com.illtool.smartmerge/jsx/host.jsx
+    // shared is at:   .../shared/
+    var thisFile = new File($.fileName);
+    var jsxDir = thisFile.parent;        // .../jsx/
+    var panelDir = jsxDir.parent;        // .../com.illtool.smartmerge/
+    var cepDir = panelDir.parent;        // .../cep/ (or CEP extensions dir)
+    var sharedDir = new Folder(cepDir.fsName + "/shared");
+
+    if (sharedDir.exists) {
+        return sharedDir.fsName + "/";
+    }
+
+    // Fallback: hardcoded path for development
+    return "/Users/ryders/Developer/GitHub/ill_tool/cep/shared/";
+})();
 $.evalFile(_SHARED + "json_es3.jsx");
 $.evalFile(_SHARED + "logging.jsx");
 $.evalFile(_SHARED + "math2d.jsx");
@@ -24,6 +41,7 @@ var _cachedPairs = null;        // from findEndpointPairs()
 var _cachedNormalScores = null;  // from sidecar
 var _hasSidecar = false;
 var _previewPaths = [];         // references to preview pathItems
+var _lastTolerance = 5;         // tolerance from most recent scan
 
 // JSON parsing now provided by json_es3.jsx (jsonParse function)
 // Legacy alias for backward compatibility
@@ -31,7 +49,7 @@ function _parseJSON(str) { return jsonParse(str); }
 
 /**
  * Attempt to load the normal sidecar file for the current document.
- * Looks in /tmp/illtool_cache/{docName}_normals.json
+ * Searches multiple possible locations to match the Python-side OUTPUT_DIR.
  *
  * Returns "found|pathCount" or "notfound"
  */
@@ -42,33 +60,59 @@ function loadSidecar() {
     var doc;
     try { doc = app.activeDocument; } catch (e) { return "notfound"; }
 
-    var docName = doc.name.replace(/\.[^.]+$/, ""); // strip extension
-    var sidecarPath = "/tmp/illtool_cache/" + docName + "_normals.json";
-    var f = new File(sidecarPath);
+    var docName = doc.name.replace(/\.[^.]+$/, "").replace(/[\/\\:]/g, "_"); // strip extension, sanitize path chars
 
-    if (!f.exists) return "notfound";
+    // Search multiple possible sidecar locations
+    // Python writes to /tmp/ai_form_edges_{os.getuid()}/ — numeric UID
+    var candidates = [
+        "/tmp/illtool_cache/" + docName + "_normals.json",
+        "~/Library/Application Support/illtool/cache/" + docName + "_normals.json"
+    ];
 
-    try {
-        f.open("r");
-        var content = f.read();
-        f.close();
-
-        var data = _parseJSON(content);
-        if (!data || !data.paths) return "notfound";
-
-        // Build lookup: pathName -> dominant_surface
-        _cachedNormalScores = {};
-        for (var i = 0; i < data.paths.length; i++) {
-            var p = data.paths[i];
-            if (p.name) {
-                _cachedNormalScores[p.name] = p.dominant_surface || "";
+    // Enumerate /tmp/ai_form_edges_*/ directories (handles numeric UID mismatch)
+    var tmpDir = new Folder("/tmp");
+    if (tmpDir.exists) {
+        var formEdgeDirs = tmpDir.getFiles("ai_form_edges_*");
+        for (var di = 0; di < formEdgeDirs.length; di++) {
+            if (formEdgeDirs[di] instanceof Folder) {
+                // Try exact docName match first
+                candidates.push(formEdgeDirs[di].fsName + "/" + docName + "_normals.json");
+                // Then enumerate all sidecar files in this directory
+                var sidecarFiles = formEdgeDirs[di].getFiles("*_normals.json");
+                for (var fi = 0; fi < sidecarFiles.length; fi++) {
+                    candidates.push(sidecarFiles[fi].fsName);
+                }
             }
         }
-        _hasSidecar = true;
-        return "found|" + data.paths.length;
-    } catch (e) {
-        return "notfound";
     }
+
+    for (var i = 0; i < candidates.length; i++) {
+        var f = new File(candidates[i]);
+        if (!f.exists) continue;
+
+        try {
+            f.open("r");
+            var content = f.read();
+            f.close();
+
+            var data = jsonParse(content);
+            if (!data || !data.paths) continue;
+
+            _cachedNormalScores = {};
+            for (var j = 0; j < data.paths.length; j++) {
+                var p = data.paths[j];
+                if (p.name) {
+                    _cachedNormalScores[p.name] = p.dominant_surface || "";
+                }
+            }
+            _hasSidecar = true;
+            return "found|" + data.paths.length;
+        } catch (e) {
+            continue;
+        }
+    }
+
+    return "notfound";
 }
 
 /**
@@ -81,6 +125,7 @@ function scanEndpoints(tolerance, useFormAware) {
     _cachedPaths = getSelectedPaths();
     if (_cachedPaths.length < 2) return "error|Need at least 2 open paths selected";
 
+    _lastTolerance = tolerance;
     var normalScores = (useFormAware && _hasSidecar) ? _cachedNormalScores : null;
     _cachedPairs = findEndpointPairs(_cachedPaths, tolerance, normalScores);
 
@@ -197,6 +242,15 @@ function executeMerge(chainMerge, preserveHandles) {
     var iterations = 0;
     var maxIterations = chainMerge ? 10 : 1;
 
+    // Attach _ref to cached paths on the first iteration so lookups
+    // don't fall through to the positional pathItems fallback (which
+    // could mis-index if the arrays ever diverge).
+    for (var ci = 0; ci < _cachedPaths.length; ci++) {
+        if (ci < pathItems.length) {
+            _cachedPaths[ci]._ref = pathItems[ci];
+        }
+    }
+
     while (iterations < maxIterations) {
         if (iterations > 0) {
             // Re-scan for new pairs among remaining paths
@@ -226,7 +280,7 @@ function executeMerge(chainMerge, preserveHandles) {
             }
 
             var normalScores = _hasSidecar ? _cachedNormalScores : null;
-            _cachedPairs = findEndpointPairs(_cachedPaths, 5, normalScores);
+            _cachedPairs = findEndpointPairs(_cachedPaths, _lastTolerance, normalScores);
         }
 
         if (!_cachedPairs || _cachedPairs.length === 0) break;
@@ -336,13 +390,16 @@ function updateRadius(tolerance, useFormAware) {
  * Remove preview lines and clear state.
  * Returns "undone"
  */
-function doUndo() {
+function doUndoMerge() {
     _cleanPreviews();
     _cachedPaths = null;
     _cachedPairs = null;
     app.redraw();
     return "undone";
 }
+
+// Backward-compatible alias
+function doUndo() { return doUndoMerge(); }
 
 // ── Internal helpers ─────────────────────────────────────────────
 

@@ -322,3 +322,42 @@ class TestFindSidecar:
     def test_returns_none_for_missing_dir(self):
         result = find_sidecar("doc", cache_dir="/tmp/nonexistent_dir_12345")
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Integration tests — end-to-end schema validation
+# ---------------------------------------------------------------------------
+
+
+class TestIntegration:
+    def test_load_sidecar_from_form_edge_schema(self, tmp_path):
+        """Validate the actual schema form_edge_extract would produce."""
+        real_schema = {
+            "image_hash": "abc123def456",
+            "timestamp": "2026-04-04T15:00:00+00:00",
+            "paths": [{
+                "name": "form_edge_0",
+                "layer": "Form Edges",
+                "dominant_surface": "convex",
+                "mean_curvature": 0.04,
+                "is_silhouette": False,
+                "mean_depth_facing": 0.85,
+                "anchor_count": 12,
+            }],
+        }
+        path = tmp_path / "test_normals.json"
+        path.write_text(json.dumps(real_schema))
+        result = load_sidecar(path)
+        assert result is not None
+        assert result.paths[0].dominant_surface == "convex"
+        assert result.paths[0].mean_curvature == pytest.approx(0.04)
+
+    def test_missing_fields_use_defaults(self, tmp_path):
+        """Missing fields should get defaults, not crash."""
+        minimal = {"image_hash": "x", "paths": [{"name": "p0"}]}
+        path = tmp_path / "minimal.json"
+        path.write_text(json.dumps(minimal))
+        result = load_sidecar(path)
+        assert result.paths[0].dominant_surface == "flat"
+        assert result.paths[0].mean_curvature == 0.0
+        assert result.paths[0].anchor_count == 0

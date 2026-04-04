@@ -63,3 +63,38 @@ class TestReclassificationStats:
         entries = [{"action": "confirm"}, {"action": "merge"}]
         stats = _compute_reclassification_stats(entries)
         assert stats["count"] == 0
+
+
+class TestDateFiltering:
+    def test_filters_by_date(self, sample_jsonl):
+        entries = _read_jsonl(sample_jsonl / "shapeaverager_20260404.jsonl")
+        filtered = [e for e in entries if e.get("timestamp", "") >= "2026-04-04T15:02:00"]
+        assert len(filtered) == 2
+
+
+class TestPanelFiltering:
+    def test_glob_pattern(self, sample_jsonl):
+        """panel_name should filter to matching files only."""
+        pattern = "smartmerge_*.jsonl"
+        files = list(sample_jsonl.glob(pattern))
+        assert len(files) == 1
+
+
+class TestEdgeCases:
+    def test_empty_jsonl_file(self, tmp_path):
+        f = tmp_path / "empty.jsonl"
+        f.write_text("")
+        entries = _read_jsonl(f)
+        assert entries == []
+
+    def test_reclassification_missing_before_after(self):
+        entries = [{"action": "reclassify"}]
+        stats = _compute_reclassification_stats(entries)
+        assert stats["count"] == 1
+        assert "unknown -> unknown" in stats["transitions"]
+
+    def test_single_line_file(self, tmp_path):
+        f = tmp_path / "single.jsonl"
+        f.write_text('{"action": "confirm", "panel": "shapeaverager"}\n')
+        entries = _read_jsonl(f)
+        assert len(entries) == 1

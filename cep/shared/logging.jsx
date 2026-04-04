@@ -21,6 +21,9 @@
  */
 function logInteraction(panelName, actionType, beforeState, afterState, context) {
     try {
+        // Sanitize panelName to prevent path traversal in log filenames
+        panelName = panelName.replace(/[\/\\:]/g, "_");
+
         var now = new Date();
         var ts = now.getFullYear() + "-" +
             _pad2(now.getMonth() + 1) + "-" +
@@ -51,7 +54,7 @@ function logInteraction(panelName, actionType, beforeState, afterState, context)
         // Append to JSONL file
         var filePath = appData.fsName + "/" + panelName + "_" + dateStr + ".jsonl";
         var f = new File(filePath);
-        f.open("a");  // append mode
+        if (!f.open("a")) return;  // silently fail if can't open
         f.writeln(line);
         f.close();
     } catch (e) {

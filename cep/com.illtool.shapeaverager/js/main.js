@@ -1,5 +1,5 @@
 /**
- * Shape Averager — Panel logic
+ * Shape Cleanup — Panel logic
  *
  * Fully standalone: all math runs in ExtendScript via shared libraries.
  * No WebSocket dependency. Communicates with Illustrator via
@@ -635,6 +635,11 @@ var bboxUI = (function () {
         var tx = corners[0][0] - (a * origCorners[0][0] + b * origCorners[0][1]);
         var ty = corners[0][1] - (c * origCorners[0][0] + d * origCorners[0][1]);
 
+        // Guard against degenerate transforms (NaN/Infinity from near-zero determinants)
+        if (!isFinite(a) || !isFinite(b) || !isFinite(c) || !isFinite(d) || !isFinite(tx) || !isFinite(ty)) {
+            return;
+        }
+
         csInterface.evalScript(
             "applyBboxTransform(" + a + "," + b + "," + c + "," + d + "," + tx + "," + ty + ")",
             function () {}
@@ -701,6 +706,10 @@ var bboxUI = (function () {
 
                 if (section) section.style.display = "";
                 draw();
+
+                // Store original point positions so applyBboxTransform
+                // transforms FROM originals (prevents cumulative drift)
+                csInterface.evalScript("storeBboxOriginals()", function () {});
             });
         },
 

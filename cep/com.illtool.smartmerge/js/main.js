@@ -110,12 +110,12 @@ function displayScanResult(result) {
     var sameSurface = parseInt(parts[2] || "0", 10);
     var crossSurface = parseInt(parts[3] || "0", 10);
 
-    var html = '<span class="pair-count">' + pairCount + '</span> merge pairs from ' +
-        pathCount + ' paths';
+    var html = '<span class="pair-count">' + escapeHtml(pairCount) + '</span> merge pairs from ' +
+        escapeHtml(pathCount) + ' paths';
 
     if (hasSidecar && (sameSurface > 0 || crossSurface > 0)) {
         html += '<br><span class="surface-info">' +
-            sameSurface + ' same-surface, ' + crossSurface + ' cross-surface</span>';
+            escapeHtml(String(sameSurface)) + ' same-surface, ' + escapeHtml(String(crossSurface)) + ' cross-surface</span>';
     }
 
     updateReadout(html);
@@ -174,6 +174,14 @@ function doUndo() {
             updateStatus("ready");
         }
     });
+}
+
+// ── Utilities ─────────────────────────────────────────────────────
+
+function escapeHtml(str) {
+    var div = document.createElement("div");
+    div.appendChild(document.createTextNode(str));
+    return div.innerHTML;
 }
 
 // ── Start ──────────────────────────────────────────────────────────

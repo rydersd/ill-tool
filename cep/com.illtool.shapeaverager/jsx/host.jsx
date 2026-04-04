@@ -1,5 +1,5 @@
 /**
- * Shape Averager — ExtendScript host functions for Illustrator.
+ * Shape Cleanup — ExtendScript host functions for Illustrator.
  *
  * Thin file that #includes shared libraries and adds panel-specific
  * workflow functions. All math runs locally in ExtendScript — no
@@ -9,9 +9,24 @@
  */
 
 // Include shared libraries
-// The panel is symlinked from the repo — use the known repo path directly.
-// This is reliable across CEP panel loading, evalScript, and symlink resolution.
-var _SHARED = "/Users/ryders/Developer/GitHub/ill_tool/cep/shared/";
+// Derive shared library path from this script's location
+var _SHARED = (function() {
+    // $.fileName gives the path of the currently executing script
+    // host.jsx is at: .../com.illtool.shapeaverager/jsx/host.jsx
+    // shared is at:   .../shared/
+    var thisFile = new File($.fileName);
+    var jsxDir = thisFile.parent;        // .../jsx/
+    var panelDir = jsxDir.parent;        // .../com.illtool.shapeaverager/
+    var cepDir = panelDir.parent;        // .../cep/ (or CEP extensions dir)
+    var sharedDir = new Folder(cepDir.fsName + "/shared");
+
+    if (sharedDir.exists) {
+        return sharedDir.fsName + "/";
+    }
+
+    // Fallback: hardcoded path for development
+    return "/Users/ryders/Developer/GitHub/ill_tool/cep/shared/";
+})();
 $.evalFile(_SHARED + "json_es3.jsx");
 $.evalFile(_SHARED + "logging.jsx");
 $.evalFile(_SHARED + "math2d.jsx");
@@ -24,6 +39,7 @@ $.evalFile(_SHARED + "ui.jsx");
 var _cachedSortedPoints = null;
 var _cachedClassification = null;
 var _cachedLOD = null;
+var _bboxOriginalPoints = null;
 
 /**
  * Main entry point: read selected anchors, classify shape, place preview.
@@ -49,7 +65,7 @@ function averageSelectedAnchors() {
 
     // Compute and draw bounding box
     var rect = minAreaRect(anchors);
-    drawBoundingBox(rect.center[0], rect.center[1], rect.width, rect.height, rect.angle, 5);
+    drawBoundingBox(rect.center[0], rect.center[1], rect.width, rect.height, rect.angle, 5, "Cleaned Forms");
 
     // Return result as pipe-delimited string
     return classification.shape + "|" + classification.confidence + "|" + sorted.length + "|" + classification.points.length;
@@ -125,7 +141,7 @@ function doConfirm() {
          confidence: _cachedClassification ? _cachedClassification.confidence : 0},
         null, null);
     var pathName = confirmPreview("Cleaned Forms");
-    removeBoundingBox();
+    removeBoundingBox("Cleaned Forms");
     _cachedSortedPoints = null;
     _cachedClassification = null;
     _cachedLOD = null;
@@ -151,15 +167,19 @@ function doConfirm() {
  * Undo the preview: remove preview path, clear caches.
  * Returns "undone"
  */
-function doUndo() {
+function doUndoAverage() {
     logInteraction("shapeaverager", "undo", null, null, null);
     undoPreview("Cleaned Forms");
-    removeBoundingBox();
+    removeBoundingBox("Cleaned Forms");
     _cachedSortedPoints = null;
     _cachedClassification = null;
     _cachedLOD = null;
+    _bboxOriginalPoints = null;
     return "undone";
 }
+
+// Backward-compatible alias
+function doUndo() { return doUndoAverage(); }
 
 /**
  * Return bounding box data for the cached sorted points.
@@ -173,7 +193,32 @@ function getBboxData() {
 }
 
 /**
+ * Store original point positions for the preview path.
+ * Must be called once before any applyBboxTransform calls (at bbox drag start).
+ * Returns "ok|pointCount" or "error|message"
+ */
+function storeBboxOriginals() {
+    try {
+        var lyr = app.activeDocument.layers.getByName("Cleaned Forms");
+        var preview = lyr.pathItems.getByName("__preview__");
+        _bboxOriginalPoints = [];
+        for (var i = 0; i < preview.pathPoints.length; i++) {
+            var pp = preview.pathPoints[i];
+            _bboxOriginalPoints.push({
+                anchor: [pp.anchor[0], pp.anchor[1]],
+                left: [pp.leftDirection[0], pp.leftDirection[1]],
+                right: [pp.rightDirection[0], pp.rightDirection[1]]
+            });
+        }
+        return "ok|" + _bboxOriginalPoints.length;
+    } catch (e) {
+        return "error|" + e.message;
+    }
+}
+
+/**
  * Apply an affine transform matrix to the current preview path.
+ * Transforms FROM stored originals to prevent cumulative drift during drag.
  * Matrix form: [a b tx; c d ty; 0 0 1]
  *
  * @param {number} a  - scale/rotate component
@@ -185,23 +230,22 @@ function getBboxData() {
  * @returns {string} "ok" or "error|message"
  */
 function applyBboxTransform(a, b, c, d, tx, ty) {
+    if (!_bboxOriginalPoints) return "error|No originals stored";
     try {
         var lyr = app.activeDocument.layers.getByName("Cleaned Forms");
         var preview = lyr.pathItems.getByName("__preview__");
 
         for (var i = 0; i < preview.pathPoints.length; i++) {
             var pp = preview.pathPoints[i];
+            var orig = _bboxOriginalPoints[i];
 
-            // Transform anchor
-            var ax = pp.anchor[0], ay = pp.anchor[1];
-            pp.anchor = [a * ax + b * ay + tx, c * ax + d * ay + ty];
-
-            // Transform handles
-            var lx = pp.leftDirection[0], ly = pp.leftDirection[1];
-            pp.leftDirection = [a * lx + b * ly + tx, c * lx + d * ly + ty];
-
-            var rx = pp.rightDirection[0], ry = pp.rightDirection[1];
-            pp.rightDirection = [a * rx + b * ry + tx, c * rx + d * ry + ty];
+            // Transform FROM originals, not from current position
+            pp.anchor = [a * orig.anchor[0] + b * orig.anchor[1] + tx,
+                         c * orig.anchor[0] + d * orig.anchor[1] + ty];
+            pp.leftDirection = [a * orig.left[0] + b * orig.left[1] + tx,
+                                c * orig.left[0] + d * orig.left[1] + ty];
+            pp.rightDirection = [a * orig.right[0] + b * orig.right[1] + tx,
+                                 c * orig.right[0] + d * orig.right[1] + ty];
         }
 
         app.redraw();

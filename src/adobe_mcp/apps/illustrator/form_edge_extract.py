@@ -261,6 +261,7 @@ def _extract(
 
     # Save edge mask to disk for debugging
     os.makedirs(OUTPUT_DIR, exist_ok=True)
+    os.chmod(OUTPUT_DIR, 0o700)  # owner-only access
     mask_path = os.path.join(OUTPUT_DIR, "form_edges.png")
     cv2.imwrite(mask_path, form_mask)
 
@@ -389,10 +390,10 @@ def _compare(
 
 
 # ---------------------------------------------------------------------------
-# Surface type label mapping
+# Surface type label mapping — canonical source is surface_classifier.py
 # ---------------------------------------------------------------------------
 
-SURFACE_TYPE_NAMES = {0: "flat", 1: "convex", 2: "concave", 3: "saddle", 4: "cylindrical"}
+from adobe_mcp.apps.illustrator.surface_classifier import SURFACE_TYPE_NAMES
 
 
 # ---------------------------------------------------------------------------
@@ -521,11 +522,18 @@ def _write_sidecar(
 
     os.makedirs(cache_dir, exist_ok=True)
     sidecar_path = os.path.join(cache_dir, f"{doc_name}_normals.json")
+    # Atomic write: write to temp file, then rename — prevents partial reads
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=cache_dir, suffix=".tmp")
     try:
-        with open(sidecar_path, "w") as f:
+        with os.fdopen(tmp_fd, "w") as f:
             json.dump(sidecar, f, indent=2)
+        os.replace(tmp_path, sidecar_path)  # atomic on POSIX
         return sidecar_path
-    except OSError:
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
         return None
 
 
@@ -640,6 +648,13 @@ def _build_cross_contour_jsx(
         }})();
 """)
 
+    # Guard against JSX exceeding Illustrator's ~2MB script size limit
+    MAX_JSX_BYTES = 1_800_000  # leave headroom below 2MB
+    joined_blocks = "".join(path_blocks)
+    while len(joined_blocks.encode("utf-8")) > MAX_JSX_BYTES and path_blocks:
+        path_blocks = path_blocks[:-1]
+        joined_blocks = "".join(path_blocks)
+
     jsx = f"""
 (function() {{
     var doc = app.activeDocument;
@@ -660,7 +675,7 @@ def _build_cross_contour_jsx(
     doc.activeLayer = ccLayer;
 
     var ccPlaced = 0;
-    {"".join(path_blocks)}
+    {joined_blocks}
     ccLayer.locked = true;
 
     return JSON.stringify({{ cross_contours_placed: ccPlaced }});
@@ -914,9 +929,8 @@ def register(mcp):
                 # Write sidecar JSON with per-path surface classification
                 import hashlib
                 try:
-                    img_hash = hashlib.md5(
-                        open(params.image_path, "rb").read()
-                    ).hexdigest()[:12]
+                    with open(params.image_path, "rb") as fh:
+                        img_hash = hashlib.md5(fh.read()).hexdigest()[:12]
                 except Exception:
                     img_hash = "unknown"
 

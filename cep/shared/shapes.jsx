@@ -307,15 +307,13 @@ function _fitArc(pts, confidence) {
         [cx + r * Math.cos(ang1 + sweep), cy + r * Math.sin(ang1 + sweep)]
     ];
 
-    // Cubic bezier arc approximation: handle length for a half-sweep segment
-    // Formula: (4/3) * tan(halfSweep / 2) * radius
-    var halfSweep = sweep / 2;
-    var hLen = (4.0 / 3.0) * Math.tan(halfSweep / 2.0) * r;
+    // Cubic bezier arc: 3 points = 2 segments, each spanning sweep/2.
+    // Handle length per segment of angle theta: (4/3) * tan(theta/4) * radius
+    var segAngle = Math.abs(sweep / 2);
+    var hLen = (4.0 / 3.0) * Math.tan(segAngle / 4.0) * r;
     var sweepSign = (sweep >= 0) ? 1 : -1;
 
-    // Build handles: tangent at angle theta is perpendicular to radius
-    // For CCW sweep: tangent = [-sin(theta), cos(theta)]
-    // For CW sweep: tangent = [sin(theta), -cos(theta)]
+    // Tangent at angle theta perpendicular to radius
     var handles = [];
     var angles = [ang1, angMid, ang1 + sweep];
     for (var i = 0; i < 3; i++) {
@@ -324,10 +322,25 @@ function _fitArc(pts, confidence) {
         var ty = Math.cos(theta) * sweepSign;
 
         var pt = arcPoints[i];
-        handles.push({
-            left:  [pt[0] - tx * hLen, pt[1] - ty * hLen],
-            right: [pt[0] + tx * hLen, pt[1] + ty * hLen]
-        });
+        if (i === 0) {
+            // First point: retract left (incoming) handle, extend right (outgoing)
+            handles.push({
+                left:  [pt[0], pt[1]],
+                right: [pt[0] + tx * hLen, pt[1] + ty * hLen]
+            });
+        } else if (i === 2) {
+            // Last point: extend left (incoming) handle, retract right (outgoing)
+            handles.push({
+                left:  [pt[0] - tx * hLen, pt[1] - ty * hLen],
+                right: [pt[0], pt[1]]
+            });
+        } else {
+            // Middle point: both handles
+            handles.push({
+                left:  [pt[0] - tx * hLen, pt[1] - ty * hLen],
+                right: [pt[0] + tx * hLen, pt[1] + ty * hLen]
+            });
+        }
     }
 
     return {
@@ -459,8 +472,10 @@ function _fitEllipse(pts, confidence) {
     var ev1 = trace / 2 + Math.sqrt(discrim);
     var ev2 = trace / 2 - Math.sqrt(discrim);
 
-    var a = Math.sqrt(Math.max(0, ev1)) * 2;  // semi-major axis
-    var b = Math.sqrt(Math.max(0, ev2)) * 2;  // semi-minor axis
+    // For points on ellipse perimeter: variance = semi_axis^2 / 2
+    // So semi_axis = sqrt(2 * eigenvalue)
+    var a = Math.sqrt(Math.max(0, 2 * ev1));  // semi-major axis
+    var b = Math.sqrt(Math.max(0, 2 * ev2));  // semi-minor axis
 
     var angle;
     if (Math.abs(cxy) > 1e-10) {

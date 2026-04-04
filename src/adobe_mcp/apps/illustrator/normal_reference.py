@@ -184,7 +184,10 @@ class NormalReferenceInput(BaseModel):
         default=ALL_RENDERING_NAMES,
         description=(
             "Which renderings to generate. Options: "
-            "flat_planes, form_lines, curvature, relit, depth_edges."
+            "flat_planes, form_lines, curvature, relit, depth_edges, "
+            "principal_curvatures, surface_type, ridge_valley, silhouette, "
+            "depth_facing, surface_flow, ambient_occlusion, "
+            "form_material_boundaries, cross_contours, line_weight."
         ),
     )
     k_planes: int = Field(

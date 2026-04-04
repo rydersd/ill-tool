@@ -3,6 +3,7 @@
 
 ## Recent
 - 2026-04-04: [Expanded Normal Renderings](concepts/expanded-normal-renderings.md) — Shape operator eigendecomposition → 10 new renderings: principal curvatures, surface type classification, ridge/valley, silhouettes, flow fields, cross-contour guides, auto line weight. Tags: normals, differential-geometry, eigendecomposition
+- 2026-04-04: [Adversarial Review Findings](concepts/adversarial-review-findings.md) — 80+ bugs from 5 hostile agents: eval injection, bezier handle math, sidecar path mismatch, namespace collisions, weak tests. Patterns to prevent recurrence. Tags: review, bugs, security, patterns
 - 2026-04-04: [Smart Merge Architecture](concepts/smart-merge.md) — Form-edge-aware path merging using normal sidecar intelligence. CEP panel with chain merge, preserve handles, color-coded surface coherence preview. Tags: tools, merge, normals, cep
 - 2026-04-04: [Future Tools](concepts/future-tools.md) — Smart Merge, interaction capture for auto-model improvement, bounding box as skew modifier, coordinate robustness, module refactor. Tags: future, tools, ideas
 - 2026-04-03: [Normal Map as Shadow-Free Reference](concepts/normal-map-as-reference.md) — **IMPLEMENTED**: DSINE normals → 5 shadow-free renderings that improve all 245+ tools. 166 tests. Tags: normals, architecture, preprocessing
@@ -38,6 +39,7 @@
 - [Normal Map as Shadow-Free Reference](concepts/normal-map-as-reference.md) — DSINE normals → 15 renderings (5 original + 10 eigendecomposition) as preprocessor for all tools. Tags: normals, architecture
 - [Expanded Normal Renderings](concepts/expanded-normal-renderings.md) — Shape operator eigendecomposition: curvatures, surface types, ridge/valley, silhouettes, flow fields, cross-contours, auto line weight. Tags: normals, differential-geometry
 - [Smart Merge Architecture](concepts/smart-merge.md) — Form-edge-aware path merging with normal sidecar intelligence. Tags: tools, merge, cep
+- [Adversarial Review Findings](concepts/adversarial-review-findings.md) — 80+ bugs from 5 hostile agents, root causes, patterns to prevent recurrence. Tags: review, bugs, patterns
 - [Form Edge Extraction Workflow](concepts/form-edge-extraction-workflow.md) — Ranked tool stack: multi-scale Canny, ink, DSINE form edges, shape averaging. Tags: workflow, edges, normals
 
 ## References

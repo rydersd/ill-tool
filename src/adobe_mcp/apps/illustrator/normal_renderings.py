@@ -20,6 +20,28 @@ import numpy as np
 _curvature_cache: dict = {}
 
 
+def _cache_key(normal_map: np.ndarray) -> tuple:
+    """Content-based cache key — immune to GC address reuse.
+
+    Samples corner, center, and quarter-point values across all three
+    channels for a reliable fingerprint.  Quarter-points avoid the
+    failure mode where corners and center share the same normal (e.g.
+    sphere fixture where out-of-radius corners default to (0,0,1) —
+    same as the flat fixture).
+    """
+    h, w = normal_map.shape[:2]
+    qh, qw = max(h // 4, 0), max(w // 4, 0)
+    samples = (
+        normal_map[0, 0, 0], normal_map[0, 0, 1], normal_map[0, 0, 2],
+        normal_map[h - 1, w - 1, 0], normal_map[h - 1, w - 1, 2],
+        normal_map[h // 2, w // 2, 0], normal_map[h // 2, w // 2, 1],
+        normal_map[qh, qw, 0], normal_map[qh, qw, 1], normal_map[qh, qw, 2],
+        normal_map[h - 1 - qh, w - 1 - qw, 0],
+        normal_map[h - 1 - qh, w - 1 - qw, 1],
+    )
+    return (normal_map.shape, normal_map.dtype.str, samples)
+
+
 def _get_principal_curvatures(normal_map: np.ndarray) -> np.ndarray:
     """Return cached principal curvatures, computing if needed.
 
@@ -32,7 +54,7 @@ def _get_principal_curvatures(normal_map: np.ndarray) -> np.ndarray:
     Returns:
         HxWx3 float32: channel 0 = H (mean), 1 = kappa1 (max), 2 = kappa2 (min).
     """
-    key = id(normal_map)
+    key = _cache_key(normal_map)
     if key not in _curvature_cache:
         _curvature_cache.clear()
         _curvature_cache[key] = principal_curvatures(normal_map)
@@ -640,6 +662,7 @@ def cross_contour_field(
     spacing: int = 20,
     max_length: int = 200,
     min_curvature: float = 0.01,
+    max_contours: int = 100,
 ) -> List[List[List[float]]]:
     """Trace cross-contour streamlines perpendicular to maximum curvature.
 
@@ -652,6 +675,8 @@ def cross_contour_field(
         spacing: Pixel distance between seed points.
         max_length: Maximum streamline length in pixels.
         min_curvature: Minimum curvature magnitude to seed / continue tracing.
+        max_contours: Maximum number of streamlines to return.  When exceeded,
+            the longest polylines are kept and shorter ones are discarded.
 
     Returns:
         List of polylines; each polyline is a list of [x, y] pixel coordinates.
@@ -755,6 +780,11 @@ def cross_contour_field(
             line = list(reversed(backward)) + [[float(gx), float(gy)]] + forward
             if len(line) >= 2:
                 polylines.append(line)
+
+    # Limit to max_contours — keep the longest polylines
+    if max_contours and len(polylines) > max_contours:
+        polylines.sort(key=len, reverse=True)
+        polylines = polylines[:max_contours]
 
     return polylines
 

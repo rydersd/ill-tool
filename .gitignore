@@ -62,3 +62,6 @@ reference/
 # Relay operation cache (append-only logs, snapshots)
 .cache/
 tests/fixtures/*.png
+
+# CEP debug flags (auto-generated, not for version control)
+cep/*/.debug

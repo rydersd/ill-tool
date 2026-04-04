@@ -145,8 +145,8 @@ function undoPreview(layerName) {
  * @param {number} padding - extra padding around box
  * @returns {PathItem}
  */
-function drawBoundingBox(cx, cy, w, h, angle, padding) {
-    var lyr = ensureLayer("Cleaned Forms");
+function drawBoundingBox(cx, cy, w, h, angle, padding, layerName) {
+    var lyr = ensureLayer(layerName || "Cleaned Forms");
 
     // Remove existing
     try {
@@ -199,11 +199,11 @@ function drawBoundingBox(cx, cy, w, h, angle, padding) {
 /**
  * Remove the bounding box guide.
  */
-function removeBoundingBox() {
+function removeBoundingBox(layerName) {
     try {
         var doc = app.activeDocument;
-        // Check both possible layers
-        var layerNames = ["Cleaned Forms", "Refined Forms"];
+        // Check specified layer, or both possible layers as fallback
+        var layerNames = layerName ? [layerName] : ["Cleaned Forms", "Refined Forms"];
         for (var i = 0; i < layerNames.length; i++) {
             try {
                 var lyr = doc.layers.getByName(layerNames[i]);

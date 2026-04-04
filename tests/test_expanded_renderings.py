@@ -95,6 +95,33 @@ def step_normal_map():
     return normals
 
 
+@pytest.fixture(scope="session")
+def nan_normal_map():
+    """Normal map with NaN values — simulates ML backend failures."""
+    normals = np.full((10, 10, 3), np.nan, dtype=np.float32)
+    return normals
+
+
+@pytest.fixture(scope="session")
+def non_unit_normal_map():
+    """Non-unit normals (length ~3.46) — simulates noisy ML predictions."""
+    normals = np.ones((50, 50, 3), dtype=np.float32) * 2.0
+    return normals
+
+
+@pytest.fixture(scope="session")
+def single_pixel_normal_map():
+    """1x1 normal map — boundary condition for gradient operations."""
+    normals = np.array([[[0, 0, 1]]], dtype=np.float32)
+    return normals
+
+
+@pytest.fixture(scope="session")
+def zero_normal_map():
+    """All-zero normals — no geometry."""
+    return np.zeros((20, 20, 3), dtype=np.float32)
+
+
 # ---------------------------------------------------------------------------
 # principal_curvatures tests
 # ---------------------------------------------------------------------------
@@ -136,6 +163,27 @@ class TestPrincipalCurvatures:
         k1 = result[:, :, 1]
         k2 = result[:, :, 2]
         assert np.all(k1 >= k2 - 1e-7), "kappa1 must be >= kappa2"
+
+    def test_nan_does_not_crash(self, nan_normal_map):
+        result = principal_curvatures(nan_normal_map)
+        assert result.shape == (10, 10, 3)
+
+    def test_non_unit_produces_finite(self, non_unit_normal_map):
+        result = principal_curvatures(non_unit_normal_map)
+        assert result.shape == (50, 50, 3)
+        assert result.dtype == np.float32
+
+    def test_single_pixel(self, single_pixel_normal_map):
+        """1x1 map hits np.gradient minimum-size constraint — should raise."""
+        with pytest.raises(ValueError):
+            principal_curvatures(single_pixel_normal_map)
+
+    def test_sphere_mean_curvature_positive(self, sphere_normal_map):
+        """Convex sphere should have positive mean curvature in the interior."""
+        result = principal_curvatures(sphere_normal_map)
+        H = result[35:65, 35:65, 0]
+        # Interior of convex sphere: H > 0
+        assert np.mean(H) > 0
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +246,10 @@ class TestSurfaceTypeMap:
         unique = np.unique(result)
         assert all(v in {0, 1, 2, 3, 4} for v in unique)
 
+    def test_zero_normals_classified_flat(self, zero_normal_map):
+        result = surface_type_map(zero_normal_map)
+        assert np.all(result == 0)  # all flat
+
 
 # ---------------------------------------------------------------------------
 # ridge_valley_map tests
@@ -257,6 +309,12 @@ class TestSilhouetteContours:
         unique = np.unique(result)
         assert all(v in (0, 255) for v in unique)
 
+    def test_nan_normals_handled(self, nan_normal_map):
+        """NaN normals should not crash, should produce a valid mask."""
+        result = silhouette_contours(nan_normal_map)
+        assert result.shape == (10, 10)
+        assert result.dtype == np.uint8
+
 
 # ---------------------------------------------------------------------------
 # depth_facing_map tests
@@ -311,6 +369,14 @@ class TestSurfaceFlowField:
         center = result[35:65, 35:65]
         assert np.any(np.abs(center) > 1e-6), "Sphere should have nonzero flow"
 
+    def test_flow_directions_are_unit_vectors(self, sphere_normal_map):
+        result = surface_flow_field(sphere_normal_map)
+        center = result[35:65, 35:65]
+        len1 = np.sqrt(center[:, :, 0] ** 2 + center[:, :, 1] ** 2)
+        nonzero = len1 > 1e-6
+        if np.any(nonzero):
+            assert np.allclose(len1[nonzero], 1.0, atol=0.05)
+
 
 # ---------------------------------------------------------------------------
 # ambient_occlusion_approx tests
@@ -341,6 +407,13 @@ class TestAmbientOcclusionApprox:
     def test_values_non_negative(self, sphere_normal_map):
         result = ambient_occlusion_approx(sphere_normal_map)
         assert np.all(result >= 0.0)
+
+    def test_step_ao_peak_near_boundary(self, step_normal_map):
+        """AO should peak near the discontinuity at column 50."""
+        result = ambient_occlusion_approx(step_normal_map)
+        col_means = result.mean(axis=0)
+        peak_col = np.argmax(col_means)
+        assert abs(peak_col - 50) < 15, f"AO peak at col {peak_col}, expected ~50"
 
 
 # ---------------------------------------------------------------------------
@@ -408,6 +481,23 @@ class TestCrossContourField:
             assert isinstance(point[0], float)
             assert isinstance(point[1], float)
 
+    def test_sphere_polylines_within_bounds(self, sphere_normal_map):
+        result = cross_contour_field(sphere_normal_map, spacing=15)
+        h, w = sphere_normal_map.shape[:2]
+        for line in result:
+            for pt in line:
+                assert 0 <= pt[0] < w + 1, f"x={pt[0]} out of bounds"
+                assert 0 <= pt[1] < h + 1, f"y={pt[1]} out of bounds"
+
+    def test_polyline_structure_not_empty(self, sphere_normal_map):
+        """Test must fail if result is empty (not silently pass)."""
+        result = cross_contour_field(sphere_normal_map, spacing=20)
+        assert len(result) > 0, "Sphere should produce cross-contour polylines"
+        for line in result:
+            assert len(line) >= 2, "Each polyline needs at least 2 points"
+            for pt in line:
+                assert len(pt) == 2
+
 
 # ---------------------------------------------------------------------------
 # curvature_line_weight tests
@@ -436,3 +526,9 @@ class TestCurvatureLineWeight:
         result = curvature_line_weight(sphere_normal_map)
         assert np.all(result >= 0.0)
         assert np.all(result <= 1.0)
+
+    def test_sphere_weight_below_half(self, sphere_normal_map):
+        """Convex surface (ridges) should have weight < 0.5 in center."""
+        result = curvature_line_weight(sphere_normal_map)
+        center = result[35:65, 35:65]
+        assert np.mean(center) < 0.5

@@ -385,8 +385,23 @@ function weldPoints(ptsA, ptsB, endpointA, endpointB, preserveHandles) {
     var a = ptsA.slice(0);
     var b = ptsB.slice(0);
 
-    if (endpointA === "start") a.reverse();
-    if (endpointB === "end") b.reverse();
+    if (endpointA === "start") {
+        a.reverse();
+        // Reversing path direction swaps left/right handle semantics
+        for (var ri = 0; ri < a.length; ri++) {
+            var tmp = a[ri].left;
+            a[ri].left = a[ri].right;
+            a[ri].right = tmp;
+        }
+    }
+    if (endpointB === "end") {
+        b.reverse();
+        for (var rj = 0; rj < b.length; rj++) {
+            var tmp2 = b[rj].left;
+            b[rj].left = b[rj].right;
+            b[rj].right = tmp2;
+        }
+    }
 
     // Junction: last of a meets first of b
     var juncA = a[a.length - 1];

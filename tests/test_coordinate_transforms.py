@@ -346,3 +346,23 @@ class TestScaleAspectRatio:
         # offset_y = 1000 - (1000 - 500) / 2 = 1000 - 250 = 750
         ctx = TransformContext(0, 1000, 500, 0, 100, 100)
         assert ctx.offset_y == pytest.approx(750.0, abs=EPS)
+
+
+# ---------------------------------------------------------------------------
+# 10. Zero-artboard edge case
+# ---------------------------------------------------------------------------
+
+
+class TestZeroArtboard:
+    def test_zero_artboard_does_not_crash(self):
+        ctx = TransformContext(0, 0, 0, 0, 100, 100)
+        result = pixel_to_ai(50, 50, ctx)
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+
+    def test_subpixel_round_trip(self):
+        ctx = TransformContext(0, 792, 612, 0, 100, 100)
+        ai = pixel_to_ai(50.3, 75.7, ctx)
+        back = ai_to_pixel(*ai, ctx)
+        assert abs(back[0] - 50.3) < 0.01
+        assert abs(back[1] - 75.7) < 0.01
