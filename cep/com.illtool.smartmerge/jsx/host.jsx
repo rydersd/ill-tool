@@ -27,9 +27,11 @@ var _SM_SHARED = (function() {
         var panelName = "com.illtool.smartmerge";
         var candidate = new Folder(cepBase + "/" + panelName);
         if (candidate.exists) {
-            var resolved = candidate.fsName;
-            var sharedDir2 = new Folder(new Folder(resolved).parent.fsName + "/shared");
-            if (sharedDir2.exists) return sharedDir2.fsName + "/";
+            var resolved = candidate.resolve();
+            if (resolved) {
+                var sharedDir2 = new Folder(new Folder(resolved.fsName).parent.fsName + "/shared");
+                if (sharedDir2.exists) return sharedDir2.fsName + "/";
+            }
         }
     } catch (e2) {}
     return "";
