@@ -10,7 +10,7 @@
 
 // Include shared libraries
 // Derive shared library path from this script's location
-var _SHARED = (function() {
+var _SM_SHARED = (function() {
     try {
         var thisFile = new File($.fileName);
         var jsxDir = thisFile.parent;
@@ -19,23 +19,28 @@ var _SHARED = (function() {
         var sharedDir = new Folder(cepDir.fsName + "/shared");
         if (sharedDir.exists) return sharedDir.fsName + "/";
     } catch (e) { /* $.fileName empty or parent traversal failed */ }
-    return "/Users/ryders/Developer/GitHub/ill_tool/cep/shared/";
+    // Fallback: try relative from known CEP install location
+    try {
+        var f = new File($.fileName);
+        return f.parent.parent.parent.fsName + "/shared/";
+    } catch(e2) {}
+    return "";
 })();
-$.evalFile(_SHARED + "json_es3.jsx");
-$.evalFile(_SHARED + "logging.jsx");
-$.evalFile(_SHARED + "math2d.jsx");
-$.evalFile(_SHARED + "geometry.jsx");
-$.evalFile(_SHARED + "shapes.jsx");
-$.evalFile(_SHARED + "pathutils.jsx");
-$.evalFile(_SHARED + "ui.jsx");
+$.evalFile(_SM_SHARED + "json_es3.jsx");
+$.evalFile(_SM_SHARED + "logging.jsx");
+$.evalFile(_SM_SHARED + "math2d.jsx");
+$.evalFile(_SM_SHARED + "geometry.jsx");
+$.evalFile(_SM_SHARED + "shapes.jsx");
+$.evalFile(_SM_SHARED + "pathutils.jsx");
+$.evalFile(_SM_SHARED + "ui.jsx");
 
 // Module-level cache
-var _cachedPaths = null;        // from getSelectedPaths()
-var _cachedPairs = null;        // from findEndpointPairs()
-var _cachedNormalScores = null;  // from sidecar
-var _hasSidecar = false;
-var _previewPaths = [];         // references to preview pathItems
-var _lastTolerance = 5;         // tolerance from most recent scan
+var _sm_cachedPaths = null;        // from getSelectedPaths()
+var _sm_cachedPairs = null;        // from findEndpointPairs()
+var _sm_cachedNormalScores = null;  // from sidecar
+var _sm_hasSidecar = false;
+var _sm_previewPaths = [];         // references to preview pathItems
+var _sm_lastTolerance = 5;         // tolerance from most recent scan
 
 // JSON parsing now provided by json_es3.jsx (jsonParse function)
 
@@ -45,9 +50,9 @@ var _lastTolerance = 5;         // tolerance from most recent scan
  *
  * Returns "found|pathCount" or "notfound"
  */
-function loadSidecar() {
-    _cachedNormalScores = null;
-    _hasSidecar = false;
+function sm_loadSidecar() {
+    _sm_cachedNormalScores = null;
+    _sm_hasSidecar = false;
 
     var doc;
     try { doc = app.activeDocument; } catch (e) { return "notfound"; }
@@ -90,14 +95,14 @@ function loadSidecar() {
             var data = jsonParse(content);
             if (!data || !data.paths) continue;
 
-            _cachedNormalScores = {};
+            _sm_cachedNormalScores = {};
             for (var j = 0; j < data.paths.length; j++) {
                 var p = data.paths[j];
                 if (p.name) {
-                    _cachedNormalScores[p.name] = p.dominant_surface || "";
+                    _sm_cachedNormalScores[p.name] = p.dominant_surface || "";
                 }
             }
-            _hasSidecar = true;
+            _sm_hasSidecar = true;
             return "found|" + data.paths.length;
         } catch (e) {
             continue;
@@ -111,7 +116,7 @@ function loadSidecar() {
  * Clean up orphaned merge preview paths left from a previous session or crash.
  * Called on panel load. Returns the count of removed items as a string.
  */
-function cleanupOrphans() {
+function sm_cleanupOrphans() {
     try {
         var lyr = app.activeDocument.layers.getByName("Merge Preview");
         var toRemove = [];
@@ -133,26 +138,26 @@ function cleanupOrphans() {
  * Returns pipe-delimited: "pairCount|pathCount|sameSurface|crossSurface"
  * On error: "error|message"
  */
-function scanEndpoints(tolerance, useFormAware) {
-    _cachedPaths = getSelectedPaths();
-    if (_cachedPaths.length < 2) return "error|Need at least 2 open paths selected";
+function sm_scanEndpoints(tolerance, useFormAware) {
+    _sm_cachedPaths = getSelectedPaths();
+    if (_sm_cachedPaths.length < 2) return "error|Need at least 2 open paths selected";
 
-    _lastTolerance = tolerance;
-    var normalScores = (useFormAware && _hasSidecar) ? _cachedNormalScores : null;
-    _cachedPairs = findEndpointPairs(_cachedPaths, tolerance, normalScores);
+    _sm_lastTolerance = tolerance;
+    var normalScores = (useFormAware && _sm_hasSidecar) ? _sm_cachedNormalScores : null;
+    _sm_cachedPairs = findEndpointPairs(_sm_cachedPaths, tolerance, normalScores);
 
-    if (_cachedPairs.length === 0) {
-        return "0|" + _cachedPaths.length + "|0|0";
+    if (_sm_cachedPairs.length === 0) {
+        return "0|" + _sm_cachedPaths.length + "|0|0";
     }
 
     // Count same-surface vs cross-surface pairs
     var sameSurface = 0;
     var crossSurface = 0;
     if (normalScores) {
-        for (var i = 0; i < _cachedPairs.length; i++) {
-            var pair = _cachedPairs[i];
-            var typeA = normalScores[_cachedPaths[pair.idxA].name] || "";
-            var typeB = normalScores[_cachedPaths[pair.idxB].name] || "";
+        for (var i = 0; i < _sm_cachedPairs.length; i++) {
+            var pair = _sm_cachedPairs[i];
+            var typeA = normalScores[_sm_cachedPaths[pair.idxA].name] || "";
+            var typeB = normalScores[_sm_cachedPaths[pair.idxB].name] || "";
             if (typeA !== "" && typeB !== "" && typeA === typeB) {
                 sameSurface++;
             } else {
@@ -162,10 +167,10 @@ function scanEndpoints(tolerance, useFormAware) {
     }
 
     logInteraction("smartmerge", "scan", null,
-        {pairCount: _cachedPairs.length, pathCount: _cachedPaths.length},
+        {pairCount: _sm_cachedPairs.length, pathCount: _sm_cachedPaths.length},
         {tolerance: tolerance, formAware: useFormAware});
 
-    return _cachedPairs.length + "|" + _cachedPaths.length + "|" + sameSurface + "|" + crossSurface;
+    return _sm_cachedPairs.length + "|" + _sm_cachedPaths.length + "|" + sameSurface + "|" + crossSurface;
 }
 
 /**
@@ -174,19 +179,19 @@ function scanEndpoints(tolerance, useFormAware) {
  *
  * Returns "ok|previewCount" or "error|message"
  */
-function previewMerge() {
-    if (!_cachedPairs || _cachedPairs.length === 0) return "error|No pairs to preview";
+function sm_previewMerge() {
+    if (!_sm_cachedPairs || _sm_cachedPairs.length === 0) return "error|No pairs to preview";
 
     // Clean any existing previews
-    _cleanPreviews();
+    _sm_cleanPreviews();
 
     var lyr = ensureLayer("Merge Preview");
-    _previewPaths = [];
+    _sm_previewPaths = [];
 
-    for (var i = 0; i < _cachedPairs.length; i++) {
-        var pair = _cachedPairs[i];
-        var pathA = _cachedPaths[pair.idxA];
-        var pathB = _cachedPaths[pair.idxB];
+    for (var i = 0; i < _sm_cachedPairs.length; i++) {
+        var pair = _sm_cachedPairs[i];
+        var pathA = _sm_cachedPaths[pair.idxA];
+        var pathB = _sm_cachedPaths[pair.idxB];
 
         // Get endpoints for the preview line
         var ptA = (pair.endA === "end")
@@ -201,9 +206,9 @@ function previewMerge() {
         //   cross-surface: dark orange, long-short dashes (visually distinct for colorblind users)
         var strokeColor;
         var strokeDashes;
-        if (_hasSidecar && _cachedNormalScores) {
-            var tA = _cachedNormalScores[pathA.name] || "";
-            var tB = _cachedNormalScores[pathB.name] || "";
+        if (_sm_hasSidecar && _sm_cachedNormalScores) {
+            var tA = _sm_cachedNormalScores[pathA.name] || "";
+            var tB = _sm_cachedNormalScores[pathB.name] || "";
             if (tA !== "" && tB !== "" && tA === tB) {
                 strokeColor = [60, 180, 60];    // green — same surface
                 strokeDashes = [4, 4];          // even dashes
@@ -224,11 +229,11 @@ function previewMerge() {
             strokeWidth: 1.5,
             strokeDashes: strokeDashes
         });
-        _previewPaths.push(preview);
+        _sm_previewPaths.push(preview);
     }
 
     app.redraw();
-    return "ok|" + _previewPaths.length;
+    return "ok|" + _sm_previewPaths.length;
 }
 
 /**
@@ -238,11 +243,11 @@ function previewMerge() {
  * @param {boolean} preserveHandles - if true, keep original handles at junction
  * Returns "merged|count" or "error|message"
  */
-function executeMerge(chainMerge, preserveHandles) {
-    if (!_cachedPairs || _cachedPairs.length === 0) return "error|No pairs to merge";
-    if (!_cachedPaths) return "error|No cached paths";
+function sm_executeMerge(chainMerge, preserveHandles) {
+    if (!_sm_cachedPairs || _sm_cachedPairs.length === 0) return "error|No pairs to merge";
+    if (!_sm_cachedPaths) return "error|No cached paths";
 
-    _cleanPreviews();
+    _sm_cleanPreviews();
 
     var doc;
     try { doc = app.activeDocument; } catch (e) { return "error|No document"; }
@@ -265,16 +270,16 @@ function executeMerge(chainMerge, preserveHandles) {
     // Attach _ref to cached paths on the first iteration so lookups
     // don't fall through to the positional pathItems fallback (which
     // could mis-index if the arrays ever diverge).
-    for (var ci = 0; ci < _cachedPaths.length; ci++) {
+    for (var ci = 0; ci < _sm_cachedPaths.length; ci++) {
         if (ci < pathItems.length) {
-            _cachedPaths[ci]._ref = pathItems[ci];
+            _sm_cachedPaths[ci]._ref = pathItems[ci];
         }
     }
 
     while (iterations < maxIterations) {
         if (iterations > 0) {
             // Re-scan for new pairs among remaining paths
-            _cachedPaths = [];
+            _sm_cachedPaths = [];
             for (var r = 0; r < pathItems.length; r++) {
                 try {
                     var pi = pathItems[r];
@@ -287,7 +292,7 @@ function executeMerge(chainMerge, preserveHandles) {
                             right: [pp.rightDirection[0], pp.rightDirection[1]]
                         });
                     }
-                    _cachedPaths.push({
+                    _sm_cachedPaths.push({
                         name: pi.name,
                         closed: false,
                         index: r,
@@ -299,28 +304,28 @@ function executeMerge(chainMerge, preserveHandles) {
                 }
             }
 
-            var normalScores = _hasSidecar ? _cachedNormalScores : null;
-            _cachedPairs = findEndpointPairs(_cachedPaths, _lastTolerance, normalScores);
+            var normalScores = _sm_hasSidecar ? _sm_cachedNormalScores : null;
+            _sm_cachedPairs = findEndpointPairs(_sm_cachedPaths, _sm_lastTolerance, normalScores);
         }
 
-        if (!_cachedPairs || _cachedPairs.length === 0) break;
+        if (!_sm_cachedPairs || _sm_cachedPairs.length === 0) break;
 
         // Process each pair
         var indicesToRemove = [];
         var newItems = [];
 
-        for (var p = 0; p < _cachedPairs.length; p++) {
-            var pair = _cachedPairs[p];
+        for (var p = 0; p < _sm_cachedPairs.length; p++) {
+            var pair = _sm_cachedPairs[p];
             var merged = weldPoints(
-                _cachedPaths[pair.idxA].points,
-                _cachedPaths[pair.idxB].points,
+                _sm_cachedPaths[pair.idxA].points,
+                _sm_cachedPaths[pair.idxB].points,
                 pair.endA,
                 pair.endB,
                 preserveHandles
             );
 
             // Get the layer from one of the source paths
-            var srcItem = _cachedPaths[pair.idxA]._ref || pathItems[pair.idxA];
+            var srcItem = _sm_cachedPaths[pair.idxA]._ref || pathItems[pair.idxA];
             var targetLayer;
             try {
                 targetLayer = srcItem.layer;
@@ -351,7 +356,7 @@ function executeMerge(chainMerge, preserveHandles) {
             if (removed[idx]) continue;
             removed[idx] = true;
             try {
-                var item = _cachedPaths[idx]._ref || pathItems[idx];
+                var item = _sm_cachedPaths[idx]._ref || pathItems[idx];
                 item.remove();
             } catch (e) {}
         }
@@ -366,17 +371,17 @@ function executeMerge(chainMerge, preserveHandles) {
         }
         pathItems = newPathItems;
 
-        totalMerged += _cachedPairs.length;
+        totalMerged += _sm_cachedPairs.length;
         iterations++;
     }
 
     logInteraction("smartmerge", "merge", null,
         {mergedCount: totalMerged, chainMerge: chainMerge, preserveHandles: preserveHandles},
-        {hasSidecar: _hasSidecar});
+        {hasSidecar: _sm_hasSidecar});
 
     // Clear caches
-    _cachedPaths = null;
-    _cachedPairs = null;
+    _sm_cachedPaths = null;
+    _sm_cachedPairs = null;
 
     app.redraw();
     return "merged|" + totalMerged;
@@ -386,45 +391,45 @@ function executeMerge(chainMerge, preserveHandles) {
  * Update the merge radius and re-scan.
  * Returns same format as scanEndpoints.
  */
-function updateRadius(tolerance, useFormAware) {
-    if (!_cachedPaths) return "error|Run scan first";
-    _lastTolerance = tolerance;
-    var normalScores = (useFormAware && _hasSidecar) ? _cachedNormalScores : null;
-    _cachedPairs = findEndpointPairs(_cachedPaths, tolerance, normalScores);
+function sm_updateRadius(tolerance, useFormAware) {
+    if (!_sm_cachedPaths) return "error|Run scan first";
+    _sm_lastTolerance = tolerance;
+    var normalScores = (useFormAware && _sm_hasSidecar) ? _sm_cachedNormalScores : null;
+    _sm_cachedPairs = findEndpointPairs(_sm_cachedPaths, tolerance, normalScores);
 
     var sameSurface = 0;
     var crossSurface = 0;
     if (normalScores) {
-        for (var i = 0; i < _cachedPairs.length; i++) {
-            var pair = _cachedPairs[i];
-            var tA = normalScores[_cachedPaths[pair.idxA].name] || "";
-            var tB = normalScores[_cachedPaths[pair.idxB].name] || "";
+        for (var i = 0; i < _sm_cachedPairs.length; i++) {
+            var pair = _sm_cachedPairs[i];
+            var tA = normalScores[_sm_cachedPaths[pair.idxA].name] || "";
+            var tB = normalScores[_sm_cachedPaths[pair.idxB].name] || "";
             if (tA !== "" && tB !== "" && tA === tB) sameSurface++;
             else crossSurface++;
         }
     }
 
-    return _cachedPairs.length + "|" + _cachedPaths.length + "|" + sameSurface + "|" + crossSurface;
+    return _sm_cachedPairs.length + "|" + _sm_cachedPaths.length + "|" + sameSurface + "|" + crossSurface;
 }
 
 /**
  * Remove preview lines and clear state.
  * Returns "undone"
  */
-function doUndoMerge() {
-    _cleanPreviews();
-    // Keep _cachedPaths and _cachedPairs so user can re-preview or merge
+function sm_doUndoMerge() {
+    _sm_cleanPreviews();
+    // Keep _sm_cachedPaths and _sm_cachedPairs so user can re-preview or merge
     app.redraw();
     return "undone";
 }
 
 // ── Internal helpers ─────────────────────────────────────────────
 
-function _cleanPreviews() {
-    for (var i = _previewPaths.length - 1; i >= 0; i--) {
-        try { _previewPaths[i].remove(); } catch (e) {}
+function _sm_cleanPreviews() {
+    for (var i = _sm_previewPaths.length - 1; i >= 0; i--) {
+        try { _sm_previewPaths[i].remove(); } catch (e) {}
     }
-    _previewPaths = [];
+    _sm_previewPaths = [];
 
     // Also clean orphaned preview paths
     try {

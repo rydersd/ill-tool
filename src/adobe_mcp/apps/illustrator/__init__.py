@@ -1,4 +1,4 @@
-"""Illustrator tools -- 197 modules organized into 14 subdirectories.
+"""Illustrator tools -- 200 modules organized into 15 subdirectories.
 
 Registration chain:
     apps/__init__.py -> illustrator/__init__.py -> {subdir}/__init__.py -> module.register(mcp)
@@ -18,6 +18,7 @@ Subdirectories:
     threed/         15 tools  -- reconstruction, mesh, depth, camera, multiview
     ui/             10 tools  -- action lines, camera, color, thumbnails, transitions
     utility/        16 tools  -- correction, debugging, symmetry, templates, bridges
+    ml_backends/     3 files  -- normal estimation, edge classification, informative drawing (no MCP tools)
 
 Root-level shared modules (not moved):
     models.py, server.py, coordinate_transforms.py, path_validation.py,

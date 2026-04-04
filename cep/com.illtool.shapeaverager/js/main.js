@@ -105,9 +105,18 @@ function initSliders() {
     tensionSlider.addEventListener("change", function () {
         if (hasPreview) {
             var tension = parseInt(this.value, 10) / 600;  // map 0-100 to 0-0.167
-            csInterface.evalScript("resmooth(" + tension + ")", function () {});
+            csInterface.evalScript("sa_resmooth(" + tension + ")", function () {});
         }
     });
+
+    // Distance slider — update value display
+    var distanceSlider = document.getElementById("distanceSlider");
+    var distanceDisplay = document.getElementById("distanceValue");
+    if (distanceSlider && distanceDisplay) {
+        distanceSlider.addEventListener("input", function () {
+            distanceDisplay.textContent = this.value;
+        });
+    }
 }
 
 // ── Core Actions ───────────────────────────────────────────────────
@@ -120,7 +129,7 @@ function initSliders() {
 function averageSelection() {
     updateStatus("processing");
 
-    csInterface.evalScript("averageSelectedAnchors()", function (result) {
+    csInterface.evalScript("sa_averageSelectedAnchors()", function (result) {
         if (!result || result.indexOf("error") === 0) {
             updateStatus("ready");
             var errMsg = result ? result.replace(/^error\|/, "") : "No selection";
@@ -153,10 +162,13 @@ function averageSelection() {
 /**
  * Force reclassify as a specific shape type.
  */
+var VALID_SHAPES = ["line","arc","lshape","rectangle","scurve","ellipse","freeform"];
+
 function reclassify(shapeType) {
+    if (VALID_SHAPES.indexOf(shapeType) === -1) return;
     updateStatus("processing");
 
-    csInterface.evalScript("reclassifyAs('" + shapeType + "')", function (result) {
+    csInterface.evalScript("sa_reclassifyAs('" + shapeType + "')", function (result) {
         if (!result || result.indexOf("error") === 0) {
             updateStatus(hasPreview ? "preview" : "ready");
             return;
@@ -177,7 +189,7 @@ function onSimplifySlider() {
     if (!hasPreview) return;
     var val = parseInt(document.getElementById("simplifySlider").value, 10);
 
-    csInterface.evalScript("applyLODLevel(" + val + ")", function (result) {
+    csInterface.evalScript("sa_applyLODLevel(" + val + ")", function (result) {
         if (result && result.indexOf("error") !== 0) {
             document.getElementById("simplifiedCount").textContent = result;
         }
@@ -202,7 +214,7 @@ function updateDetected(shapeName, confidence) {
  * Confirm the preview path — solidify, enter isolation mode, clear state.
  */
 function confirmPreview() {
-    csInterface.evalScript("doConfirm()", function (result) {
+    csInterface.evalScript("sa_doConfirm()", function (result) {
         if (result && result.indexOf("confirmed") === 0) {
             hasPreview = false;
             document.getElementById("btnConfirm").disabled = true;
@@ -224,7 +236,7 @@ function confirmPreview() {
  * Undo the preview path — remove and clear state.
  */
 function undoPreview() {
-    csInterface.evalScript("doUndoAverage()", function (result) {
+    csInterface.evalScript("sa_doUndoAverage()", function (result) {
         if (result === "undone") {
             hasPreview = false;
             document.getElementById("btnConfirm").disabled = true;
@@ -268,7 +280,7 @@ function exitIsolation() {
  * points), re-run averaging on the current selection for live feedback.
  */
 function pollSelection() {
-    csInterface.evalScript("getSelectionInfo()", function (result) {
+    csInterface.evalScript("sa_getSelectionInfo()", function (result) {
         if (!result || result === "EvalScript Error" || result === "undefined") {
             document.getElementById("selectionInfo").textContent = "No selection";
             return;
@@ -289,11 +301,16 @@ function pollSelection() {
         // Live re-average when preview is active and selection changes
         if (hasPreview && result !== lastSelectionState) {
             lastSelectionState = result;
-            csInterface.evalScript("averageSelectedAnchors()", function (avgResult) {
+            csInterface.evalScript("sa_averageSelectedAnchors()", function (avgResult) {
                 if (avgResult && avgResult.indexOf("error") !== 0) {
                     var avgParts = avgResult.split("|");
                     updateDetected(avgParts[0], parseFloat(avgParts[1]));
                     highlightShape(avgParts[0]);
+                    // Update lastSelectionState to the post-average selection
+                    // so the next poll doesn't see this as a change
+                    csInterface.evalScript("sa_getSelectionInfo()", function(newSel) {
+                        if (newSel) lastSelectionState = newSel;
+                    });
                 }
             });
         }
@@ -322,6 +339,193 @@ csInterface.addEventListener("com.adobe.csxs.events.WindowVisibilityChanged", fu
     }
 });
 
+// ── Clustering Mode ──────────────────────────────────────────────
+
+var clusterData = null;        // cluster results from server
+var selectedCluster = -1;      // currently selected cluster index
+
+/**
+ * Initiate clustering: read all extraction layers, send to MCP, display results.
+ * The MCP tool adobe_ai_cluster_paths handles Python-side clustering;
+ * for now we read paths and pass the JSON to sa_colorClusters in ExtendScript.
+ */
+function clusterLayers() {
+    updateStatus("processing");
+
+    csInterface.evalScript("sa_readLayerPaths(null)", function(pathJson) {
+        if (!pathJson || pathJson.indexOf("error") === 0) {
+            updateStatus("ready");
+            return;
+        }
+
+        // Store pathJson for MCP bridge — the MCP tool will accept this data,
+        // run Python clustering, and return cluster assignments.
+        // For now, the panel stores the path data and waits for cluster results
+        // to be provided via displayClusters() from the MCP response handler.
+        var threshold = parseInt(document.getElementById("distanceSlider").value, 10);
+
+        // Show the clustering section with a "waiting for results" message
+        var section = document.getElementById("clusterSection");
+        section.style.display = "block";
+        var readout = document.getElementById("clusterReadout");
+        readout.textContent = "Read paths. Awaiting cluster results (threshold: " + threshold + "pt)...";
+
+        // Store path data on the section element for MCP access
+        section.setAttribute("data-path-json", pathJson);
+        section.setAttribute("data-threshold", threshold);
+
+        updateStatus("ready");
+    });
+}
+
+/**
+ * Display cluster results in the panel.
+ * Called when the MCP tool returns cluster assignments as JSON.
+ * Format: [{cluster_id, identity_key, path_names, color, stroke_width,
+ *           dashed, confidence_tier, member_count}]
+ */
+function displayClusters(clusters) {
+    clusterData = clusters;
+    var section = document.getElementById("clusterSection");
+    section.style.display = "block";
+
+    // Summary readout
+    var high = 0, med = 0, low = 0, totalPaths = 0;
+    for (var i = 0; i < clusters.length; i++) {
+        totalPaths += clusters[i].member_count;
+        if (clusters[i].confidence_tier === "high") high++;
+        else if (clusters[i].confidence_tier === "medium") med++;
+        else low++;
+    }
+
+    var readout = document.getElementById("clusterReadout");
+    readout.textContent = clusters.length + " edge groups from " + totalPaths + " paths";
+    if (high > 0 || med > 0 || low > 0) {
+        readout.textContent += "\n" + high + " high, " + med + " medium, " + low + " low confidence";
+    }
+
+    // Cluster list
+    var list = document.getElementById("clusterList");
+    list.innerHTML = "";
+    for (var c = 0; c < clusters.length; c++) {
+        var cl = clusters[c];
+        var row = document.createElement("div");
+        row.className = "cluster-row";
+        row.setAttribute("data-index", c);
+
+        // Color swatch
+        var swatch = document.createElement("span");
+        swatch.className = "cluster-swatch";
+        swatch.style.backgroundColor = "rgb(" + cl.color[0] + "," + cl.color[1] + "," + cl.color[2] + ")";
+        row.appendChild(swatch);
+
+        // Identity label
+        var label = document.createElement("span");
+        label.className = "cluster-label";
+        label.textContent = (cl.identity_key || "unknown").replace(/\|/g, " / ");
+        row.appendChild(label);
+
+        // Confidence badge
+        var badge = document.createElement("span");
+        badge.className = "cluster-badge " + cl.confidence_tier;
+        badge.textContent = cl.confidence_tier.charAt(0).toUpperCase();
+        row.appendChild(badge);
+
+        // Path count
+        var count = document.createElement("span");
+        count.className = "cluster-count";
+        count.textContent = cl.member_count + "p";
+        row.appendChild(count);
+
+        // Click to select
+        (function(index) {
+            row.addEventListener("click", function() {
+                selectCluster(index);
+            });
+        })(c);
+
+        list.appendChild(row);
+    }
+
+    document.getElementById("btnAcceptAll").disabled = false;
+
+    // Apply color-coding on the artboard
+    var clusterJson = JSON.stringify(clusters);
+    csInterface.evalScript("sa_colorClusters('" + clusterJson.replace(/\\/g, "\\\\").replace(/'/g, "\\'") + "')", function(result) {
+        if (result && result.indexOf("colored") === 0) {
+            var coloredCount = result.split("|")[1];
+            readout.textContent += " — " + coloredCount + " paths colored";
+        }
+    });
+}
+
+function selectCluster(index) {
+    selectedCluster = index;
+    // Highlight in list
+    var rows = document.querySelectorAll(".cluster-row");
+    for (var i = 0; i < rows.length; i++) {
+        rows[i].classList.remove("selected");
+    }
+    if (rows[index]) rows[index].classList.add("selected");
+}
+
+function acceptAllClusters() {
+    updateStatus("processing");
+    csInterface.evalScript("sa_acceptAllClusters()", function(result) {
+        if (result && result.indexOf("accepted_all") === 0) {
+            var count = result.split("|")[1];
+            document.getElementById("clusterReadout").textContent = "Accepted " + count + " clusters";
+            document.getElementById("clusterList").innerHTML = "";
+            document.getElementById("btnAcceptAll").disabled = true;
+            clusterData = null;
+            selectedCluster = -1;
+        }
+        updateStatus("ready");
+    });
+}
+
+function acceptSelectedCluster() {
+    if (selectedCluster < 0 || !clusterData) return;
+    updateStatus("processing");
+    csInterface.evalScript("sa_acceptCluster(" + selectedCluster + ")", function(result) {
+        if (result && result.indexOf("accepted") === 0) {
+            // Refresh display
+            if (clusterData) {
+                clusterData.splice(selectedCluster, 1);
+                displayClusters(clusterData);
+            }
+            selectedCluster = -1;
+        }
+        updateStatus("ready");
+    });
+}
+
+function rejectSelectedCluster() {
+    if (selectedCluster < 0 || !clusterData) return;
+    updateStatus("processing");
+    csInterface.evalScript("sa_rejectCluster(" + selectedCluster + ")", function(result) {
+        if (result && result.indexOf("rejected") === 0) {
+            if (clusterData) {
+                clusterData.splice(selectedCluster, 1);
+                displayClusters(clusterData);
+            }
+            selectedCluster = -1;
+        }
+        updateStatus("ready");
+    });
+}
+
+function exitClusterMode() {
+    csInterface.evalScript("sa_exitClusterMode()", function() {
+        document.getElementById("clusterSection").style.display = "none";
+        document.getElementById("clusterReadout").textContent = "";
+        document.getElementById("clusterList").innerHTML = "";
+        document.getElementById("btnAcceptAll").disabled = true;
+        clusterData = null;
+        selectedCluster = -1;
+    });
+}
+
 // ── Keyboard Shortcuts ────────────────────────────────────────────
 
 document.addEventListener("keydown", function(e) {
@@ -345,6 +549,30 @@ document.addEventListener("keydown", function(e) {
             reclassify(shapes[idx]);
         }
     }
+
+    // Clustering shortcuts (only when cluster section is visible)
+    var clusterVisible = document.getElementById("clusterSection").style.display !== "none";
+    if (clusterVisible) {
+        if (e.key === "a" || e.key === "A") {
+            acceptAllClusters();
+        } else if ((e.key === "Delete" || e.key === "Backspace") && selectedCluster >= 0) {
+            rejectSelectedCluster();
+        } else if (e.key === "[") {
+            var distSlider = document.getElementById("distanceSlider");
+            var val = parseInt(distSlider.value, 10);
+            if (val > parseInt(distSlider.min, 10)) {
+                distSlider.value = val - 1;
+                document.getElementById("distanceValue").textContent = val - 1;
+            }
+        } else if (e.key === "]") {
+            var distSlider2 = document.getElementById("distanceSlider");
+            var val2 = parseInt(distSlider2.value, 10);
+            if (val2 < parseInt(distSlider2.max, 10)) {
+                distSlider2.value = val2 + 1;
+                document.getElementById("distanceValue").textContent = val2 + 1;
+            }
+        }
+    }
 });
 
 // ── Help Toggle ───────────────────────────────────────────────────
@@ -359,7 +587,7 @@ function toggleHelp() {
 (function init() {
     initShapeButtons();
     initSliders();
-    csInterface.evalScript("cleanupOrphans()", function() {});
+    csInterface.evalScript("sa_cleanupOrphans()", function() {});
     startSelectionPolling();
     // Run an immediate poll so selection shows right away
     pollSelection();

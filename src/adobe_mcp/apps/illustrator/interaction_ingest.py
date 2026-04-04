@@ -46,6 +46,36 @@ def _compute_reclassification_stats(entries: list[dict]) -> dict:
     }
 
 
+def _compute_cluster_stats(entries: list[dict]) -> dict:
+    """Compute clustering statistics from interaction log entries.
+
+    Looks for entries whose action starts with "cluster_" (e.g.
+    cluster_accept, cluster_split, cluster_reject, cluster_accept_all,
+    cluster_slider_adjust).
+
+    Args:
+        entries: List of interaction log entry dicts.
+
+    Returns:
+        Dict with count and breakdown by action. Returns {"count": 0}
+        when no cluster events are found.
+    """
+    cluster_entries = [e for e in entries if e.get("action", "").startswith("cluster_")]
+
+    if not cluster_entries:
+        return {"count": 0}
+
+    by_action: dict[str, int] = {}
+    for e in cluster_entries:
+        action = e.get("action", "unknown")
+        by_action[action] = by_action.get(action, 0) + 1
+
+    return {
+        "count": len(cluster_entries),
+        "by_action": by_action,
+    }
+
+
 def register(mcp):
     """Register the adobe_ai_interaction_ingest tool."""
 
@@ -102,6 +132,7 @@ def register(mcp):
             by_action[action] = by_action.get(action, 0) + 1
 
         reclassification_stats = _compute_reclassification_stats(all_entries)
+        cluster_stats = _compute_cluster_stats(all_entries)
 
         by_panel: dict[str, int] = {}
         for entry in all_entries:
@@ -114,4 +145,5 @@ def register(mcp):
             "by_action": by_action,
             "by_panel": by_panel,
             "reclassification_stats": reclassification_stats,
+            "cluster_stats": cluster_stats,
         }, indent=2)

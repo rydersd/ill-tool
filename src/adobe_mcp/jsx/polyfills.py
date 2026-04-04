@@ -25,7 +25,7 @@ if (typeof JSON === "undefined") {
             var parts = [];
             for (var k in obj) {
                 if (obj.hasOwnProperty(k)) {
-                    parts.push('"' + k + '":' + JSON.stringify(obj[k], replacer, space));
+                    parts.push('"' + k.replace(/\\/g,'\\\\').replace(/"/g,'\\"').replace(/\n/g,'\\n').replace(/\r/g,'\\r').replace(/\t/g,'\\t') + '":' + JSON.stringify(obj[k], replacer, space));
                 }
             }
             return "{" + parts.join(",") + "}";
@@ -78,7 +78,7 @@ if (typeof JSON === "undefined") {
         function pBool() { if (str.substr(pos, 4) === "true") { pos += 4; return true; } if (str.substr(pos, 5) === "false") { pos += 5; return false; } err("expected bool"); }
         function pNull() { if (str.substr(pos, 4) === "null") { pos += 4; return null; } err("expected null"); }
         function pArr() { pos++; var a = []; ws(); if (pk() === ']') { pos++; return a; } while (true) { a.push(pVal()); ws(); var c = nx(); if (c === ']') return a; if (c !== ',') err("expected ',' or ']'"); } }
-        function pObj() { pos++; var o = {}; ws(); if (pk() === '}') { pos++; return o; } while (true) { var k = pStr(); ws(); if (nx() !== ':') err("expected ':'"); o[k] = pVal(); ws(); var c = nx(); if (c === '}') return o; if (c !== ',') err("expected ',' or '}'"); } }
+        function pObj() { pos++; var o = {}; ws(); if (pk() === '}') { pos++; return o; } while (true) { var k = pStr(); ws(); if (nx() !== ':') err("expected ':'"); if (k === "__proto__" || k === "constructor" || k === "prototype") { pVal(); } else { o[k] = pVal(); } ws(); var c = nx(); if (c === '}') return o; if (c !== ',') err("expected ',' or '}'"); } }
         return function(s) { pos = 0; str = s; try { return pVal(); } catch(e) { return null; } };
     })();
 }

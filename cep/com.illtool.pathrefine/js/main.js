@@ -45,7 +45,7 @@ function updateStatus(state) {
  * Runs on a 500ms interval so the panel shows live feedback.
  */
 function pollSelection() {
-    csInterface.evalScript("getSelectionInfo()", function (result) {
+    csInterface.evalScript("pr_getSelectionInfo()", function (result) {
         if (!result || result === "EvalScript Error" || result === "undefined") {
             document.getElementById("anchorCount").textContent = "0";
             document.getElementById("pathCount").textContent = "0";
@@ -85,7 +85,7 @@ function detachSelection() {
     updateStatus("processing");
 
     var padding = parseInt(document.getElementById("paddingSlider").value, 10) || 5;
-    csInterface.evalScript("detachAndPrecompute(" + padding + ")", function (result) {
+    csInterface.evalScript("pr_detachAndPrecompute(" + padding + ")", function (result) {
         if (!result || result.indexOf("error") === 0) {
             updateStatus("ready");
             var errMsg = result ? result.replace(/^error\|/, "") : "No selection";
@@ -127,7 +127,7 @@ function requestSimplify() {
 
     var sliderVal = parseInt(document.getElementById("simplifySlider").value, 10);
 
-    csInterface.evalScript("applySimplifyLevel(" + sliderVal + ")", function (result) {
+    csInterface.evalScript("pr_applySimplifyLevel(" + sliderVal + ")", function (result) {
         if (result && result.indexOf("error") !== 0) {
             document.getElementById("simplifiedCount").textContent = result;
         }
@@ -140,7 +140,7 @@ function requestSimplify() {
 function applyDetached() {
     updateStatus("processing");
 
-    csInterface.evalScript("doApply()", function (result) {
+    csInterface.evalScript("pr_doApply()", function (result) {
         if (result && result.indexOf("applied") === 0) {
             resetPanelState();
             updateStatus("ready");
@@ -155,7 +155,7 @@ function resetDetached() {
     if (!hasDetached) return;
     updateStatus("processing");
 
-    csInterface.evalScript("doReset()", function (result) {
+    csInterface.evalScript("pr_doReset()", function (result) {
         if (result && result.indexOf("reset") === 0) {
             var parts = result.split("|");
             var pointCount = parseInt(parts[1], 10) || originalPointCount;
@@ -176,7 +176,7 @@ function resetDetached() {
 function undoDetach() {
     updateStatus("processing");
 
-    csInterface.evalScript("doUndoDetach()", function (result) {
+    csInterface.evalScript("pr_doUndoDetach()", function (result) {
         if (result === "undone") {
             resetPanelState();
             updateStatus("ready");
@@ -270,7 +270,7 @@ document.addEventListener("keydown", function(e) {
 
 (function init() {
     initControls();
-    csInterface.evalScript("cleanupOrphans()", function() {});
+    csInterface.evalScript("pr_cleanupOrphans()", function() {});
     startSelectionPolling();
     updateStatus("ready");
 })();

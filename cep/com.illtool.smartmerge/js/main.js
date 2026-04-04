@@ -35,10 +35,10 @@ function updateReadout(text) {
 
 function init() {
     // Clean up orphaned preview paths from previous sessions
-    csInterface.evalScript("cleanupOrphans()", function() {});
+    csInterface.evalScript("sm_cleanupOrphans()", function() {});
 
     // Try loading normal sidecar
-    csInterface.evalScript("loadSidecar()", function (result) {
+    csInterface.evalScript("sm_loadSidecar()", function (result) {
         if (result && result.indexOf("found") === 0) {
             hasSidecar = true;
             var parts = result.split("|");
@@ -64,7 +64,7 @@ function init() {
             var radius = parseFloat(this.value);
             var formAware = document.getElementById("chkFormAware").checked;
             csInterface.evalScript(
-                "updateRadius(" + radius + ", " + formAware + ")",
+                "sm_updateRadius(" + radius + ", " + formAware + ")",
                 function (result) {
                     if (result && result.indexOf("error") !== 0) {
                         displayScanResult(result);
@@ -87,11 +87,11 @@ function doScan() {
     var formAware = document.getElementById("chkFormAware").checked;
 
     csInterface.evalScript(
-        "scanEndpoints(" + radius + ", " + formAware + ")",
+        "sm_scanEndpoints(" + radius + ", " + formAware + ")",
         function (result) {
             if (!result || result.indexOf("error") === 0) {
                 updateStatus("ready");
-                updateReadout(result || "No selection");
+                updateReadout(escapeHtml(result || "No selection"));
                 return;
             }
 
@@ -129,7 +129,7 @@ function displayScanResult(result) {
 function doPreview() {
     updateStatus("processing");
 
-    csInterface.evalScript("previewMerge()", function (result) {
+    csInterface.evalScript("sm_previewMerge()", function (result) {
         if (result && result.indexOf("ok") === 0) {
             hasPreview = true;
             updateStatus("preview");
@@ -155,7 +155,7 @@ function doMerge() {
     var preserve = document.getElementById("chkPreserveHandles").checked;
 
     csInterface.evalScript(
-        "executeMerge(" + chain + ", " + preserve + ")",
+        "sm_executeMerge(" + chain + ", " + preserve + ")",
         function (result) {
             if (result && result.indexOf("merged") === 0) {
                 var merged = result.split("|")[1];
@@ -173,7 +173,7 @@ function doMerge() {
 // ── Undo ───────────────────────────────────────────────────────────
 
 function doUndoMerge() {
-    csInterface.evalScript("doUndoMerge()", function (result) {
+    csInterface.evalScript("sm_doUndoMerge()", function (result) {
         if (result === "undone") {
             hasPreview = false;
             // Keep scan readout and Merge button enabled so user can re-preview or merge

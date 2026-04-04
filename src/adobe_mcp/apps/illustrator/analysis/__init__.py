@@ -25,3 +25,4 @@ def register_analysis_tools(mcp):
     from adobe_mcp.apps.illustrator.analysis.color_region_cluster import register as _r; _safe_register(_r, mcp)
     from adobe_mcp.apps.illustrator.analysis.landmark_axis import register as _r; _safe_register(_r, mcp)
     from adobe_mcp.apps.illustrator.analysis.object_classifier import register as _r; _safe_register(_r, mcp)
+    from adobe_mcp.apps.illustrator.analysis.edge_clustering import register as _r; _safe_register(_r, mcp)

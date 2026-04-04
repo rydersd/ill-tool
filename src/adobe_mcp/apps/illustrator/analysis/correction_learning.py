@@ -1,6 +1,6 @@
 """Correction learning from user feedback.
 
-Two correction systems:
+Three correction systems:
 
 1. **Label corrections** — Records user corrections to CV analysis part
    labels and uses shape context to suggest labels for future similar parts.
@@ -11,12 +11,18 @@ Two correction systems:
    correct position, the delta is stored per character. After corrections on 2+
    figures, the system pre-applies predicted corrections to future DWPose output.
    Storage: /tmp/ai_rigs/{character_name}_corrections.json
+
+3. **Cluster threshold corrections** — Records accept/split/reject/slider_adjust
+   feedback from the edge clustering UI. Learns per-identity thresholds so
+   clustering improves over time. Tracks convergence via Accept All ratio.
+   Storage: ~/Library/Application Support/illtool/cluster_corrections.json
 """
 
 import json
 import math
 import os
 import statistics
+from pathlib import Path
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -617,6 +623,198 @@ def compare_corrections(
     return {
         "per_joint": per_joint,
         "summary": summary,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Cluster Threshold Learning
+# ---------------------------------------------------------------------------
+
+CLUSTER_CORRECTIONS_PATH = Path(os.path.expanduser("~")) / "Library" / "Application Support" / "illtool" / "cluster_corrections.json"
+
+
+def record_cluster_correction(
+    action: str,  # "accept", "reject", "split", "accept_all", "slider_adjust"
+    identity_key: str,  # boundary signature identity key
+    context: dict,  # {member_count, source_layers, distance_threshold, confidence, quality_score}
+) -> dict:
+    """Record a clustering correction for learning.
+
+    Stores to CLUSTER_CORRECTIONS_PATH as a JSON array.
+    Each entry: {action, identity_key, context, timestamp}
+
+    Args:
+        action: One of "accept", "reject", "split", "accept_all", "slider_adjust".
+        identity_key: Boundary signature identity key for the cluster.
+        context: Dict with cluster metadata (member_count, source_layers,
+            distance_threshold, confidence, quality_score).
+
+    Returns:
+        The stored correction entry dict.
+    """
+    from datetime import datetime
+
+    entry = {
+        "action": action,
+        "identity_key": identity_key,
+        "context": context,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+    # Load existing corrections
+    corrections: list[dict] = []
+    if CLUSTER_CORRECTIONS_PATH.exists():
+        try:
+            corrections = json.loads(CLUSTER_CORRECTIONS_PATH.read_text())
+        except (json.JSONDecodeError, OSError):
+            corrections = []
+
+    # Append and cap at 2000 entries
+    corrections.append(entry)
+    if len(corrections) > 2000:
+        corrections = corrections[-2000:]
+
+    # Ensure parent dir exists
+    CLUSTER_CORRECTIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CLUSTER_CORRECTIONS_PATH.write_text(json.dumps(corrections, indent=2))
+
+    return entry
+
+
+def learn_cluster_thresholds(
+    corrections: list | None = None,  # if None, loads from CLUSTER_CORRECTIONS_PATH
+) -> dict:
+    """Compute learned thresholds per boundary identity type.
+
+    Logic:
+    - Accept at distance D -> threshold for this identity can stay >= D
+    - Split at distance D -> threshold for this identity should be < D
+    - Reject -> this identity at this confidence should be filtered
+    - slider_adjust -> user's preferred threshold for this session
+
+    Args:
+        corrections: Optional list of correction dicts. If None, loads from
+            CLUSTER_CORRECTIONS_PATH on disk.
+
+    Returns:
+        Dict keyed by identity_key, each value a dict with:
+        - suggested_threshold: float
+        - reject_below_confidence: float
+        - sample_count: int
+        - accept_rate: float
+    """
+    if corrections is None:
+        if not CLUSTER_CORRECTIONS_PATH.exists():
+            return {}
+        try:
+            corrections = json.loads(CLUSTER_CORRECTIONS_PATH.read_text())
+        except (json.JSONDecodeError, OSError):
+            return {}
+
+    # Group corrections by identity_key
+    by_identity: dict[str, list[dict]] = {}
+    for c in corrections:
+        key = c.get("identity_key", "unknown")
+        by_identity.setdefault(key, []).append(c)
+
+    thresholds: dict[str, dict] = {}
+    for identity_key, entries in by_identity.items():
+        accepts = [e for e in entries if e["action"] in ("accept", "accept_all")]
+        splits = [e for e in entries if e["action"] == "split"]
+        rejects = [e for e in entries if e["action"] == "reject"]
+        adjusts = [e for e in entries if e["action"] == "slider_adjust"]
+
+        total = len(accepts) + len(splits) + len(rejects)
+        if total == 0:
+            continue
+
+        accept_rate = len(accepts) / total
+
+        # Compute suggested threshold
+        # Accept distances are lower bounds, split distances are upper bounds
+        accept_distances = [e["context"].get("distance_threshold", 8.0) for e in accepts]
+        split_distances = [e["context"].get("distance_threshold", 8.0) for e in splits]
+        adjust_distances = [e["context"].get("distance_threshold", 8.0) for e in adjusts]
+
+        suggested = 8.0  # default
+        if accept_distances:
+            # Use the median accept distance as baseline
+            sorted_accepts = sorted(accept_distances)
+            suggested = sorted_accepts[len(sorted_accepts) // 2]
+        if split_distances:
+            # Split means threshold was too loose — cap below minimum split distance
+            min_split = min(split_distances)
+            suggested = min(suggested, min_split * 0.8)  # 20% margin below split point
+        if adjust_distances:
+            # User-adjusted slider is the strongest signal
+            suggested = adjust_distances[-1]  # most recent adjustment
+
+        # Compute reject confidence threshold
+        reject_confidences = [e["context"].get("confidence", 0.0) for e in rejects]
+        reject_below = 0.0
+        if reject_confidences:
+            reject_below = max(reject_confidences)  # reject at or below max rejected confidence
+
+        thresholds[identity_key] = {
+            "suggested_threshold": round(suggested, 1),
+            "reject_below_confidence": round(reject_below, 2),
+            "sample_count": total,
+            "accept_rate": round(accept_rate, 2),
+        }
+
+    return thresholds
+
+
+def get_convergence_signal(corrections: list | None = None) -> dict:
+    """Track Accept All accuracy over time.
+
+    Groups corrections by date (proxy for session) and computes the
+    accept ratio per session. Convergence is reached when the last 3
+    sessions all have an accept rate above 0.95.
+
+    Args:
+        corrections: Optional list of correction dicts. If None, loads from
+            CLUSTER_CORRECTIONS_PATH on disk.
+
+    Returns:
+        Dict with:
+        - accept_all_ratio: float (most recent session ratio)
+        - total_sessions: int
+        - converged: bool (True if ratio > 0.95 for last 3 sessions)
+        - recent_ratios: list (last 5 session ratios)
+    """
+    empty = {"accept_all_ratio": 0.0, "total_sessions": 0, "converged": False, "recent_ratios": []}
+
+    if corrections is None:
+        if not CLUSTER_CORRECTIONS_PATH.exists():
+            return empty
+        try:
+            corrections = json.loads(CLUSTER_CORRECTIONS_PATH.read_text())
+        except (json.JSONDecodeError, OSError):
+            return empty
+
+    # Group by date (proxy for session)
+    sessions: dict[str, list[dict]] = {}
+    for c in corrections:
+        date = c.get("timestamp", "")[:10]  # YYYY-MM-DD
+        sessions.setdefault(date, []).append(c)
+
+    ratios: list[float] = []
+    for date in sorted(sessions.keys()):
+        entries = sessions[date]
+        accepts = sum(1 for e in entries if e["action"] in ("accept", "accept_all"))
+        total = sum(1 for e in entries if e["action"] in ("accept", "accept_all", "split", "reject"))
+        if total > 0:
+            ratios.append(accepts / total)
+
+    recent = ratios[-5:] if ratios else []
+    converged = len(recent) >= 3 and all(r > 0.95 for r in recent[-3:])
+
+    return {
+        "accept_all_ratio": recent[-1] if recent else 0.0,
+        "total_sessions": len(sessions),
+        "converged": converged,
+        "recent_ratios": [round(r, 2) for r in recent],
     }
 
 
