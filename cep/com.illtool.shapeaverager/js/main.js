@@ -758,11 +758,37 @@ var bboxUI = (function () {
     };
 })();
 
+// ── Keyboard Shortcuts ────────────────────────────────────────────
+
+document.addEventListener("keydown", function(e) {
+    // Don't trigger when typing in inputs
+    if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+
+    if (e.key === "Enter") {
+        if (hasPreview) confirmPreview();
+        else averageSelection();
+    } else if (e.key === "Escape") {
+        if (document.getElementById("isolationHint").style.display !== "none") {
+            exitIsolation();
+        } else {
+            undoPreview();
+        }
+    } else if (hasPreview && e.key >= "1" && e.key <= "7") {
+        var shapes = ["line", "arc", "lshape", "rectangle", "scurve", "ellipse", "freeform"];
+        var idx = parseInt(e.key) - 1;
+        if (idx < shapes.length) {
+            highlightShape(shapes[idx]);
+            reclassify(shapes[idx]);
+        }
+    }
+});
+
 // ── Initialization ─────────────────────────────────────────────────
 
 (function init() {
     initShapeButtons();
     initSliders();
     bboxUI.init();
+    csInterface.evalScript("cleanupOrphans()", function() {});
     updateStatus("ready");
 })();

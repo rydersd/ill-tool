@@ -19,13 +19,13 @@
     <!-- Shape type buttons -->
     <div class="section">
         <div class="shape-buttons">
-            <button class="shape-btn" data-shape="line"      title="Line">/</button>
-            <button class="shape-btn" data-shape="arc"       title="Arc">&#8256;</button>
-            <button class="shape-btn" data-shape="lshape"    title="L-Shape">&#8991;</button>
-            <button class="shape-btn" data-shape="rectangle" title="Rectangle">&#9633;</button>
-            <button class="shape-btn" data-shape="scurve"    title="S-Curve">~</button>
-            <button class="shape-btn" data-shape="ellipse"   title="Ellipse">&#9675;</button>
-            <button class="shape-btn" data-shape="freeform"  title="Freeform">&#8779;</button>
+            <button class="shape-btn" data-shape="line" title="Line"><span class="shape-icon">&mdash;</span><span class="shape-label">Line</span></button>
+            <button class="shape-btn" data-shape="arc" title="Arc"><span class="shape-icon">&#8256;</span><span class="shape-label">Arc</span></button>
+            <button class="shape-btn" data-shape="lshape" title="L-Shape"><span class="shape-icon">&angrt;</span><span class="shape-label">L</span></button>
+            <button class="shape-btn" data-shape="rectangle" title="Rectangle"><span class="shape-icon">&#9645;</span><span class="shape-label">Rect</span></button>
+            <button class="shape-btn" data-shape="scurve" title="S-Curve"><span class="shape-icon">&#8767;</span><span class="shape-label">S</span></button>
+            <button class="shape-btn" data-shape="ellipse" title="Ellipse"><span class="shape-icon">&#9675;</span><span class="shape-label">Ellipse</span></button>
+            <button class="shape-btn" data-shape="freeform" title="Freeform"><span class="shape-icon">&#8775;</span><span class="shape-label">Free</span></button>
         </div>
         <div id="detected" class="detected-readout">No selection</div>
     </div>
@@ -66,7 +66,7 @@
 
     <!-- First-use guidance -->
     <div id="helpText" class="section">
-        <div style="color: #999; font-size: 10px; line-height: 1.6;">
+        <div style="color: #aaa; font-size: 10px; line-height: 1.6;">
             <strong>Getting started:</strong><br>
             1. Use Direct Selection (A) or Lasso to select anchor points<br>
             2. Click <em>Average Selection</em> to classify and preview<br>
@@ -79,16 +79,16 @@
     <div class="section">
         <div class="action-buttons">
             <div class="btn-row">
-                <button class="btn btn-primary" id="btnAverage" onclick="averageSelection()">
+                <button class="btn btn-primary" id="btnAverage" onclick="averageSelection()" title="Classify and preview averaged path from selected anchors">
                     Average Selection
                 </button>
-                <button class="btn btn-primary" id="btnConfirm" onclick="confirmPreview()" disabled>
+                <button class="btn btn-primary" id="btnConfirm" onclick="confirmPreview()" disabled title="Place the cleaned path and enter isolation mode (Enter)">
                     Confirm
                 </button>
             </div>
             <div class="btn-row">
-                <button class="btn btn-secondary" id="btnUndo" onclick="undoPreview()">
-                    Undo
+                <button class="btn btn-secondary" id="btnUndo" onclick="undoPreview()" title="Remove preview and reset (Esc)">
+                    Cancel
                 </button>
             </div>
         </div>

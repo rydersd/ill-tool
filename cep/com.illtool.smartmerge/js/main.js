@@ -34,6 +34,9 @@ function updateReadout(text) {
 // ── Initialization ─────────────────────────────────────────────────
 
 function init() {
+    // Clean up orphaned preview paths from previous sessions
+    csInterface.evalScript("cleanupOrphans()", function() {});
+
     // Try loading normal sidecar
     csInterface.evalScript("loadSidecar()", function (result) {
         if (result && result.indexOf("found") === 0) {
@@ -189,6 +192,21 @@ function escapeHtml(str) {
     div.appendChild(document.createTextNode(str));
     return div.innerHTML;
 }
+
+// ── Keyboard Shortcuts ────────────────────────────────────────────
+
+document.addEventListener("keydown", function(e) {
+    if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+
+    if (e.key === "Enter" && !document.getElementById("btnMerge").disabled) {
+        doMerge();
+    } else if (e.key === "Escape") {
+        doUndoMerge();
+    } else if (e.key === " ") {
+        e.preventDefault();
+        if (!document.getElementById("btnPreview").disabled) doPreview();
+    }
+});
 
 // ── Start ──────────────────────────────────────────────────────────
 

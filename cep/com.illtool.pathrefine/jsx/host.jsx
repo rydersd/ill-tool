@@ -36,6 +36,26 @@ var _lodCache = null;        // precomputed LOD levels
 var _originalPointCount = 0; // point count before simplification
 
 /**
+ * Clean up orphaned detached paths left from a previous session or crash.
+ * Called on panel load. Returns the count of removed items as a string.
+ */
+function cleanupOrphans() {
+    try {
+        var lyr = app.activeDocument.layers.getByName("Refined Forms");
+        var toRemove = [];
+        for (var i = 0; i < lyr.pathItems.length; i++) {
+            var name = lyr.pathItems[i].name;
+            if (name.indexOf("__detached_") === 0 && name.indexOf("__", 11) > 0) {
+                toRemove.push(lyr.pathItems[i]);
+            }
+        }
+        for (var j = toRemove.length - 1; j >= 0; j--) toRemove[j].remove();
+        if (toRemove.length > 0) app.redraw();
+        return toRemove.length + "";
+    } catch (e) { return "0"; }
+}
+
+/**
  * Get info about the current selection.
  * Returns pipe-delimited: "anchorCount|pathCount"
  */

@@ -212,6 +212,26 @@ function storeBboxOriginals() {
 }
 
 /**
+ * Clean up orphaned preview paths left from a previous session or crash.
+ * Called on panel load. Returns the count of removed items as a string.
+ */
+function cleanupOrphans() {
+    try {
+        var lyr = app.activeDocument.layers.getByName("Cleaned Forms");
+        var toRemove = [];
+        for (var i = 0; i < lyr.pathItems.length; i++) {
+            var name = lyr.pathItems[i].name;
+            if (name === "__preview__" || name === "__bbox_guide__") {
+                toRemove.push(lyr.pathItems[i]);
+            }
+        }
+        for (var j = toRemove.length - 1; j >= 0; j--) toRemove[j].remove();
+        if (toRemove.length > 0) app.redraw();
+        return toRemove.length + "";
+    } catch (e) { return "0"; }
+}
+
+/**
  * Apply an affine transform matrix to the current preview path.
  * Transforms FROM stored originals to prevent cumulative drift during drag.
  * Matrix form: [a b tx; c d ty; 0 0 1]

@@ -244,10 +244,33 @@ function escapeHtml(str) {
     return div.innerHTML;
 }
 
+// ── Panel Visibility Lifecycle ─────────────────────────────────────
+
+csInterface.addEventListener("com.adobe.csxs.events.WindowVisibilityChanged", function(event) {
+    if (event.data === "true") {
+        startSelectionPolling();
+    } else {
+        stopSelectionPolling();
+    }
+});
+
+// ── Keyboard Shortcuts ────────────────────────────────────────────
+
+document.addEventListener("keydown", function(e) {
+    if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+
+    if (e.key === "Enter" && !document.getElementById("btnApply").disabled) {
+        applyDetached();
+    } else if (e.key === "Escape") {
+        undoDetach();
+    }
+});
+
 // ── Initialization ─────────────────────────────────────────────────
 
 (function init() {
     initControls();
+    csInterface.evalScript("cleanupOrphans()", function() {});
     startSelectionPolling();
     updateStatus("ready");
 })();
