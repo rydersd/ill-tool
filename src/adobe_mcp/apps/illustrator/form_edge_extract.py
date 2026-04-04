@@ -23,6 +23,8 @@ import json
 import os
 import tempfile
 import time
+from collections import Counter
+from datetime import datetime, timezone
 from typing import Optional
 
 import cv2
@@ -37,6 +39,14 @@ from adobe_mcp.apps.illustrator.form_edge_pipeline import (
     edge_mask_to_contours,
     extract_form_edges,
     heuristic_form_edges,
+)
+from adobe_mcp.apps.illustrator.normal_renderings import (
+    cross_contour_field,
+    curvature_line_weight,
+    depth_facing_map,
+    principal_curvatures,
+    silhouette_contours,
+    surface_type_map,
 )
 
 
@@ -379,6 +389,287 @@ def _compare(
 
 
 # ---------------------------------------------------------------------------
+# Surface type label mapping
+# ---------------------------------------------------------------------------
+
+SURFACE_TYPE_NAMES = {0: "flat", 1: "convex", 2: "concave", 3: "saddle", 4: "cylindrical"}
+
+
+# ---------------------------------------------------------------------------
+# Normal sidecar generation
+# ---------------------------------------------------------------------------
+
+
+def _compute_path_surface_info(
+    contour: dict,
+    normal_map: np.ndarray,
+    stype_map: np.ndarray,
+    pc_map: np.ndarray,
+    facing_map: np.ndarray,
+    sil_mask: np.ndarray,
+    layer_name: str,
+) -> dict:
+    """Compute surface classification for a single contour path.
+
+    Samples the normal map renderings at each anchor position to build
+    a per-path surface summary.
+
+    Args:
+        contour: Contour dict with "name" and "points" (pixel coords).
+        normal_map: HxWx3 float32 normal map.
+        stype_map: HxW uint8 surface type map (0-4).
+        pc_map: HxWx3 float32 principal curvatures (H, k1, k2).
+        facing_map: HxW float32 depth facing map [0, 1].
+        sil_mask: HxW uint8 silhouette mask (255 = silhouette).
+        layer_name: Layer name for the path.
+
+    Returns:
+        Dict with surface classification fields for the sidecar JSON.
+    """
+    h, w = normal_map.shape[:2]
+    points = contour.get("points", [])
+    if not points:
+        return {
+            "name": contour.get("name", "unknown"),
+            "layer": layer_name,
+            "dominant_surface": "flat",
+            "mean_curvature": 0.0,
+            "is_silhouette": False,
+            "mean_depth_facing": 1.0,
+            "anchor_count": 0,
+        }
+
+    surface_types = []
+    curvatures = []
+    facings = []
+    sil_count = 0
+
+    for pt in points:
+        px = int(round(pt[0]))
+        py = int(round(pt[1]))
+        # Clamp to image bounds
+        px = max(0, min(px, w - 1))
+        py = max(0, min(py, h - 1))
+
+        surface_types.append(int(stype_map[py, px]))
+        curvatures.append(float(pc_map[py, px, 0]))  # H = mean curvature
+        facings.append(float(facing_map[py, px]))
+        if sil_mask[py, px] > 127:
+            sil_count += 1
+
+    # Dominant surface = mode of surface types
+    type_counts = Counter(surface_types)
+    dominant_type_int = type_counts.most_common(1)[0][0]
+    dominant_surface = SURFACE_TYPE_NAMES.get(dominant_type_int, "flat")
+
+    mean_curv = float(np.mean(curvatures)) if curvatures else 0.0
+    mean_facing = float(np.mean(facings)) if facings else 1.0
+    is_silhouette = sil_count > len(points) * 0.5
+
+    return {
+        "name": contour.get("name", "unknown"),
+        "layer": layer_name,
+        "dominant_surface": dominant_surface,
+        "mean_curvature": round(mean_curv, 6),
+        "is_silhouette": is_silhouette,
+        "mean_depth_facing": round(mean_facing, 4),
+        "anchor_count": len(points),
+    }
+
+
+def _write_sidecar(
+    contours: list[dict],
+    normal_map: np.ndarray,
+    image_hash: str,
+    doc_name: str,
+    layer_name: str,
+    cache_dir: str,
+) -> Optional[str]:
+    """Write normal map sidecar JSON with per-path surface classification.
+
+    Args:
+        contours: List of contour dicts with pixel-space points.
+        normal_map: HxWx3 float32 normal map.
+        image_hash: Hash identifier for the source image.
+        doc_name: Document name for the sidecar filename.
+        layer_name: Layer name for path entries.
+        cache_dir: Directory to write the sidecar file.
+
+    Returns:
+        Path to the written sidecar file, or None on failure.
+    """
+    try:
+        stype_map = surface_type_map(normal_map)
+        pc_map = principal_curvatures(normal_map)
+        facing_map = depth_facing_map(normal_map)
+        sil_mask = silhouette_contours(normal_map)
+    except Exception:
+        return None
+
+    path_infos = []
+    for contour in contours:
+        info = _compute_path_surface_info(
+            contour, normal_map, stype_map, pc_map, facing_map, sil_mask, layer_name,
+        )
+        path_infos.append(info)
+
+    sidecar = {
+        "image_hash": image_hash,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "paths": path_infos,
+    }
+
+    os.makedirs(cache_dir, exist_ok=True)
+    sidecar_path = os.path.join(cache_dir, f"{doc_name}_normals.json")
+    try:
+        with open(sidecar_path, "w") as f:
+            json.dump(sidecar, f, indent=2)
+        return sidecar_path
+    except OSError:
+        return None
+
+
+def _sample_line_weight_at_centroid(
+    contour: dict,
+    line_weight_map: np.ndarray,
+    min_weight: float = 0.25,
+    max_weight: float = 2.0,
+) -> float:
+    """Sample curvature line weight at the path centroid.
+
+    Args:
+        contour: Contour dict with "points" (pixel coords).
+        line_weight_map: HxW float32 weight map in [0, 1].
+        min_weight: Minimum stroke weight in points.
+        max_weight: Maximum stroke weight in points.
+
+    Returns:
+        Stroke width in points, mapped from [0, 1] to [min_weight, max_weight].
+    """
+    points = contour.get("points", [])
+    if not points:
+        return (min_weight + max_weight) / 2.0
+
+    h, w = line_weight_map.shape[:2]
+
+    # Compute centroid
+    cx = sum(p[0] for p in points) / len(points)
+    cy = sum(p[1] for p in points) / len(points)
+    px = max(0, min(int(round(cx)), w - 1))
+    py = max(0, min(int(round(cy)), h - 1))
+
+    weight = float(line_weight_map[py, px])
+    return min_weight + weight * (max_weight - min_weight)
+
+
+def _build_cross_contour_jsx(
+    polylines: list,
+    image_size: tuple,
+    artboard_dims: dict,
+) -> str:
+    """Build JSX to place cross-contour streamlines as guide paths.
+
+    Creates a locked "Cross Contours" layer with thin dashed blue paths.
+
+    Args:
+        polylines: List of polylines from cross_contour_field, each a list
+            of [x, y] pixel coordinates.
+        image_size: (width, height) of the source image in pixels.
+        artboard_dims: Dict with left, top, right, bottom artboard bounds.
+
+    Returns:
+        JSX string for execution in Illustrator.
+    """
+    from adobe_mcp.jsx.templates import escape_jsx_string
+
+    if not polylines:
+        return ""
+
+    # Transform pixel coords to AI coords (same logic as contours_to_ai_points)
+    img_w, img_h = image_size
+    if isinstance(artboard_dims, dict):
+        ab_left = artboard_dims.get("left", 0)
+        ab_top = artboard_dims.get("top", 0)
+        ab_right = artboard_dims.get("right", 0)
+        ab_bottom = artboard_dims.get("bottom", 0)
+        ab_w = ab_right - ab_left
+        ab_h = ab_top - ab_bottom
+    else:
+        ab_w, ab_h = artboard_dims
+        ab_left = 0
+        ab_top = ab_h
+
+    if img_w <= 0 or img_h <= 0:
+        return ""
+
+    margin = 0.95
+    scale = min((ab_w * margin) / img_w, (ab_h * margin) / img_h)
+    offset_x = ab_left + (ab_w - img_w * scale) / 2.0
+    offset_y = ab_top - (ab_h - img_h * scale) / 2.0
+
+    # Transform polylines to AI coordinates
+    ai_polylines = []
+    for polyline in polylines:
+        ai_pts = []
+        for pt in polyline:
+            ai_x = pt[0] * scale + offset_x
+            ai_y = offset_y - pt[1] * scale
+            ai_pts.append([round(ai_x, 2), round(ai_y, 2)])
+        if len(ai_pts) >= 2:
+            ai_polylines.append(ai_pts)
+
+    # Build JSX path blocks
+    path_blocks = []
+    for i, pts in enumerate(ai_polylines):
+        pts_json = json.dumps(pts)
+        name = escape_jsx_string(f"cross_contour_{i:03d}")
+        path_blocks.append(f"""
+        (function() {{
+            var path = ccLayer.pathItems.add();
+            path.setEntirePath({pts_json});
+            path.closed = false;
+            path.filled = false;
+            path.stroked = true;
+            path.strokeWidth = 0.25;
+            var blue = new RGBColor();
+            blue.red = 30; blue.green = 60; blue.blue = 180;
+            path.strokeColor = blue;
+            path.strokeDashes = [4, 2];
+            path.name = "{name}";
+            ccPlaced++;
+        }})();
+""")
+
+    jsx = f"""
+(function() {{
+    var doc = app.activeDocument;
+    var ccLayer = null;
+    for (var i = 0; i < doc.layers.length; i++) {{
+        if (doc.layers[i].name === "Cross Contours") {{
+            ccLayer = doc.layers[i];
+            break;
+        }}
+    }}
+    if (!ccLayer) {{
+        ccLayer = doc.layers.add();
+        ccLayer.name = "Cross Contours";
+    }} else {{
+        ccLayer.locked = false;
+        ccLayer.visible = true;
+    }}
+    doc.activeLayer = ccLayer;
+
+    var ccPlaced = 0;
+    {"".join(path_blocks)}
+    ccLayer.locked = true;
+
+    return JSON.stringify({{ cross_contours_placed: ccPlaced }});
+}})();
+"""
+    return jsx
+
+
+# ---------------------------------------------------------------------------
 # JSX builder for path placement
 # ---------------------------------------------------------------------------
 
@@ -387,6 +678,7 @@ def _build_place_jsx(
     contours: list[dict],
     layer_name: str,
     smooth: bool = True,
+    stroke_widths: Optional[dict[str, float]] = None,
 ) -> str:
     """Build JSX to place form edge contours as vector paths in Illustrator.
 
@@ -399,6 +691,8 @@ def _build_place_jsx(
             Points must already be in Illustrator coordinates.
         layer_name: Name for the target Illustrator layer.
         smooth: Whether to set bezier handles for smooth curves.
+        stroke_widths: Optional mapping of contour name to stroke width in
+            points, derived from curvature_line_weight sampling.
 
     Returns:
         JSX string for execution in Illustrator.
@@ -407,6 +701,8 @@ def _build_place_jsx(
 
     escaped_layer = escape_jsx_string(layer_name)
     smooth_js = "true" if smooth else "false"
+    if stroke_widths is None:
+        stroke_widths = {}
 
     # Build per-contour placement blocks
     path_blocks = []
@@ -417,6 +713,8 @@ def _build_place_jsx(
 
         name = escape_jsx_string(contour.get("name", "form_edge"))
         points_json = json.dumps(points)
+        sw = stroke_widths.get(contour.get("name", ""), 1.0)
+        sw = round(sw, 2)
 
         path_blocks.append(f"""
         (function() {{
@@ -425,7 +723,7 @@ def _build_place_jsx(
             path.closed = true;
             path.filled = false;
             path.stroked = true;
-            path.strokeWidth = 1.0;
+            path.strokeWidth = {sw};
             var black = new RGBColor();
             black.red = 40; black.green = 40; black.blue = 40;
             path.strokeColor = black;
@@ -588,8 +886,57 @@ def register(mcp):
             img_size = tuple(extract_result["image_size"])
             ai_contours = contours_to_ai_points(contours, img_size, artboard)
 
-            # Build and execute JSX
-            jsx = _build_place_jsx(ai_contours, params.layer_name, params.smooth)
+            # --- Normal map integration: sidecar, line weight, cross-contours ---
+            normal_map = None
+            sidecar_path = None
+            cross_contours_placed = 0
+            stroke_widths: dict[str, float] = {}
+
+            # Load normal map if the backend saved one
+            nmap_path = extract_result.get("normal_map_path")
+            if nmap_path and os.path.isfile(nmap_path):
+                try:
+                    normal_map = np.load(nmap_path)
+                except Exception:
+                    normal_map = None
+
+            if normal_map is not None:
+                # Compute per-path line weights from curvature
+                try:
+                    lw_map = curvature_line_weight(normal_map)
+                    for contour in contours:
+                        cname = contour.get("name", "")
+                        sw = _sample_line_weight_at_centroid(contour, lw_map)
+                        stroke_widths[cname] = sw
+                except Exception:
+                    pass  # Fall back to default stroke width
+
+                # Write sidecar JSON with per-path surface classification
+                import hashlib
+                try:
+                    img_hash = hashlib.md5(
+                        open(params.image_path, "rb").read()
+                    ).hexdigest()[:12]
+                except Exception:
+                    img_hash = "unknown"
+
+                doc_name = os.path.splitext(
+                    os.path.basename(params.image_path or "doc")
+                )[0]
+
+                sidecar_path = _write_sidecar(
+                    contours=contours,
+                    normal_map=normal_map,
+                    image_hash=img_hash,
+                    doc_name=doc_name,
+                    layer_name=params.layer_name,
+                    cache_dir=OUTPUT_DIR,
+                )
+
+            # Build and execute JSX for contour paths (with line weight)
+            jsx = _build_place_jsx(
+                ai_contours, params.layer_name, params.smooth, stroke_widths,
+            )
             place_result = await _async_run_jsx("illustrator", jsx)
 
             if not place_result["success"]:
@@ -603,7 +950,28 @@ def register(mcp):
             except (json.JSONDecodeError, TypeError):
                 placed = {"raw": place_result["stdout"]}
 
-            return json.dumps({
+            # Place cross-contour guide paths if normal map is available
+            if normal_map is not None:
+                try:
+                    polylines = cross_contour_field(normal_map)
+                    if polylines:
+                        cc_jsx = _build_cross_contour_jsx(
+                            polylines, img_size, artboard,
+                        )
+                        if cc_jsx:
+                            cc_result = await _async_run_jsx("illustrator", cc_jsx)
+                            if cc_result["success"]:
+                                try:
+                                    cc_data = json.loads(cc_result["stdout"])
+                                    cross_contours_placed = cc_data.get(
+                                        "cross_contours_placed", 0
+                                    )
+                                except (json.JSONDecodeError, TypeError):
+                                    pass
+                except Exception:
+                    pass  # Cross-contour placement is best-effort
+
+            response = {
                 "paths_placed": placed.get("paths_placed", 0),
                 "paths": placed.get("paths", []),
                 "layer_name": placed.get("layer", params.layer_name),
@@ -612,7 +980,15 @@ def register(mcp):
                 "mask_path": extract_result.get("mask_path"),
                 "image_size": extract_result["image_size"],
                 "timings": extract_result.get("timings"),
-            }, indent=2)
+            }
+            if sidecar_path:
+                response["sidecar_path"] = sidecar_path
+            if cross_contours_placed > 0:
+                response["cross_contours_placed"] = cross_contours_placed
+            if stroke_widths:
+                response["adaptive_line_weight"] = True
+
+            return json.dumps(response, indent=2)
 
         # --- compare ---
         elif action == "compare":

@@ -362,6 +362,14 @@ class AiPathWeldInput(BaseModel):
     result_name: str = Field(default="welded_path", description="Name for welded result")
 
 
+class AiInteractionIngestInput(BaseModel):
+    """Read and analyze CEP panel interaction logs."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    log_dir: str = Field(default="~/Library/Application Support/illtool/interactions", description="Directory containing JSONL log files")
+    panel_name: Optional[str] = Field(default=None, description="Filter by panel name (shapeaverager, pathrefine, smartmerge)")
+    since_date: Optional[str] = Field(default=None, description="Filter events after this ISO date (YYYY-MM-DD)")
+
+
 class AiSnapToGridInput(BaseModel):
     """Snap anchor points to the nearest proportion grid positions."""
     model_config = ConfigDict(str_strip_whitespace=True)

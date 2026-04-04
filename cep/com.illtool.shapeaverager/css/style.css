@@ -1,0 +1,335 @@
+/* ================================================================
+   Shape Averager — Dark theme matching Illustrator UI
+   ================================================================ */
+
+/* ── Reset ──────────────────────────────────────────────────────── */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+/* ── Base ───────────────────────────────────────────────────────── */
+body {
+    background: #323232;
+    color: #e0e0e0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 Helvetica, Arial, sans-serif;
+    font-size: 11px;
+    line-height: 1.4;
+    padding: 10px;
+    overflow-x: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+/* ── Header / Status Bar ────────────────────────────────────────── */
+.header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #444;
+    margin-bottom: 10px;
+}
+
+.header-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: #f0f0f0;
+    letter-spacing: 0.3px;
+}
+
+.status-indicator {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 10px;
+}
+
+.status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    transition: background-color 0.3s ease;
+}
+
+.status-dot.ready     { background: #4caf50; }
+.status-dot.processing {
+    background: #ff9800;
+    animation: pulse 1s ease-in-out infinite;
+}
+.status-dot.preview   { background: #7cb8f0; }
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.35; }
+}
+
+.status-label {
+    color: #999;
+}
+.status-label.ready      { color: #4caf50; }
+.status-label.processing { color: #ff9800; }
+.status-label.preview    { color: #7cb8f0; }
+
+/* ── Section Dividers ───────────────────────────────────────────── */
+.section {
+    margin-bottom: 10px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #3c3c3c;
+}
+
+.section:last-child {
+    border-bottom: none;
+    margin-bottom: 0;
+    padding-bottom: 0;
+}
+
+.section-label {
+    color: #999;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 6px;
+}
+
+/* ── Shape Buttons ──────────────────────────────────────────────── */
+.shape-buttons {
+    display: flex;
+    gap: 3px;
+    flex-wrap: nowrap;
+}
+
+.shape-btn {
+    flex: 1;
+    min-width: 0;
+    height: 32px;
+    background: #4a4a4a;
+    border: 1px solid #555;
+    border-radius: 3px;
+    color: #d0d0d0;
+    font-size: 14px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.shape-btn:hover {
+    background: #5a5a5a;
+    border-color: #666;
+}
+
+.shape-btn.active {
+    background: #3a6ea5;
+    border-color: #4a8ec8;
+    color: #fff;
+}
+
+.shape-btn:active {
+    background: #2d5a8a;
+}
+
+.shape-btn[title]::after {
+    content: none; /* tooltip via native title attr */
+}
+
+/* ── Classification Readout ─────────────────────────────────────── */
+.detected-readout {
+    font-family: "SF Mono", "Fira Code", Consolas, monospace;
+    font-size: 11px;
+    color: #b0b0b0;
+    padding: 4px 0;
+}
+
+.detected-readout .shape-name {
+    color: #7cb8f0;
+    font-weight: 500;
+}
+
+.detected-readout .confidence {
+    color: #999;
+}
+
+/* ── Sliders ────────────────────────────────────────────────────── */
+.slider-group {
+    margin-bottom: 8px;
+}
+
+.slider-group:last-child {
+    margin-bottom: 0;
+}
+
+.slider-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.slider-label {
+    flex: 0 0 110px;
+    font-size: 11px;
+    color: #c0c0c0;
+}
+
+.slider-value {
+    flex: 0 0 28px;
+    text-align: right;
+    font-family: "SF Mono", "Fira Code", Consolas, monospace;
+    font-size: 10px;
+    color: #888;
+}
+
+input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    flex: 1;
+    height: 4px;
+    background: #555;
+    border-radius: 2px;
+    outline: none;
+    cursor: pointer;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #b0b0b0;
+    border: 1px solid #888;
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+}
+
+input[type="range"]::-webkit-slider-thumb:hover {
+    background: #d0d0d0;
+}
+
+input[type="range"]::-webkit-slider-thumb:active {
+    background: #3a6ea5;
+    border-color: #4a8ec8;
+}
+
+/* ── Checkbox ───────────────────────────────────────────────────── */
+.checkbox-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 0;
+}
+
+.checkbox-row input[type="checkbox"] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border: 1px solid #666;
+    border-radius: 2px;
+    background: #3a3a3a;
+    cursor: pointer;
+    position: relative;
+    flex-shrink: 0;
+}
+
+.checkbox-row input[type="checkbox"]:checked {
+    background: #3a6ea5;
+    border-color: #4a8ec8;
+}
+
+.checkbox-row input[type="checkbox"]:checked::after {
+    content: "";
+    position: absolute;
+    left: 3px;
+    top: 1px;
+    width: 5px;
+    height: 8px;
+    border: solid #fff;
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
+}
+
+.checkbox-row label {
+    font-size: 11px;
+    color: #c0c0c0;
+    cursor: pointer;
+}
+
+/* ── Action Buttons ─────────────────────────────────────────────── */
+.action-buttons {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.btn-row {
+    display: flex;
+    gap: 6px;
+}
+
+.btn {
+    flex: 1;
+    height: 28px;
+    border: 1px solid #555;
+    border-radius: 3px;
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.btn-primary {
+    background: #3a6ea5;
+    border-color: #4a8ec8;
+    color: #fff;
+}
+
+.btn-primary:hover {
+    background: #4580b8;
+}
+
+.btn-primary:active {
+    background: #2d5a8a;
+}
+
+.btn-secondary {
+    background: #4a4a4a;
+    border-color: #555;
+    color: #d0d0d0;
+}
+
+.btn-secondary:hover {
+    background: #5a5a5a;
+}
+
+.btn-secondary:active {
+    background: #3a3a3a;
+}
+
+.btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+/* ── Point count display ───────────────────────────────────────── */
+.point-count-display {
+    font-family: "SF Mono", "Fira Code", Consolas, monospace;
+    font-size: 10px;
+    color: #888;
+    padding: 2px 0 0 0;
+}
+
+.point-count-display .simplified-count {
+    color: #4caf50;
+    font-weight: 500;
+}
+
+/* ── Scrollbar ──────────────────────────────────────────────────── */
+::-webkit-scrollbar       { width: 4px; }
+::-webkit-scrollbar-track { background: #2a2a2a; }
+::-webkit-scrollbar-thumb { background: #555; border-radius: 2px; }

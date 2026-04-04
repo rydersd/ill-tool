@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Shape Averager</title>
+    <link rel="stylesheet" href="./css/style.css">
+</head>
+<body>
+
+    <!-- Header with status -->
+    <div class="header">
+        <span class="header-title">Shape Averager</span>
+        <div class="status-indicator">
+            <div id="statusDot" class="status-dot ready"></div>
+            <span id="statusLabel" class="status-label ready">ready</span>
+        </div>
+    </div>
+
+    <!-- Shape type buttons -->
+    <div class="section">
+        <div class="shape-buttons">
+            <button class="shape-btn" data-shape="line"      title="Line">/</button>
+            <button class="shape-btn" data-shape="arc"       title="Arc">&#8256;</button>
+            <button class="shape-btn" data-shape="lshape"    title="L-Shape">&#8991;</button>
+            <button class="shape-btn" data-shape="rectangle" title="Rectangle">&#9633;</button>
+            <button class="shape-btn" data-shape="scurve"    title="S-Curve">~</button>
+            <button class="shape-btn" data-shape="ellipse"   title="Ellipse">&#9675;</button>
+            <button class="shape-btn" data-shape="freeform"  title="Freeform">&#8779;</button>
+        </div>
+        <div id="detected" class="detected-readout">No selection</div>
+    </div>
+
+    <!-- Parameter sliders -->
+    <div class="section">
+        <div class="slider-group">
+            <div class="slider-row">
+                <span class="slider-label">Corner Sharpness</span>
+                <input type="range" id="cornerSlider" min="0" max="100" value="50">
+                <span class="slider-value" id="cornerValue">50</span>
+            </div>
+        </div>
+        <div class="slider-group">
+            <div class="slider-row">
+                <span class="slider-label">Curve Tension</span>
+                <input type="range" id="tensionSlider" min="0" max="100" value="50">
+                <span class="slider-value" id="tensionValue">50</span>
+            </div>
+        </div>
+        <div class="slider-group">
+            <div class="slider-row">
+                <span class="slider-label">Simplification</span>
+                <input type="range" id="simplifySlider" min="0" max="100" value="0" disabled>
+                <span class="slider-value" id="simplifyValue">0</span>
+            </div>
+            <div class="point-count-display">
+                Points: <span id="simplifiedCount" class="simplified-count">--</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Action buttons -->
+    <div class="section">
+        <div class="action-buttons">
+            <div class="btn-row">
+                <button class="btn btn-primary" id="btnAverage" onclick="averageSelection()">
+                    Average Selection
+                </button>
+                <button class="btn btn-primary" id="btnConfirm" onclick="confirmPreview()" disabled>
+                    Confirm
+                </button>
+            </div>
+            <div class="btn-row">
+                <button class="btn btn-secondary" id="btnUndo" onclick="undoPreview()">
+                    Undo
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- CSInterface library (stub from project shared/) -->
+    <script src="./CSInterface.js"></script>
+    <!-- Panel logic -->
+    <script src="./js/main.js"></script>
+</body>
+</html>

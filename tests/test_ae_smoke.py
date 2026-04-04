@@ -6,12 +6,29 @@ Skip with: uv run pytest tests/ -k "not ae" -v
 
 import inspect
 import json
+import subprocess
 
 import pytest
 
 from adobe_mcp.server import mcp
 
-pytestmark = pytest.mark.ae
+
+def _ae_is_running() -> bool:
+    """Check if After Effects is running via process list."""
+    try:
+        result = subprocess.run(
+            ["pgrep", "-x", "After Effects"],
+            capture_output=True, timeout=5,
+        )
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+
+
+pytestmark = [
+    pytest.mark.ae,
+    pytest.mark.skipif(not _ae_is_running(), reason="After Effects is not running"),
+]
 
 
 # ---------------------------------------------------------------------------
