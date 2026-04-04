@@ -142,6 +142,40 @@ Round 2 verified round 1 fixes and found bugs INTRODUCED by the fixes.
 
 11. **Round N+1 catches what Round N missed** — Multiple review rounds are essential. Round 2 found that round 1's security fix (log_dir validation) was never actually implemented despite being claimed as done.
 
+## Round 3 Findings (6 agents — UX specialist added)
+
+### Verification: Math (10/10 VERIFIED), Security (6/6 VERIFIED), Adobe/CEP (10/10 VERIFIED)
+
+All prior fixes confirmed correct and present. One new security finding: `JSON.parse` polyfill in `polyfills.py` still used `eval()` — replaced.
+
+### UX: 3 CRITICAL + 11 HIGH
+
+| Bug | Fix |
+|-----|-----|
+| Isolation mode trap — no exit guidance | Added hint + "Exit Isolation Mode" button |
+| Merge irreversible with no confirmation | Added confirm() dialog with Cmd+Z guidance |
+| No first-use guidance in Shape Cleanup | Added 4-step instruction text |
+| Shape buttons silently fail before averaging | Disabled until hasPreview=true |
+| Error messages shown raw with "error\|" prefix | Cleaned before display |
+| Preview colors not colorblind-safe | Added distinct dash patterns |
+| Undo nukes scan results in Smart Merge | Preserved cached pairs |
+| Dead controls (Corner slider, Padding slider) | Removed / wired up |
+
+### Patterns from Round 3
+
+12. **UX review should happen in round 1** — isolation traps and dead controls are more user-facing than math errors
+13. **Dead controls worse than missing** — a slider that does nothing is more confusing than no slider
+14. **Colorblind requires redundant encoding** — always pair color with pattern/shape/label
+
+## Summary Across All 3 Rounds
+
+| Round | Agents | Issues Found | Critical Fixed | High Fixed |
+|-------|--------|-------------|----------------|-----------|
+| 1 | 5 | 80+ | 8 | 15 |
+| 2 | 3 | 15 | 2 | 4 |
+| 3 | 6 | 30 | 4 | 11 |
+| **Total** | **14 agent runs** | **125+** | **14** | **30** |
+
 ## See Also
 - [[Form Edge Extraction Workflow]] — The extraction pipeline these bugs were found in
 - [[Smart Merge Architecture]] — The merge panel that triggered the sidecar path bug

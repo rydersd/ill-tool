@@ -11,20 +11,14 @@
 // Include shared libraries
 // Derive shared library path from this script's location
 var _SHARED = (function() {
-    // $.fileName gives the path of the currently executing script
-    // host.jsx is at: .../com.illtool.pathrefine/jsx/host.jsx
-    // shared is at:   .../shared/
-    var thisFile = new File($.fileName);
-    var jsxDir = thisFile.parent;        // .../jsx/
-    var panelDir = jsxDir.parent;        // .../com.illtool.pathrefine/
-    var cepDir = panelDir.parent;        // .../cep/ (or CEP extensions dir)
-    var sharedDir = new Folder(cepDir.fsName + "/shared");
-
-    if (sharedDir.exists) {
-        return sharedDir.fsName + "/";
-    }
-
-    // Fallback: hardcoded path for development
+    try {
+        var thisFile = new File($.fileName);
+        var jsxDir = thisFile.parent;
+        var panelDir = jsxDir.parent;
+        var cepDir = panelDir.parent;
+        var sharedDir = new Folder(cepDir.fsName + "/shared");
+        if (sharedDir.exists) return sharedDir.fsName + "/";
+    } catch (e) { /* $.fileName empty or parent traversal failed */ }
     return "/Users/ryders/Developer/GitHub/ill_tool/cep/shared/";
 })();
 $.evalFile(_SHARED + "json_es3.jsx");
@@ -62,7 +56,8 @@ function getSelectionInfo() {
  * Returns pipe-delimited: "detachedCount|totalPoints|done"
  * On error: "error|message"
  */
-function detachAndPrecompute() {
+function detachAndPrecompute(padding) {
+    if (padding === undefined || padding === null) padding = 5;
     var doc;
     try {
         doc = app.activeDocument;
@@ -149,7 +144,7 @@ function detachAndPrecompute() {
     // Compute and draw bounding box
     if (allAnchorsFlat.length >= 2) {
         var rect = minAreaRect(allAnchorsFlat);
-        drawBoundingBox(rect.center[0], rect.center[1], rect.width, rect.height, rect.angle, 5, "Refined Forms");
+        drawBoundingBox(rect.center[0], rect.center[1], rect.width, rect.height, rect.angle, padding, "Refined Forms");
     }
 
     // Precompute LOD levels
