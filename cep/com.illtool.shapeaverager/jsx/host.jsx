@@ -11,19 +11,30 @@
 // Include shared libraries
 // Derive shared library path from this script's location
 var _SA_SHARED = (function() {
+    // Primary: derive from this script's file path (works when loaded via ScriptPath)
     try {
-        var thisFile = new File($.fileName);
-        var jsxDir = thisFile.parent;
-        var panelDir = jsxDir.parent;
-        var cepDir = panelDir.parent;
-        var sharedDir = new Folder(cepDir.fsName + "/shared");
-        if (sharedDir.exists) return sharedDir.fsName + "/";
-    } catch (e) { /* $.fileName empty or parent traversal failed */ }
-    // Fallback: try relative from known CEP install location
+        if ($.fileName && $.fileName.length > 0) {
+            var thisFile = new File($.fileName);
+            var jsxDir = thisFile.parent;
+            var panelDir = jsxDir.parent;
+            var cepDir = panelDir.parent;
+            var sharedDir = new Folder(cepDir.fsName + "/shared");
+            if (sharedDir.exists) return sharedDir.fsName + "/";
+        }
+    } catch (e) {}
+    // Fallback: known CEP extensions directory (macOS)
     try {
-        var f = new File($.fileName);
-        return f.parent.parent.parent.fsName + "/shared/";
-    } catch(e2) {}
+        var home = $.getenv("HOME") || "~";
+        var cepBase = home + "/Library/Application Support/Adobe/CEP/extensions";
+        var panelName = "com.illtool.shapeaverager";
+        var candidate = new Folder(cepBase + "/" + panelName);
+        if (candidate.exists) {
+            // Follow symlink: the panel dir's parent has shared/
+            var resolved = candidate.fsName;
+            var sharedDir2 = new Folder(new Folder(resolved).parent.fsName + "/shared");
+            if (sharedDir2.exists) return sharedDir2.fsName + "/";
+        }
+    } catch (e2) {}
     return "";
 })();
 $.evalFile(_SA_SHARED + "json_es3.jsx");
