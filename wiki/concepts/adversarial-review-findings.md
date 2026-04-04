@@ -176,7 +176,73 @@ All prior fixes confirmed correct and present. One new security finding: `JSON.p
 | 3 | 6 | 30 | 4 | 11 |
 | **Total** | **14 agent runs** | **125+** | **14** | **30** |
 
+## Round 4: Edge Clustering PR (5 component + 1 integration seam agent)
+
+### Key Finding: Integration Seam Reviews Are Mandatory
+
+Four component reviewers each found real bugs in their module. But the **5th agent** (integration seam reviewer) found 4 CRITICAL issues that NO component reviewer caught:
+
+| Issue | Why Nobody Caught It |
+|-------|---------------------|
+| MCP tool was a stub — no Python-to-panel bridge | Python agent saw a register(); panel agent saw evalScript calls. Neither checked if they connected. |
+| generate_color_jsx() produces JSX, sa_colorClusters() expects JSON | Python reviewer thought JSX was the output format. Panel reviewer assumed JSON input. Format mismatch invisible from either side. |
+| Learning loop disconnected — JSONL logs never reach record_cluster_correction() | Learning reviewer saw the function. Panel reviewer saw logInteraction(). Neither checked if one calls the other. |
+| Per-identity thresholds not consumable — cluster_paths() takes single global threshold | Learning reviewer verified thresholds are computed. Clustering reviewer verified DBSCAN works. Neither checked if learned thresholds reach DBSCAN. |
+
+### Round 4 Bug Totals
+
+| Area | P0 | P1 | P2 |
+|------|----|----|-----|
+| Boundary signature math | 2 | 4 | 3 |
+| Clustering engine | 2 | 2 | 7 |
+| Panel ExtendScript | 4 | 6 | 6 |
+| Learning loop | 2 | 5 | 7 |
+| **Integration seams** | **4** | **3** | **1** |
+| **Total** | **14** | **20** | **24** |
+
+### Key Fixes
+
+| Fix | Category |
+|-----|----------|
+| Symmetrize _spatial_distance | Math |
+| DBSCAN min_samples=max(2, min_cluster_size) | Algorithm |
+| Perpendicular direction (ty,-tx) for pixel coords | Math |
+| Curvature bucketing: half-up not banker's rounding | Math |
+| Wire MCP tool with full pipeline | Integration |
+| generate_cluster_json() for panel JSON format | Integration |
+| Wire record_cluster_correction MCP action | Integration |
+| Per-identity learned_thresholds parameter | Integration |
+| sa_acceptCluster rewritten (no isolation mode) | Panel |
+| Atomic file writes (tempfile + os.replace) | Safety |
+| Prototype pollution guards in both JSON parsers | Security |
+| evalScript injection allowlist | Security |
+| Folder.resolve() for symlink following | CEP path |
+
+### New Patterns from Round 4
+
+15. **Integration seam reviewer is mandatory** — component reviewers miss every cross-boundary bug. Data format mismatches, disconnected pipelines, and logging gaps only visible when one agent reads ALL components.
+
+16. **Fix agents must communicate** — parallel fix agents on related code need cross-seam context via SendMessage. Otherwise fix agent A creates a new format mismatch with the code fix agent B is editing.
+
+17. **ALL parallel agents must discuss** — not just adversarial reviews. Fix agents, implementation agents, any multi-agent work on connected code needs bidirectional awareness. Saved as durable rule.
+
+18. **Symlinks break Folder.parent** — in ExtendScript, `Folder.parent` on a symlink gives the directory containing the symlink, not the target's parent. Use `Folder.resolve()` to follow symlinks first.
+
+19. **$.fileName is empty in evalScript context** — `$.fileName` only works when scripts are loaded via `$.evalFile()` (like from `<ScriptPath>` in manifest). Code evaluated via `csInterface.evalScript()` has empty `$.fileName`. Need a fallback path.
+
+## Summary Across All Rounds
+
+| Round | Agents | Issues Found | Critical Fixed | High Fixed |
+|-------|--------|-------------|----------------|-----------|
+| 1 | 5 | 80+ | 8 | 15 |
+| 2 | 3 | 15 | 2 | 4 |
+| 3 | 6 | 30 | 4 | 11 |
+| 4 | 6 | 58 | 14 | 20 |
+| **Total** | **20 agent runs** | **183+** | **28** | **50** |
+
 ## See Also
 - [[Form Edge Extraction Workflow]] — The extraction pipeline these bugs were found in
 - [[Smart Merge Architecture]] — The merge panel that triggered the sidecar path bug
 - [[Expanded Normal Renderings]] — The eigendecomposition that had the degenerate eigenvector bug
+- [[Cross-Layer Edge Clustering]] — The feature reviewed in round 4
+- [[Illustrator C++ Plugin SDK]] — Next step: native overlay handles via AIAnnotatorSuite

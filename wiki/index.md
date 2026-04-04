@@ -1,7 +1,8 @@
 # Wiki Index
-> Auto-maintained. Last updated: 2026-04-04. Articles: 25. Words: ~46K.
+> Auto-maintained. Last updated: 2026-04-04. Articles: 26. Words: ~50K.
 
 ## Recent
+- 2026-04-04: [Illustrator C++ Plugin SDK](concepts/illustrator-cpp-plugin-sdk.md) — AIAnnotatorSuite for screen-space overlay handles. Thin C++ bridge architecture. SDK sources on GitHub. Tags: illustrator, c++, plugin, annotator
 - 2026-04-04: [Cross-Layer Edge Clustering](concepts/edge-clustering.md) — Auto-cluster paths across extraction layers into structural edge groups. Distance threshold, overlap confidence, learning from accept/split/reject. Tags: clustering, cleanup, learning
 - 2026-04-04: [Expanded Normal Renderings](concepts/expanded-normal-renderings.md) — Shape operator eigendecomposition → 10 new renderings: principal curvatures, surface type classification, ridge/valley, silhouettes, flow fields, cross-contour guides, auto line weight. Tags: normals, differential-geometry, eigendecomposition
 - 2026-04-04: [Adversarial Review Findings](concepts/adversarial-review-findings.md) — 80+ bugs from 5 hostile agents: eval injection, bezier handle math, sidecar path mismatch, namespace collisions, weak tests. Patterns to prevent recurrence. Tags: review, bugs, security, patterns
@@ -41,6 +42,7 @@
 - [Expanded Normal Renderings](concepts/expanded-normal-renderings.md) — Shape operator eigendecomposition: curvatures, surface types, ridge/valley, silhouettes, flow fields, cross-contours, auto line weight. Tags: normals, differential-geometry
 - [Smart Merge Architecture](concepts/smart-merge.md) — Form-edge-aware path merging with normal sidecar intelligence. Tags: tools, merge, cep
 - [Adversarial Review Findings](concepts/adversarial-review-findings.md) — 80+ bugs from 5 hostile agents, root causes, patterns to prevent recurrence. Tags: review, bugs, patterns
+- [Illustrator C++ Plugin SDK](concepts/illustrator-cpp-plugin-sdk.md) — AIAnnotatorSuite + AIAnnotatorDrawerSuite for non-scaling on-canvas overlays. Thin bridge architecture. Tags: illustrator, c++, plugin, annotator
 - [Form Edge Extraction Workflow](concepts/form-edge-extraction-workflow.md) — Ranked tool stack: multi-scale Canny, ink, DSINE form edges, shape averaging. Tags: workflow, edges, normals
 
 ## References
