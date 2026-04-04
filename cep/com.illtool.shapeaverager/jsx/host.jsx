@@ -84,6 +84,8 @@ function reclassifyAs(shapeType) {
     _cachedClassification = result;
 
     placePreview(result.points, result.closed, "Cleaned Forms", result.handles || null);
+    // Re-snapshot originals so bbox transform matches new point count
+    storeBboxOriginals();
 
     logInteraction("shapeaverager", "reclassify",
         {shape: _cachedClassification ? _cachedClassification.shape : "unknown"},
@@ -110,6 +112,8 @@ function applyLODLevel(level) {
     }
 
     placePreview(best.points, false, "Cleaned Forms");
+    // Re-snapshot originals so bbox transform matches new point count
+    storeBboxOriginals();
     return best.count + "";
 }
 
@@ -177,9 +181,6 @@ function doUndoAverage() {
     _bboxOriginalPoints = null;
     return "undone";
 }
-
-// Backward-compatible alias
-function doUndo() { return doUndoAverage(); }
 
 /**
  * Return bounding box data for the cached sorted points.

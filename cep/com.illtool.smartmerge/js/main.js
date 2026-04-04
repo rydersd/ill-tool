@@ -163,8 +163,8 @@ function doMerge() {
 
 // ── Undo ───────────────────────────────────────────────────────────
 
-function doUndo() {
-    csInterface.evalScript("doUndo()", function (result) {
+function doUndoMerge() {
+    csInterface.evalScript("doUndoMerge()", function (result) {
         if (result === "undone") {
             hasPreview = false;
             document.getElementById("btnPreview").disabled = true;

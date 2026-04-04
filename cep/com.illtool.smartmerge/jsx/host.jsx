@@ -368,6 +368,7 @@ function executeMerge(chainMerge, preserveHandles) {
  */
 function updateRadius(tolerance, useFormAware) {
     if (!_cachedPaths) return "error|Run scan first";
+    _lastTolerance = tolerance;
     var normalScores = (useFormAware && _hasSidecar) ? _cachedNormalScores : null;
     _cachedPairs = findEndpointPairs(_cachedPaths, tolerance, normalScores);
 
@@ -397,9 +398,6 @@ function doUndoMerge() {
     app.redraw();
     return "undone";
 }
-
-// Backward-compatible alias
-function doUndo() { return doUndoMerge(); }
 
 // ── Internal helpers ─────────────────────────────────────────────
 

@@ -22,7 +22,7 @@
 function logInteraction(panelName, actionType, beforeState, afterState, context) {
     try {
         // Sanitize panelName to prevent path traversal in log filenames
-        panelName = panelName.replace(/[\/\\:]/g, "_");
+        panelName = panelName.replace(/[^a-zA-Z0-9_-]/g, "_");
 
         var now = new Date();
         var ts = now.getFullYear() + "-" +

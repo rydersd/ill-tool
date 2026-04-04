@@ -114,6 +114,34 @@ PR #2 (`feat/normal-intelligence`) was reviewed by 5 adversarial agents after im
 
 7. **Handle swap on path reversal** — reversing a bezier path's point array requires swapping left↔right handles on every point.
 
+## Round 2 Findings (3 agents, verification + new bugs)
+
+Round 2 verified round 1 fixes and found bugs INTRODUCED by the fixes.
+
+### Key Round 2 Bugs
+
+| ID | Severity | Bug | Root Cause | Fix |
+|----|----------|-----|------------|-----|
+| R2-05 | HIGH | Bbox transform NaN after LOD slider — originals stale | storeBboxOriginals not called after placePreview in LOD/reclassify | Added storeBboxOriginals() call after every placePreview |
+| R2-08a | HIGH | doUndo() alias collision STILL existed | Backward-compatible alias reintroduced the collision | Removed aliases entirely, callers use specific names |
+| R2-04 | MEDIUM | Eigenvector fallback never implemented in round 1 | Fix agent missed this during implementation | Implemented: when |b|<eps, use [k1-d, c] fallback |
+| R2-05m | MEDIUM | RK4 streamline sign coherence missing | Line field 180-degree ambiguity between steps | Added dot(ki, k1)<0 flip check on k2/k3/k4 |
+| R2-09 | MEDIUM | weldPoints averaged BOTH handles at junction | Should keep A.left (incoming) and B.right (outgoing) | Fixed: junction uses A's left, B's right |
+| R2-10 | MEDIUM | updateRadius didn't update _lastTolerance | Chain merge re-scan used stale tolerance | Added _lastTolerance = tolerance in updateRadius |
+| Security | HIGH | .debug files STILL in git index | Round 1 only removed 2 of 5 .debug files | Removed all 5, added plugins/*/.debug to .gitignore |
+| Security | HIGH | log_dir validation MISSING | Round 1 fix agent claimed it but code didn't have it | Added path validation + panel_name glob sanitization |
+| Security | MEDIUM | JSON parser no depth limit | Stack overflow via deeply nested input | Added depth counter (max 64) |
+
+### Patterns from Round 2
+
+8. **Verify your fixes actually shipped** — Round 1 claimed eigenvector fallback and log_dir validation were implemented, but the code didn't have them. The fix agent's summary said "done" but the actual edits weren't made. Always re-read the file to confirm.
+
+9. **Backward-compatible aliases reintroduce the bugs they fix** — The doUndo() alias was added for backward compatibility but recreated the exact namespace collision it was supposed to solve. Remove old APIs, don't alias them.
+
+10. **Every path that changes preview state must re-snapshot originals** — The bbox transform needed originals, but LOD slider and reclassify both replace the preview path. Any function that calls placePreview() must also call storeBboxOriginals().
+
+11. **Round N+1 catches what Round N missed** — Multiple review rounds are essential. Round 2 found that round 1's security fix (log_dir validation) was never actually implemented despite being claimed as done.
+
 ## See Also
 - [[Form Edge Extraction Workflow]] — The extraction pipeline these bugs were found in
 - [[Smart Merge Architecture]] — The merge panel that triggered the sidecar path bug

@@ -30,14 +30,16 @@ def _cache_key(normal_map: np.ndarray) -> tuple:
     same as the flat fixture).
     """
     h, w = normal_map.shape[:2]
-    qh, qw = max(h // 4, 0), max(w // 4, 0)
-    samples = (
-        normal_map[0, 0, 0], normal_map[0, 0, 1], normal_map[0, 0, 2],
-        normal_map[h - 1, w - 1, 0], normal_map[h - 1, w - 1, 2],
-        normal_map[h // 2, w // 2, 0], normal_map[h // 2, w // 2, 1],
-        normal_map[qh, qw, 0], normal_map[qh, qw, 1], normal_map[qh, qw, 2],
-        normal_map[h - 1 - qh, w - 1 - qw, 0],
-        normal_map[h - 1 - qh, w - 1 - qw, 1],
+    if h == 0 or w == 0:
+        return (normal_map.shape, normal_map.dtype.str)
+    # Sample a 5x5 grid x 3 channels = 75 values for collision resistance
+    stride_h = max(1, h // 4)
+    stride_w = max(1, w // 4)
+    samples = tuple(
+        float(normal_map[y, x, c])
+        for y in range(0, h, stride_h)
+        for x in range(0, w, stride_w)
+        for c in range(min(3, normal_map.shape[2]))
     )
     return (normal_map.shape, normal_map.dtype.str, samples)
 
@@ -523,19 +525,34 @@ def surface_flow_field(normal_map: np.ndarray) -> np.ndarray:
     curvature_magnitude = np.abs(k1) + np.abs(k2)
     curved = curvature_magnitude > eps
 
-    # For S = [[dnx_dx, dnx_dy], [dny_dx, dny_dy]]:
-    #   eigvec for lambda = [dnx_dy, lambda - dnx_dx]
+    # For S = [[a, b], [c, d]]:
+    #   Primary eigvec for lambda: [b, lambda - a]
+    #   Fallback when |b| ~ 0:    [lambda - d, c]
+    a = dnx_dx
+    b = dnx_dy
+    c = dny_dx
+    d = dny_dy
+    b_small = np.abs(b) < 1e-10
+
     # Direction 1 (for kappa1)
-    ev1_x = dnx_dy
-    ev1_y = k1 - dnx_dx
+    ev1_x_pri = b
+    ev1_y_pri = k1 - a
+    ev1_x_alt = k1 - d
+    ev1_y_alt = c
+    ev1_x = np.where(b_small, ev1_x_alt, ev1_x_pri)
+    ev1_y = np.where(b_small, ev1_y_alt, ev1_y_pri)
     len1 = np.sqrt(ev1_x ** 2 + ev1_y ** 2)
     len1 = np.maximum(len1, 1e-12)
     ev1_x = ev1_x / len1
     ev1_y = ev1_y / len1
 
     # Direction 2 (for kappa2)
-    ev2_x = dnx_dy
-    ev2_y = k2 - dnx_dx
+    ev2_x_pri = b
+    ev2_y_pri = k2 - a
+    ev2_x_alt = k2 - d
+    ev2_y_alt = c
+    ev2_x = np.where(b_small, ev2_x_alt, ev2_x_pri)
+    ev2_y = np.where(b_small, ev2_y_alt, ev2_y_pri)
     len2 = np.sqrt(ev2_x ** 2 + ev2_y ** 2)
     len2 = np.maximum(len2, 1e-12)
     ev2_x = ev2_x / len2
@@ -735,14 +752,24 @@ def cross_contour_field(
         k2x, k2y = _sample_dir(x + 0.5 * step_size * k1x, y + 0.5 * step_size * k1y)
         k2x *= sign
         k2y *= sign
+        # Flip k2 if it opposes k1 (direction field sign ambiguity)
+        if k1x * k2x + k1y * k2y < 0:
+            k2x = -k2x
+            k2y = -k2y
 
         k3x, k3y = _sample_dir(x + 0.5 * step_size * k2x, y + 0.5 * step_size * k2y)
         k3x *= sign
         k3y *= sign
+        if k1x * k3x + k1y * k3y < 0:
+            k3x = -k3x
+            k3y = -k3y
 
         k4x, k4y = _sample_dir(x + step_size * k3x, y + step_size * k3y)
         k4x *= sign
         k4y *= sign
+        if k1x * k4x + k1y * k4y < 0:
+            k4x = -k4x
+            k4y = -k4y
 
         nx_ = x + (step_size / 6.0) * (k1x + 2 * k2x + 2 * k3x + k4x)
         ny_ = y + (step_size / 6.0) * (k1y + 2 * k2y + 2 * k3y + k4y)

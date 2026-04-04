@@ -64,12 +64,20 @@ def register(mcp):
         Reads JSONL files from /tmp/illtool_interactions/, computes
         reclassification statistics, and returns a summary.
         """
-        log_dir = Path(params.log_dir).expanduser()
+        log_dir = Path(params.log_dir).expanduser().resolve()
+        expected_parent = Path("~/Library/Application Support/illtool").expanduser().resolve()
+        if not str(log_dir).startswith(str(expected_parent)):
+            return json.dumps({"error": "log_dir must be within illtool app data directory"})
         if not log_dir.exists():
             return json.dumps({"error": "Log directory not found", "path": str(log_dir)})
 
-        # Find matching JSONL files
-        pattern = f"{params.panel_name}_*.jsonl" if params.panel_name else "*.jsonl"
+        # Find matching JSONL files — sanitize panel_name to strip glob metacharacters
+        import re
+        if params.panel_name:
+            safe_name = re.sub(r'[*?\[\]]', '', params.panel_name)
+            pattern = f"{safe_name}_*.jsonl" if safe_name else "*.jsonl"
+        else:
+            pattern = "*.jsonl"
         files = sorted(log_dir.glob(pattern))
 
         if not files:

@@ -416,20 +416,15 @@ function weldPoints(ptsA, ptsB, endpointA, endpointB, preserveHandles) {
             right: [juncB.right[0], juncB.right[1]]
         };
     } else {
-        // Average the junction
+        // Average anchor position; preserve A's incoming handle and B's outgoing handle
+        // for tangent continuity at the junction
         merged = {
             anchor: [
                 (juncA.anchor[0] + juncB.anchor[0]) / 2,
                 (juncA.anchor[1] + juncB.anchor[1]) / 2
             ],
-            left: [
-                (juncA.left[0] + juncB.left[0]) / 2,
-                (juncA.left[1] + juncB.left[1]) / 2
-            ],
-            right: [
-                (juncA.right[0] + juncB.right[0]) / 2,
-                (juncA.right[1] + juncB.right[1]) / 2
-            ]
+            left: [juncA.left[0], juncA.left[1]],     // A's incoming
+            right: [juncB.right[0], juncB.right[1]]    // B's outgoing
         };
     }
 

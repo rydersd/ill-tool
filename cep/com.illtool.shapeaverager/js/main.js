@@ -208,7 +208,7 @@ function confirmPreview() {
  * Undo the preview path — remove and clear state.
  */
 function undoPreview() {
-    csInterface.evalScript("doUndo()", function (result) {
+    csInterface.evalScript("doUndoAverage()", function (result) {
         if (result === "undone") {
             hasPreview = false;
             document.getElementById("btnConfirm").disabled = true;

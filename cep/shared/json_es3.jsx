@@ -77,6 +77,8 @@ function _jsonEscapeString(s) {
  */
 function jsonParse(str) {
     var pos = 0;
+    var _jsonDepth = 0;
+    var _JSON_MAX_DEPTH = 64;
 
     function _error(msg) { throw new Error("JSON parse error at " + pos + ": " + msg); }
     function _skipWS() { while (pos < str.length && " \t\n\r".indexOf(str.charAt(pos)) >= 0) pos++; }
@@ -151,24 +153,28 @@ function jsonParse(str) {
     }
 
     function _parseArray() {
+        _jsonDepth++;
+        if (_jsonDepth > _JSON_MAX_DEPTH) _error("nesting too deep");
         pos++; // skip '['
         var arr = [];
         _skipWS();
-        if (_peek() === ']') { pos++; return arr; }
+        if (_peek() === ']') { pos++; _jsonDepth--; return arr; }
         while (true) {
             arr.push(_parseValue());
             _skipWS();
             var ch = _next();
-            if (ch === ']') return arr;
+            if (ch === ']') { _jsonDepth--; return arr; }
             if (ch !== ',') _error("expected ',' or ']'");
         }
     }
 
     function _parseObject() {
+        _jsonDepth++;
+        if (_jsonDepth > _JSON_MAX_DEPTH) _error("nesting too deep");
         pos++; // skip '{'
         var obj = {};
         _skipWS();
-        if (_peek() === '}') { pos++; return obj; }
+        if (_peek() === '}') { pos++; _jsonDepth--; return obj; }
         while (true) {
             var key = _parseString();
             _skipWS();
@@ -176,7 +182,7 @@ function jsonParse(str) {
             obj[key] = _parseValue();
             _skipWS();
             var ch = _next();
-            if (ch === '}') return obj;
+            if (ch === '}') { _jsonDepth--; return obj; }
             if (ch !== ',') _error("expected ',' or '}'");
         }
     }
