@@ -20,6 +20,15 @@
         </div>
     </div>
 
+    <!-- Tab bar -->
+    <div class="tab-bar">
+        <button class="tab-btn active" id="tabBtnSimplify" onclick="switchTab('simplify')">Simplify</button>
+        <button class="tab-btn" id="tabBtnCluster" onclick="switchTab('cluster')">Cluster</button>
+    </div>
+
+    <!-- ═══ Simplify Tab ═══ -->
+    <div id="tabSimplify">
+
     <!-- Shape type buttons -->
     <div class="section">
         <div class="shape-buttons">
@@ -68,29 +77,10 @@
         </div>
     </div>
 
-    <!-- Clustering -->
-    <div id="clusterSection" class="section" style="display: none;">
-        <div class="slider-row">
-            <span class="slider-label">Distance</span>
-            <input type="range" id="distanceSlider" min="1" max="30" value="8">
-            <span class="slider-value" id="distanceValue">8</span>
-            <span style="color: #666; font-size: 9px;">pt</span>
-        </div>
-        <div id="clusterReadout" style="color: #aaa; font-size: 10px; margin: 4px 0; font-family: 'SF Mono', Consolas, monospace;"></div>
-        <div id="clusterList" style="max-height: 160px; overflow-y: auto; margin: 4px 0;"></div>
-        <div class="action-buttons">
-            <div class="btn-row">
-                <button class="btn btn-primary" id="btnAcceptAll" onclick="acceptAllClusters()" disabled title="Average all clusters (A)">Accept All</button>
-                <button class="btn btn-secondary" id="btnExitCluster" onclick="exitClusterMode()" title="Exit clustering mode">Exit</button>
-            </div>
-        </div>
-    </div>
-
     <!-- Action buttons -->
     <div class="section">
         <div class="action-buttons">
             <div class="btn-row">
-                <button class="btn btn-secondary" id="btnCluster" onclick="clusterLayers()" title="Auto-cluster paths across extraction layers">Cluster Layers</button>
                 <button class="btn btn-primary" id="btnAverage" onclick="averageSelection()" title="Classify and preview averaged path from selected anchors">
                     Average Selection
                 </button>
@@ -113,6 +103,50 @@
         </div>
         <button class="btn btn-secondary" onclick="exitIsolation()" style="margin-top: 4px;">Exit Isolation Mode</button>
     </div>
+
+    </div><!-- /tabSimplify -->
+
+    <!-- ═══ Cluster Tab ═══ -->
+    <div id="tabCluster" style="display:none;">
+
+        <!-- Cluster action -->
+        <div class="section">
+            <div class="action-buttons">
+                <button class="btn btn-primary" id="btnCluster" onclick="clusterLayers()" title="Auto-cluster paths across extraction layers">
+                    Cluster Layers
+                </button>
+            </div>
+        </div>
+
+        <!-- Distance threshold -->
+        <div class="section">
+            <div class="slider-group">
+                <div class="slider-row">
+                    <span class="slider-label">Distance</span>
+                    <input type="range" id="distanceSlider" min="1" max="30" value="8">
+                    <span class="slider-value" id="distanceValue">8</span>
+                    <span style="color: #666; font-size: 9px;">pt</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Cluster readout + list -->
+        <div class="section">
+            <div id="clusterReadout" style="color: #aaa; font-size: 10px; margin-bottom: 4px; font-family: 'SF Mono', Consolas, monospace;"></div>
+            <div id="clusterList" style="max-height: 160px; overflow-y: auto; margin: 4px 0;"></div>
+        </div>
+
+        <!-- Cluster action buttons -->
+        <div class="section">
+            <div class="action-buttons">
+                <div class="btn-row">
+                    <button class="btn btn-primary" id="btnAcceptAll" onclick="acceptAllClusters()" disabled title="Average all clusters (A)">Accept All</button>
+                    <button class="btn btn-secondary" id="btnExitCluster" onclick="exitClusterMode()" title="Exit clustering mode">Exit</button>
+                </div>
+            </div>
+        </div>
+
+    </div><!-- /tabCluster -->
 
     <!-- CSInterface library (stub from project shared/) -->
     <script src="./CSInterface.js"></script>

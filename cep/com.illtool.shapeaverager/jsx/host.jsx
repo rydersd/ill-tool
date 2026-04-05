@@ -50,6 +50,7 @@ $.evalFile(_SA_SHARED + "ui.jsx");
 var _sa_cachedSortedPoints = null;
 var _sa_cachedClassification = null;
 var _sa_cachedLOD = null;
+var _sa_savedLayerOpacity = []; // saved layer opacities for isolation mode
 
 /**
  * Get info about the current selection.
@@ -82,7 +83,13 @@ function sa_averageSelectedAnchors() {
             // Check if already tracked
             var alreadyTracked = false;
             for (var h = 0; h < _sa_hiddenSourcePaths.length; h++) {
-                if (_sa_hiddenSourcePaths[h].item === sel[s]) { alreadyTracked = true; break; }
+                try {
+                    if (_sa_hiddenSourcePaths[h].item === sel[s]) { alreadyTracked = true; break; }
+                } catch (e) {
+                    // Stale reference — remove it
+                    _sa_hiddenSourcePaths.splice(h, 1);
+                    h--;
+                }
             }
             if (!alreadyTracked) {
                 _sa_hiddenSourcePaths.push({ item: sel[s], prevOpacity: sel[s].opacity });
@@ -113,6 +120,9 @@ function sa_averageSelectedAnchors() {
         doc.selection = null;
         previewPath.selected = true;
     } catch (e) {}
+
+    // Isolate: dim all other layers so the working content stands out
+    sa_dimOtherLayers();
 
     // Return result as pipe-delimited string
     return classification.shape + "|" + classification.confidence + "|" + sorted.length + "|" + classification.points.length;
@@ -201,6 +211,8 @@ function sa_doConfirm() {
         null, null);
     var pathName = confirmPreview("Cleaned Forms");
     removeBoundingBox("Cleaned Forms");
+    // Restore layer opacity from isolation mode
+    sa_restoreLayerOpacity();
     // Delete hidden source paths — they've been replaced by the confirmed preview
     for (var hp = _sa_hiddenSourcePaths.length - 1; hp >= 0; hp--) {
         try { _sa_hiddenSourcePaths[hp].item.remove(); } catch(e3) {}
@@ -241,6 +253,8 @@ function sa_doUndoAverage() {
     logInteraction("shapeaverager", "undo", null, null, null);
     undoPreview("Cleaned Forms");
     removeBoundingBox("Cleaned Forms");
+    // Restore layer opacity from isolation mode
+    sa_restoreLayerOpacity();
     _sa_restoreHiddenPaths();
     _sa_cachedSortedPoints = null;
     _sa_cachedClassification = null;
@@ -266,6 +280,209 @@ function sa_cleanupOrphans() {
         if (toRemove.length > 0) app.redraw();
         return toRemove.length + "";
     } catch (e) { return "0"; }
+}
+
+// ── Shape Auto-Detection ────────────────────────────────────────
+
+/**
+ * Analyze the current selection and guess the shape type.
+ * Returns: "line"|"arc"|"lshape"|"rectangle"|"scurve"|"ellipse"|"freeform"|"none"
+ */
+function sa_guessShapeType() {
+    var doc;
+    try { doc = app.activeDocument; } catch(e) { return "none"; }
+
+    var sel = doc.selection;
+    if (!sel || sel.length === 0) return "none";
+
+    // Collect selected anchors
+    var anchors = [];
+    for (var i = 0; i < sel.length; i++) {
+        if (sel[i].typename === "PathItem") {
+            for (var j = 0; j < sel[i].pathPoints.length; j++) {
+                var pp = sel[i].pathPoints[j];
+                if (pp.selected !== PathPointSelection.NOSELECTION) {
+                    anchors.push([pp.anchor[0], pp.anchor[1]]);
+                }
+            }
+        }
+    }
+
+    if (anchors.length < 2) return "freeform";
+
+    // Check collinear (line)
+    if (_sa_isCollinear(anchors, 2.0)) return "line";
+
+    // Check arc (all points curve in one direction)
+    if (anchors.length <= 4 && _sa_isArc(anchors, 3.0)) return "arc";
+
+    // Check L-shape (sharp angle change)
+    if (anchors.length >= 3 && _sa_hasSharpCorner(anchors, 30)) return "lshape";
+
+    // Check S-curve (changes curvature direction)
+    if (anchors.length >= 3 && _sa_isSCurve(anchors)) return "scurve";
+
+    // Check rectangle (4 corners, roughly right angles)
+    if (anchors.length === 4 && _sa_isRectangular(anchors, 20)) return "rectangle";
+
+    // Check ellipse (roughly equidistant from center)
+    if (anchors.length >= 4 && _sa_isElliptical(anchors, 0.3)) return "ellipse";
+
+    return "freeform";
+}
+
+/**
+ * Test if all points are collinear within tolerance.
+ * Max perpendicular distance from first-to-last line < tolerance.
+ */
+function _sa_isCollinear(points, tolerance) {
+    if (points.length <= 2) return true;
+    var a = points[0];
+    var b = points[points.length - 1];
+    for (var i = 1; i < points.length - 1; i++) {
+        if (pointToSegmentDist(points[i], a, b) > tolerance) return false;
+    }
+    return true;
+}
+
+/**
+ * Test if points form an arc (all curve in one direction).
+ * Uses cross product sign consistency of consecutive segments.
+ */
+function _sa_isArc(points, tolerance) {
+    if (points.length < 3) return true;
+    // Check that all intermediate points are on the same side of the chord
+    var a = points[0];
+    var b = points[points.length - 1];
+    var chord = sub2d(b, a);
+    var sign = 0;
+    for (var i = 1; i < points.length - 1; i++) {
+        var v = sub2d(points[i], a);
+        var c = cross2d(chord, v);
+        if (Math.abs(c) < 0.01) continue; // on the chord
+        if (sign === 0) {
+            sign = (c > 0) ? 1 : -1;
+        } else if ((c > 0 ? 1 : -1) !== sign) {
+            return false; // points on different sides
+        }
+    }
+    // Also check max deviation isn't too small (otherwise it's a line)
+    var maxDev = 0;
+    for (var j = 1; j < points.length - 1; j++) {
+        var d = pointToSegmentDist(points[j], a, b);
+        if (d > maxDev) maxDev = d;
+    }
+    return maxDev > tolerance * 0.5;
+}
+
+/**
+ * Test if any consecutive triple has an angle sharper than angleDeg.
+ */
+function _sa_hasSharpCorner(points, angleDeg) {
+    for (var i = 1; i < points.length - 1; i++) {
+        var v1 = sub2d(points[i - 1], points[i]);
+        var v2 = sub2d(points[i + 1], points[i]);
+        var ang = angle2d(v1, v2);
+        if (ang < angleDeg) return true;
+    }
+    return false;
+}
+
+/**
+ * Test if curvature changes sign (S-curve).
+ * Uses cross product of consecutive edge vectors.
+ */
+function _sa_isSCurve(points) {
+    if (points.length < 4) return false;
+    var signs = [];
+    for (var i = 0; i < points.length - 2; i++) {
+        var v1 = sub2d(points[i + 1], points[i]);
+        var v2 = sub2d(points[i + 2], points[i + 1]);
+        var c = cross2d(v1, v2);
+        if (Math.abs(c) > 0.01) {
+            signs.push(c > 0 ? 1 : -1);
+        }
+    }
+    // S-curve has at least one sign change
+    for (var j = 1; j < signs.length; j++) {
+        if (signs[j] !== signs[j - 1]) return true;
+    }
+    return false;
+}
+
+/**
+ * Test if 4 points form a rectangle (approximately right angles).
+ */
+function _sa_isRectangular(points, angleTolerance) {
+    if (points.length !== 4) return false;
+    for (var i = 0; i < 4; i++) {
+        var prev = points[(i + 3) % 4];
+        var curr = points[i];
+        var next = points[(i + 1) % 4];
+        var v1 = sub2d(prev, curr);
+        var v2 = sub2d(next, curr);
+        var ang = angle2d(v1, v2);
+        if (Math.abs(ang - 90) > angleTolerance) return false;
+    }
+    return true;
+}
+
+/**
+ * Test if points are roughly equidistant from their centroid (ellipse).
+ * tolerance is the max allowed coefficient of variation (std/mean).
+ */
+function _sa_isElliptical(points, tolerance) {
+    var c = centroid2d(points);
+    var distances = [];
+    for (var i = 0; i < points.length; i++) {
+        distances.push(dist2d(points[i], c));
+    }
+    var m = mean(distances);
+    if (m < 1e-6) return false;
+    var variance = 0;
+    for (var j = 0; j < distances.length; j++) {
+        var diff = distances[j] - m;
+        variance += diff * diff;
+    }
+    variance /= distances.length;
+    var cv = Math.sqrt(variance) / m;
+    return cv < tolerance;
+}
+
+// ── Isolation mode ──────────────────────────────────────────────
+
+/**
+ * Dim all layers except "Cleaned Forms" to isolate the working content.
+ * Saves current opacity values for restoration.
+ */
+function sa_dimOtherLayers() {
+    _sa_savedLayerOpacity = [];
+    try {
+        var doc = app.activeDocument;
+        for (var i = 0; i < doc.layers.length; i++) {
+            var lyr = doc.layers[i];
+            _sa_savedLayerOpacity.push({ index: i, opacity: lyr.opacity });
+            if (lyr.name !== "Cleaned Forms") {
+                lyr.opacity = 30;
+            }
+        }
+    } catch (e) {}
+}
+
+/**
+ * Restore all layer opacities saved by sa_dimOtherLayers().
+ */
+function sa_restoreLayerOpacity() {
+    try {
+        var doc = app.activeDocument;
+        for (var i = 0; i < _sa_savedLayerOpacity.length; i++) {
+            var saved = _sa_savedLayerOpacity[i];
+            if (saved.index < doc.layers.length) {
+                doc.layers[saved.index].opacity = saved.opacity;
+            }
+        }
+    } catch (e) {}
+    _sa_savedLayerOpacity = [];
 }
 
 // ── Clustering State ─────────────────────────────────────────────
@@ -358,6 +575,11 @@ function sa_colorClusters(clusterJson) {
 
     // Only save original strokes on the first call (not on re-color after accept/reject)
     var isFirstColor = (_sa_origStrokes.length === 0);
+
+    // Dim other layers on first cluster coloring to isolate working content
+    if (isFirstColor) {
+        sa_dimOtherLayers();
+    }
 
     var colored = 0;
     for (var ci = 0; ci < clusters.length; ci++) {
@@ -489,6 +711,8 @@ function sa_acceptAllClusters() {
         {total_clusters: _sa_clusters.length, accepted: accepted},
         null, null);
 
+    // Restore layer opacity from isolation mode
+    sa_restoreLayerOpacity();
     _sa_clusters = null;
     _sa_clusterMode = false;
     _sa_origStrokes = [];
@@ -543,6 +767,8 @@ function sa_rejectCluster(clusterIndex) {
  * Returns "exited"
  */
 function sa_exitClusterMode() {
+    // Restore layer opacity from isolation mode
+    sa_restoreLayerOpacity();
     // Restore original stroke colors/widths
     for (var i = 0; i < _sa_origStrokes.length; i++) {
         try {

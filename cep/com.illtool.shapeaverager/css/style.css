@@ -74,6 +74,41 @@ body {
 .status-label.processing { color: #ff9800; }
 .status-label.preview    { color: #7cb8f0; }
 
+/* ── Tab Bar ───────────────────────────────────────────────────── */
+.tab-bar {
+    display: flex;
+    gap: 0;
+    margin-bottom: 10px;
+    border-bottom: 1px solid #444;
+}
+
+.tab-btn {
+    flex: 1;
+    height: 24px;
+    background: #2a2a2a;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: #888;
+    font-family: inherit;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.tab-btn:hover {
+    color: #bbb;
+    background: #363636;
+}
+
+.tab-btn.active {
+    color: #e0e0e0;
+    border-bottom-color: #4a8ec8;
+    background: #363636;
+}
+
 /* ── Section Dividers ───────────────────────────────────────────── */
 .section {
     margin-bottom: 10px;
@@ -150,6 +185,15 @@ body {
 
 .shape-btn:active {
     background: #2d5a8a;
+}
+
+.shape-btn.auto-detected {
+    border-color: #ff9800;
+    box-shadow: 0 0 0 1px rgba(255, 152, 0, 0.3);
+}
+
+.shape-btn.auto-detected .shape-label {
+    color: #ff9800;
 }
 
 .shape-btn[title]::after {

@@ -51,6 +51,7 @@ var _sm_cachedNormalScores = null;  // from sidecar
 var _sm_hasSidecar = false;
 var _sm_previewPaths = [];         // references to preview pathItems
 var _sm_lastTolerance = 5;         // tolerance from most recent scan
+var _sm_savedLayerOpacity = [];    // saved layer opacities for isolation mode
 
 // JSON parsing now provided by json_es3.jsx (jsonParse function)
 
@@ -194,6 +195,9 @@ function sm_previewMerge() {
 
     // Clean any existing previews
     _sm_cleanPreviews();
+
+    // Dim other layers to isolate the merge preview
+    sm_dimOtherLayers();
 
     var lyr = ensureLayer("Merge Preview");
     _sm_previewPaths = [];
@@ -389,6 +393,9 @@ function sm_executeMerge(chainMerge, preserveHandles) {
         {mergedCount: totalMerged, chainMerge: chainMerge, preserveHandles: preserveHandles},
         {hasSidecar: _sm_hasSidecar});
 
+    // Restore layer opacity from isolation mode
+    sm_restoreLayerOpacity();
+
     // Clear caches
     _sm_cachedPaths = null;
     _sm_cachedPairs = null;
@@ -428,9 +435,47 @@ function sm_updateRadius(tolerance, useFormAware) {
  */
 function sm_doUndoMerge() {
     _sm_cleanPreviews();
+    // Restore layer opacity from isolation mode
+    sm_restoreLayerOpacity();
     // Keep _sm_cachedPaths and _sm_cachedPairs so user can re-preview or merge
     app.redraw();
     return "undone";
+}
+
+// ── Isolation mode ──────────────────────────────────────────────
+
+/**
+ * Dim all layers except "Merge Preview" to isolate the working content.
+ * Saves current opacity values for restoration.
+ */
+function sm_dimOtherLayers() {
+    _sm_savedLayerOpacity = [];
+    try {
+        var doc = app.activeDocument;
+        for (var i = 0; i < doc.layers.length; i++) {
+            var lyr = doc.layers[i];
+            _sm_savedLayerOpacity.push({ index: i, opacity: lyr.opacity });
+            if (lyr.name !== "Merge Preview") {
+                lyr.opacity = 30;
+            }
+        }
+    } catch (e) {}
+}
+
+/**
+ * Restore all layer opacities saved by sm_dimOtherLayers().
+ */
+function sm_restoreLayerOpacity() {
+    try {
+        var doc = app.activeDocument;
+        for (var i = 0; i < _sm_savedLayerOpacity.length; i++) {
+            var saved = _sm_savedLayerOpacity[i];
+            if (saved.index < doc.layers.length) {
+                doc.layers[saved.index].opacity = saved.opacity;
+            }
+        }
+    } catch (e) {}
+    _sm_savedLayerOpacity = [];
 }
 
 // ── Internal helpers ─────────────────────────────────────────────

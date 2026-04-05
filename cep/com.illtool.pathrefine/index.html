@@ -10,84 +10,103 @@
     <!-- Header with status -->
     <div class="header">
         <span class="header-title">Grouping Tools</span>
-        <div class="status-indicator">
-            <div id="statusDot" class="status-dot ready"></div>
-            <span id="statusLabel" class="status-label ready">ready</span>
-        </div>
-    </div>
-
-    <!-- Selection info -->
-    <div class="section">
-        <div class="info-readout">
-            Selected: <span id="anchorCount" class="highlight">0</span> anchors
-        </div>
-        <div class="info-readout">
-            From: <span id="pathCount" class="highlight">0</span> paths
-        </div>
-    </div>
-
-    <!-- Group name + Detach -->
-    <div class="section">
-        <div class="slider-row" style="margin-bottom: 6px;">
-            <span class="slider-label">Group Name</span>
-            <input type="text" id="groupName" value="" placeholder="e.g. left arm contour" style="flex:1; background:#333; color:#eee; border:1px solid #555; border-radius:3px; padding:2px 6px; font-size:11px; font-family:'SF Mono',Consolas,monospace;">
-        </div>
-        <div class="action-buttons">
-            <button class="btn btn-primary" id="btnDetach" onclick="detachSelection()" title="Copy selected anchors to a named group on Refined Forms layer">
-                Detach to Group
-            </button>
-        </div>
-    </div>
-
-    <!-- Simplification slider -->
-    <div class="section" id="simplifySection">
-        <div class="section-label">Simplification</div>
-        <div class="slider-group">
-            <div class="slider-row">
-                <span class="slider-label">Level</span>
-                <input type="range" id="simplifySlider" min="0" max="100" value="0" disabled>
-                <span class="slider-value" id="simplifyValue">0</span>
-            </div>
-        </div>
-        <div class="point-count-display">
-            Points: <span id="originalCount" class="original-count">--</span>
-            <span class="arrow">&rarr;</span>
-            <span id="simplifiedCount" class="simplified-count">--</span>
-        </div>
-    </div>
-
-    <!-- Bounding box options -->
-    <div class="section">
-        <div class="section-label">Bounding Box</div>
-        <div class="checkbox-row">
-            <input type="checkbox" id="showBBox" checked>
-            <label for="showBBox">Show Bounding Box</label>
-        </div>
-        <div class="slider-group" style="margin-top: 6px;">
-            <div class="slider-row">
-                <span class="slider-label">Padding</span>
-                <input type="range" id="paddingSlider" min="0" max="50" value="5">
-                <span class="slider-value" id="paddingValue">5pt</span>
+        <div style="display: flex; align-items: center; gap: 6px;">
+            <span id="bridgeStatus" style="font-size: 8px; color: #666;" title="Plugin bridge offline">&#9679;</span>
+            <div class="status-indicator">
+                <div id="statusDot" class="status-dot ready"></div>
+                <span id="statusLabel" class="status-label ready">ready</span>
             </div>
         </div>
     </div>
 
-    <!-- Action buttons -->
-    <div class="section">
-        <div class="action-buttons">
-            <div class="btn-row">
-                <button class="btn btn-primary" id="btnApply" onclick="applyDetached()" disabled title="Solidify detached paths (Enter)">
-                    Confirm
-                </button>
-                <button class="btn btn-secondary" id="btnReset" onclick="resetDetached()" disabled title="Restore original point positions">
-                    Reset
-                </button>
-                <button class="btn btn-secondary" id="btnUndo" onclick="undoDetach()" disabled title="Remove detached paths (Esc)">
-                    Cancel
+    <!-- ═══ Main Content ═══ -->
+
+        <!-- Selection info -->
+        <div class="section">
+            <div class="info-readout">
+                Selected: <span id="anchorCount" class="highlight">0</span> anchors
+            </div>
+            <div class="info-readout">
+                From: <span id="pathCount" class="highlight">0</span> paths
+            </div>
+        </div>
+
+        <!-- Group name + Detach -->
+        <div class="section">
+            <div class="slider-row" style="margin-bottom: 6px;">
+                <span class="slider-label">Group Name</span>
+                <input type="text" id="groupName" value="" placeholder="e.g. left arm contour" style="flex:1; background:#333; color:#eee; border:1px solid #555; border-radius:3px; padding:2px 6px; font-size:11px; font-family:'SF Mono',Consolas,monospace;">
+            </div>
+            <div class="action-buttons">
+                <button class="btn btn-primary" id="btnDetach" onclick="detachSelection()" title="Copy selected anchors to a named group on Refined Forms layer">
+                    Detach to Group
                 </button>
             </div>
         </div>
-    </div>
+
+        <!-- Simplification slider -->
+        <div class="section" id="simplifySection">
+            <div class="section-label">Simplification</div>
+            <div class="slider-group">
+                <div class="slider-row">
+                    <span class="slider-label">Level</span>
+                    <input type="range" id="simplifySlider" min="0" max="100" value="0" disabled>
+                    <span class="slider-value" id="simplifyValue">0</span>
+                </div>
+            </div>
+            <div class="point-count-display">
+                Points: <span id="originalCount" class="original-count">--</span>
+                <span class="arrow">&rarr;</span>
+                <span id="simplifiedCount" class="simplified-count">--</span>
+            </div>
+        </div>
+
+        <!-- Settings -->
+        <div class="section">
+            <div class="section-label">Settings</div>
+            <div class="slider-row" style="margin-bottom: 6px;">
+                <span class="slider-label">Accent</span>
+                <button class="btn btn-secondary" id="btnAccentToggle" onclick="toggleAccentColor()" style="flex:0; padding:2px 10px; min-width:60px;">orange</button>
+            </div>
+            <div class="checkbox-row">
+                <input type="checkbox" id="showBBox" checked>
+                <label for="showBBox">Show Bounding Box</label>
+            </div>
+            <div class="slider-group" style="margin-top: 6px;">
+                <div class="slider-row">
+                    <span class="slider-label">Padding</span>
+                    <input type="range" id="paddingSlider" min="0" max="50" value="5">
+                    <span class="slider-value" id="paddingValue">5pt</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Action buttons -->
+        <div class="section">
+            <div class="action-buttons">
+                <div class="btn-row">
+                    <button class="btn btn-primary" id="btnApply" onclick="applyDetached()" disabled title="Solidify detached paths (Enter)">
+                        Confirm
+                    </button>
+                    <button class="btn btn-secondary" id="btnReset" onclick="resetDetached()" disabled title="Restore original point positions">
+                        Reset
+                    </button>
+                    <button class="btn btn-secondary" id="btnUndo" onclick="undoDetach()" disabled title="Remove detached paths (Esc)">
+                        Cancel
+                    </button>
+                    <button class="btn btn-secondary" id="btnAskClaude" onclick="askClaude()" disabled title="Ask Claude for simplification advice">
+                        Ask Claude
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Claude response -->
+        <div id="claudeResponse" class="section" style="display:none;">
+            <div class="section-label">Claude</div>
+            <div id="claudeText" style="color:#aaa; font-size:10px; font-family:'SF Mono',Consolas,monospace; max-height:120px; overflow-y:auto; white-space:pre-wrap; line-height:1.5;"></div>
+        </div>
+
 
     <!-- CSInterface library -->
     <script src="./CSInterface.js"></script>

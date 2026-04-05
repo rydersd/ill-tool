@@ -177,6 +177,7 @@
   },
   "active": "918ec29a2b1e930c",
   "lastOpenFiles": [
+    "concepts/illustrator-cpp-plugin-sdk.md",
     "concepts/edge-clustering.md",
     "Untitled.md",
     "Untitled 1.md",
@@ -202,7 +203,6 @@
     "concepts/project-evolution.md",
     "concepts/normal-map-as-reference.md",
     "concepts/ml-backends.md",
-    "concepts/llm-spatial-reasoning.md",
-    "concepts/extendscript-guide.md"
+    "concepts/llm-spatial-reasoning.md"
   ]
 }

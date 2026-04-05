@@ -65,9 +65,8 @@ function placePreview(points, closed, layerName, handles) {
             name: "__preview__",
             closed: closed,
             stroked: true,
-            strokeColor: [200, 100, 30],
-            strokeWidth: 1.5,
-            strokeDashes: [4, 4]
+            strokeColor: [255, 136, 0],
+            strokeWidth: 1.0
         });
     } else {
         // Original: auto-compute Catmull-Rom handles
@@ -75,9 +74,8 @@ function placePreview(points, closed, layerName, handles) {
             name: "__preview__",
             closed: closed,
             stroked: true,
-            strokeColor: [200, 100, 30],
-            strokeWidth: 1.5,
-            strokeDashes: [4, 4],
+            strokeColor: [255, 136, 0],
+            strokeWidth: 1.0,
             computeHandles: true,
             tension: 1 / 6
         });
@@ -171,9 +169,9 @@ function drawBoundingBox(cx, cy, w, h, angle, padding, layerName) {
     }
 
     var bboxClr = new RGBColor();
-    bboxClr.red = 30;
-    bboxClr.green = 100;
-    bboxClr.blue = 220;
+    bboxClr.red = 255;
+    bboxClr.green = 136;
+    bboxClr.blue = 0;
 
     // Draw bbox outline
     var bbox = lyr.pathItems.add();
@@ -182,7 +180,7 @@ function drawBoundingBox(cx, cy, w, h, angle, padding, layerName) {
     bbox.stroked = true;
     bbox.strokeColor = bboxClr;
     bbox.strokeWidth = 1.0;
-    bbox.strokeDashes = [6, 3];
+    bbox.strokeDashes = [];
     bbox.closed = true;
 
     for (var j = 0; j < 4; j++) {
@@ -193,9 +191,8 @@ function drawBoundingBox(cx, cy, w, h, angle, padding, layerName) {
         pp.pointType = PointType.CORNER;
     }
 
-    // Draw visible corner handles (filled blue circles, 2x normal anchor size)
-    // These are separate paths so they're visually distinct from shape anchors
-    var handleSize = 4; // radius in points (normal anchor is ~2pt)
+    // Corner handles — small accent-colored dots
+    var handleSize = 2.5; // radius in points
     for (var k = 0; k < 4; k++) {
         var handle = lyr.pathItems.ellipse(
             corners[k][1] + handleSize,  // top (AI Y = up)

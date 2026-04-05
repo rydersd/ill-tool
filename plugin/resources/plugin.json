@@ -1,0 +1,7 @@
+{
+    "kind": {"vendor": "ADBE", "value": "SPEA"},
+    "ivrs": {"vendor": "ADBE", "value": 2},
+    "mac": {"mi32": {"vendor": "ADBE", "value": "PluginMain"}},
+    "pinm": {"vendor": "ADBE", "value": "IllTool Overlay"},
+    "StsP": {"vendor": "ADBE"}
+}

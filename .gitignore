@@ -66,3 +66,7 @@ tests/fixtures/*.png
 # CEP debug flags (auto-generated, not for version control)
 cep/*/.debug
 plugins/*/.debug
+
+# C++ plugin build artifacts and SDK (fetched separately)
+plugin/build/
+plugin/sdk/

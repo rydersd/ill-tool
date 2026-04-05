@@ -85,6 +85,12 @@ if [[ "${1:-}" == "--uninstall" ]]; then
         echo "  Already removed: $shared_target"
     fi
 
+    # Remove PlayerDebugMode (only needed for unsigned dev extensions)
+    defaults delete com.adobe.CSXS.12 PlayerDebugMode 2>/dev/null && \
+        echo "  Removed: PlayerDebugMode for CSXS.12" || true
+    defaults delete com.adobe.CSXS.11 PlayerDebugMode 2>/dev/null && \
+        echo "  Removed: PlayerDebugMode for CSXS.11" || true
+
     echo ""
     echo "Uninstall complete. Restart Adobe apps to remove panels from menus."
     exit 0
@@ -120,6 +126,15 @@ for panel in "${PANELS[@]}"; do
     if [[ ! -f "$manifest" ]]; then
         echo "  ERROR: Missing $manifest"
         MISSING=1
+    else
+        echo "  Found: $panel/CSXS/manifest.xml"
+    fi
+done
+
+for panel in "${CEP_PANELS[@]}"; do
+    manifest="$CEP_DIR/$panel/CSXS/manifest.xml"
+    if [[ ! -f "$manifest" ]]; then
+        echo "  WARNING: Missing $manifest (standalone panel)"
     else
         echo "  Found: $panel/CSXS/manifest.xml"
     fi

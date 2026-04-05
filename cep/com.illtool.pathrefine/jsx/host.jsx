@@ -49,6 +49,9 @@ var _pr_detachedPaths = [];     // references to detached pathItems
 var _pr_originalAnchors = [];   // backup anchor data for reset
 var _pr_lodCache = null;        // precomputed LOD levels
 var _pr_originalPointCount = 0; // point count before simplification
+var _pr_savedLayerOpacity = []; // saved layer opacities for isolation mode
+var _pr_accentColor = [255, 136, 0]; // working path accent: orange default
+var _pr_bboxData = null;        // cached bounding box parameters for overlay
 
 /**
  * Clean up orphaned detached paths left from a previous session or crash.
@@ -119,10 +122,20 @@ function pr_detachAndPrecompute(padding, groupName) {
     _pr_originalGroup = lyr.groupItems.add();
     _pr_originalGroup.name = "__originals_backup__";
 
-    // Collect selected PathItems (snapshot before moving)
+    // Collect selected PathItems and record per-point selection state
+    // (must snapshot BEFORE duplicating, because duplicate + re-select loses point selection)
     var selPaths = [];
+    var pointSelections = [];  // parallel array: per-path array of PathPointSelection values
     for (var si = 0; si < sel.length; si++) {
-        if (sel[si].typename === "PathItem") selPaths.push(sel[si]);
+        if (sel[si].typename === "PathItem") {
+            var path = sel[si];
+            selPaths.push(path);
+            var ptSel = [];
+            for (var pi = 0; pi < path.pathPoints.length; pi++) {
+                ptSel.push(path.pathPoints[pi].selected);
+            }
+            pointSelections.push(ptSel);
+        }
     }
 
     // 2. Duplicate each selected path, move original into backup group
@@ -138,10 +151,17 @@ function pr_detachAndPrecompute(padding, groupName) {
     _pr_originalGroup.hidden = true;
     _pr_originalGroup.locked = true;
 
-    // 4. Select the duplicates so the rest of the pipeline works on them
+    // 4. Re-apply the original per-point selection to the duplicates
     doc.selection = null;
     for (var sd = 0; sd < duplicates.length; sd++) {
         duplicates[sd].selected = true;
+        // Restore individual point selection from snapshot
+        var savedSel = pointSelections[sd];
+        if (savedSel) {
+            for (var sp = 0; sp < duplicates[sd].pathPoints.length && sp < savedSel.length; sp++) {
+                duplicates[sd].pathPoints[sp].selected = savedSel[sp];
+            }
+        }
     }
 
     // ── Now detach from the duplicates (originals are safe) ──
@@ -201,9 +221,8 @@ function pr_detachAndPrecompute(padding, groupName) {
                 name: "__detached_" + detachedCount + "__",
                 closed: false,
                 stroked: true,
-                strokeColor: [200, 100, 30],
-                strokeWidth: 1.0,
-                strokeDashes: [3, 3]
+                strokeColor: _pr_accentColor,
+                strokeWidth: 1.0
             });
 
             _pr_detachedPaths.push(newPath);
@@ -224,9 +243,18 @@ function pr_detachAndPrecompute(padding, groupName) {
 
     _pr_originalPointCount = allAnchorsFlat.length;
 
-    // Compute and draw bounding box
+    // Compute and store bounding box data
+    _pr_bboxData = null;
     if (allAnchorsFlat.length >= 2) {
         var rect = minAreaRect(allAnchorsFlat);
+        _pr_bboxData = {
+            center: [rect.center[0], rect.center[1]],
+            width: rect.width,
+            height: rect.height,
+            angle: rect.angle,
+            padding: padding
+        };
+        // Draw PathItem bbox as visual fallback (plugin overlay replaces this when connected)
         drawBoundingBox(rect.center[0], rect.center[1], rect.width, rect.height, rect.angle, padding, "Refined Forms");
     }
 
@@ -235,6 +263,9 @@ function pr_detachAndPrecompute(padding, groupName) {
         var sorted = sortByPCA(allAnchorsFlat);
         _pr_lodCache = precomputeLOD(sorted, 20);
     }
+
+    // Isolate: dim all other layers so the working group stands out
+    pr_dimOtherLayers();
 
     logInteraction("pathrefine", "detach", null,
         {detachedCount: detachedCount, totalPoints: allAnchorsFlat.length}, null);
@@ -269,9 +300,8 @@ function pr_applySimplifyLevel(level) {
             name: "__detached_0__",
             closed: false,
             stroked: true,
-            strokeColor: [200, 100, 30],
+            strokeColor: _pr_accentColor,
             strokeWidth: 1.0,
-            strokeDashes: [3, 3],
             computeHandles: true,
             tension: 1 / 6
         });
@@ -295,12 +325,11 @@ function pr_doApply() {
     for (var i = 0; i < _pr_detachedPaths.length; i++) {
         try {
             var item = _pr_detachedPaths[i];
-            // Make solid
-            item.strokeDashes = [];
+            // 80% black final stroke
             var clr = new RGBColor();
-            clr.red = 30;
-            clr.green = 30;
-            clr.blue = 30;
+            clr.red = 51;
+            clr.green = 51;
+            clr.blue = 51;
             item.strokeColor = clr;
             item.strokeWidth = 1.0;
             // Rename
@@ -314,6 +343,8 @@ function pr_doApply() {
     logInteraction("pathrefine", "apply", null, {count: count, group: _pr_group ? _pr_group.name : ""}, null);
 
     removeBoundingBox("Refined Forms");
+    // Restore layer opacity from isolation mode
+    pr_restoreLayerOpacity();
     // Keep the result group — it's now permanent with solid paths
     _pr_group = null;
     // Delete the hidden originals — user accepted the result
@@ -328,6 +359,7 @@ function pr_doApply() {
     _pr_originalAnchors = [];
     _pr_lodCache = null;
     _pr_originalPointCount = 0;
+    _pr_bboxData = null;
 
     app.redraw();
     return "applied|" + count;
@@ -354,9 +386,8 @@ function pr_doReset() {
             name: "__detached_" + i + "__",
             closed: false,
             stroked: true,
-            strokeColor: [200, 100, 30],
-            strokeWidth: 1.0,
-            strokeDashes: [3, 3]
+            strokeColor: _pr_accentColor,
+            strokeWidth: 1.0
         });
 
         _pr_detachedPaths.push(newPath);
@@ -380,11 +411,14 @@ function pr_doUndoDetach() {
     }
     // Restore the hidden originals
     _pr_restoreOriginals();
+    // Restore layer opacity from isolation mode
+    pr_restoreLayerOpacity();
     removeBoundingBox("Refined Forms");
     _pr_detachedPaths = [];
     _pr_originalAnchors = [];
     _pr_lodCache = null;
     _pr_originalPointCount = 0;
+    _pr_bboxData = null;
     app.redraw();
     return "undone";
 }
@@ -406,6 +440,139 @@ function _pr_restoreOriginals() {
         _pr_originalGroup.remove();
     } catch(e) {}
     _pr_originalGroup = null;
+}
+
+// ── Isolation mode ──────────────────────────────────────────────
+
+/**
+ * Dim all layers except "Refined Forms" to isolate the working group.
+ * Saves current opacity values for restoration.
+ */
+function pr_dimOtherLayers() {
+    _pr_savedLayerOpacity = [];
+    try {
+        var doc = app.activeDocument;
+        for (var i = 0; i < doc.layers.length; i++) {
+            var lyr = doc.layers[i];
+            _pr_savedLayerOpacity.push({ index: i, opacity: lyr.opacity });
+            if (lyr.name !== "Refined Forms") {
+                lyr.opacity = 30;
+            }
+        }
+    } catch (e) {}
+}
+
+/**
+ * Restore all layer opacities saved by pr_dimOtherLayers().
+ */
+function pr_restoreLayerOpacity() {
+    try {
+        var doc = app.activeDocument;
+        for (var i = 0; i < _pr_savedLayerOpacity.length; i++) {
+            var saved = _pr_savedLayerOpacity[i];
+            if (saved.index < doc.layers.length) {
+                doc.layers[saved.index].opacity = saved.opacity;
+            }
+        }
+    } catch (e) {}
+    _pr_savedLayerOpacity = [];
+}
+
+/**
+ * Set the accent color for working paths.
+ * color: "orange" or "cyan"
+ */
+function pr_setAccentColor(color) {
+    if (color === "cyan") {
+        _pr_accentColor = [0, 200, 220];
+    } else {
+        _pr_accentColor = [255, 136, 0];
+    }
+    return "ok";
+}
+
+// ── Plugin Bridge Data ──────────────────────────────────────────
+
+/**
+ * Return JSON snapshot of current path state for C++ overlay rendering.
+ * Contains original (ghost), simplified (current), and handle positions.
+ */
+function pr_getSimplifiedPathData() {
+    var result = {original: [], simplified: [], handles: []};
+
+    // Read original from backup anchors
+    for (var i = 0; i < _pr_originalAnchors.length; i++) {
+        var orig = _pr_originalAnchors[i];
+        for (var j = 0; j < orig.length; j++) {
+            result.original.push({
+                anchor: orig[j].anchor,
+                left: orig[j].left,
+                right: orig[j].right
+            });
+        }
+    }
+
+    // Read simplified from current detached paths
+    for (var k = 0; k < _pr_detachedPaths.length; k++) {
+        var path = _pr_detachedPaths[k];
+        try {
+            for (var m = 0; m < path.pathPoints.length; m++) {
+                var pp = path.pathPoints[m];
+                var pt = {
+                    anchor: [pp.anchor[0], pp.anchor[1]],
+                    left: [pp.leftDirection[0], pp.leftDirection[1]],
+                    right: [pp.rightDirection[0], pp.rightDirection[1]]
+                };
+                result.simplified.push(pt);
+                result.handles.push({id: "handle_" + k + "_" + m, anchor: pt.anchor});
+            }
+        } catch (e) {
+            // Path may have been removed
+        }
+    }
+
+    return jsonStringify(result);
+}
+
+/**
+ * Return cached bounding box parameters as JSON for overlay rendering.
+ * Returns: {center: [cx, cy], width, height, angle, padding}
+ * Called by the panel JS after detach to build overlay commands.
+ */
+function pr_getBoundingBoxData() {
+    if (!_pr_bboxData) return "undefined";
+    return jsonStringify(_pr_bboxData);
+}
+
+/**
+ * Move a specific path point by handle ID (called from overlay drag).
+ * handleId format: "handle_<pathIndex>_<pointIndex>"
+ * Returns "ok" or "error|message"
+ */
+function pr_moveHandlePoint(handleId, newX, newY) {
+    try {
+        var parts = handleId.split("_");
+        var pathIdx = parseInt(parts[1], 10);
+        var ptIdx = parseInt(parts[2], 10);
+
+        if (pathIdx < 0 || pathIdx >= _pr_detachedPaths.length) return "error|Invalid path index";
+        var path = _pr_detachedPaths[pathIdx];
+        if (ptIdx < 0 || ptIdx >= path.pathPoints.length) return "error|Invalid point index";
+
+        var pp = path.pathPoints[ptIdx];
+        var dx = newX - pp.anchor[0];
+        var dy = newY - pp.anchor[1];
+
+        // Move anchor and handles together (maintain handle shape)
+        pp.anchor = [newX, newY];
+        pp.leftDirection = [pp.leftDirection[0] + dx, pp.leftDirection[1] + dy];
+        pp.rightDirection = [pp.rightDirection[0] + dx, pp.rightDirection[1] + dy];
+
+        app.redraw();
+        return "ok";
+    } catch (e) {
+        return "error|" + e.message;
+    }
 }
 
 // ── Internal helpers ─────────────────────────────────────────────

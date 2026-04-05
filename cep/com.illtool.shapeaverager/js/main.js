@@ -15,6 +15,160 @@ var activeShape = null;          // currently highlighted shape type
 var hasPreview = false;          // tracks whether a preview path exists
 var selectionPollId = null;      // timer for polling selection state
 var lastSelectionState = "";     // last polled selection for change detection
+var activeTab = "simplify";      // current tab: "simplify" or "cluster"
+var autoDetectedShape = null;    // auto-detected shape type from selection
+var userOverrideShape = null;    // user-clicked override (takes precedence)
+
+// ── C++ Plugin Bridge ─────────────────────────────────────────────
+var PLUGIN_URL = "http://localhost:8787";
+var pluginConnected = false;
+var eventSource = null;
+
+/**
+ * Check if the C++ plugin is running. If yes, activate annotator and
+ * start the SSE event listener. If not, log and continue — overlays
+ * disabled, panel works normally.
+ */
+function connectPluginBridge() {
+    fetch(PLUGIN_URL + "/status")
+        .then(function(resp) { return resp.json(); })
+        .then(function(data) {
+            if (data && data.status === "ok") {
+                pluginConnected = true;
+                console.log("[IllTool] Plugin bridge connected at " + PLUGIN_URL);
+                fetch(PLUGIN_URL + "/annotator/activate", { method: "POST" })
+                    .catch(function() {});
+            }
+        })
+        .catch(function() {
+            pluginConnected = false;
+            console.log("[IllTool] Plugin bridge not available — overlays disabled");
+        });
+}
+
+/**
+ * POST draw commands to /draw. Fire and forget.
+ */
+function sendDrawCommands(commands) {
+    if (!pluginConnected || !commands || commands.length === 0) return;
+    fetch(PLUGIN_URL + "/draw", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ commands: commands })
+    }).catch(function(err) {
+        console.log("[IllTool] Draw command failed: " + err.message);
+    });
+}
+
+/**
+ * POST to /clear to remove all overlays.
+ */
+function clearOverlays() {
+    if (!pluginConnected) return;
+    fetch(PLUGIN_URL + "/clear", { method: "POST" })
+        .catch(function() {});
+}
+
+/**
+ * Build draw commands for cluster visualization overlays.
+ *
+ * For each cluster:
+ * - Colored bezier paths for cluster members (matching cluster color)
+ * - Circle handle at cluster centroid (not draggable, visual only)
+ * - Text label with identity_key and confidence tier
+ *
+ * Takes the cluster array from displayClusters().
+ */
+function buildClusterOverlayCommands(clusters) {
+    var commands = [];
+
+    for (var c = 0; c < clusters.length; c++) {
+        var cl = clusters[c];
+        var clColor = cl.color || [128, 128, 128];
+
+        // Centroid circle (visual marker, not draggable)
+        if (cl.centroid) {
+            commands.push({
+                type: "circle",
+                center: cl.centroid,
+                radius: 5,
+                fillColor: clColor,
+                strokeColor: [255, 255, 255],
+                strokeWidth: 0.5,
+                draggable: false,
+                id: "cluster_" + c
+            });
+        }
+
+        // Text label with identity key and confidence
+        if (cl.centroid) {
+            var labelText = (cl.identity_key || "cluster " + c).replace(/\|/g, "/");
+            if (cl.confidence_tier) {
+                labelText += " [" + cl.confidence_tier.charAt(0).toUpperCase() + "]";
+            }
+            commands.push({
+                type: "text",
+                position: [cl.centroid[0], cl.centroid[1] + 10],
+                text: labelText,
+                color: clColor,
+                fontSize: 9
+            });
+        }
+
+        // Cluster member paths as lightweight bezier overlays
+        // (paths are already colored in the document; overlay adds a second visual
+        //  that persists even when scrolling outside the artboard bounds)
+        if (cl.path_points && cl.path_points.length > 0) {
+            for (var pi = 0; pi < cl.path_points.length; pi++) {
+                var pts = cl.path_points[pi];
+                if (pts.length >= 2) {
+                    var segments = [];
+                    for (var si = 0; si < pts.length - 1; si++) {
+                        segments.push({
+                            p0: pts[si], cp1: pts[si], cp2: pts[si + 1], p3: pts[si + 1]
+                        });
+                    }
+                    commands.push({
+                        type: "bezier",
+                        segments: segments,
+                        color: clColor,
+                        strokeWidth: cl.stroke_width || 1,
+                        opacity: 0.6,
+                        dash: cl.dashed ? [4, 4] : null
+                    });
+                }
+            }
+        }
+    }
+
+    return commands;
+}
+
+// ── Tab Switching ─────────────────────────────────────────────────
+
+/**
+ * Switch between Simplify and Cluster tabs.
+ * Preserves state in each tab (no reset on switch).
+ */
+function switchTab(tabName) {
+    activeTab = tabName;
+    var simplifyTab = document.getElementById("tabSimplify");
+    var clusterTab = document.getElementById("tabCluster");
+    var btnSimplify = document.getElementById("tabBtnSimplify");
+    var btnCluster = document.getElementById("tabBtnCluster");
+
+    if (tabName === "cluster") {
+        simplifyTab.style.display = "none";
+        clusterTab.style.display = "block";
+        btnSimplify.classList.remove("active");
+        btnCluster.classList.add("active");
+    } else {
+        simplifyTab.style.display = "block";
+        clusterTab.style.display = "none";
+        btnSimplify.classList.add("active");
+        btnCluster.classList.remove("active");
+    }
+}
 
 // ── Status Display ─────────────────────────────────────────────────
 
@@ -49,29 +203,39 @@ function initShapeButtons() {
         buttons[i].disabled = true;
         buttons[i].addEventListener("click", function () {
             var shapeType = this.getAttribute("data-shape");
-            highlightShape(shapeType);
+            userOverrideShape = shapeType;
+            highlightShape(shapeType, "active");
             reclassify(shapeType);
         });
     }
 }
 
-function highlightShape(shapeType) {
+/**
+ * Highlight a shape button with the given CSS class.
+ * @param {string} shapeType - the data-shape value to highlight
+ * @param {string} cssClass - "active" for user/confirmed, "auto-detected" for guess
+ */
+function highlightShape(shapeType, cssClass) {
     activeShape = shapeType;
+    cssClass = cssClass || "active";
     var buttons = document.querySelectorAll(".shape-btn");
     for (var i = 0; i < buttons.length; i++) {
+        buttons[i].classList.remove("active");
+        buttons[i].classList.remove("auto-detected");
         if (buttons[i].getAttribute("data-shape") === shapeType) {
-            buttons[i].classList.add("active");
-        } else {
-            buttons[i].classList.remove("active");
+            buttons[i].classList.add(cssClass);
         }
     }
 }
 
 function clearShapeHighlight() {
     activeShape = null;
+    autoDetectedShape = null;
+    userOverrideShape = null;
     var buttons = document.querySelectorAll(".shape-btn");
     for (var i = 0; i < buttons.length; i++) {
         buttons[i].classList.remove("active");
+        buttons[i].classList.remove("auto-detected");
     }
 }
 
@@ -140,7 +304,8 @@ function averageSelection() {
         var parts = result.split("|");
         // parts: [shape, confidence, inputCount, outputCount]
         updateDetected(parts[0], parseFloat(parts[1]));
-        highlightShape(parts[0]);
+        userOverrideShape = null;  // reset override on new average
+        highlightShape(parts[0], "active");
         hasPreview = true;
         lastSelectionState = "";  // reset so polling can detect changes
         updateStatus("preview");
@@ -176,7 +341,7 @@ function reclassify(shapeType) {
 
         var parts = result.split("|");
         updateDetected(parts[0], parseFloat(parts[1]));
-        highlightShape(parts[0]);
+        highlightShape(parts[0], "active");
         updateStatus("preview");
     });
 }
@@ -217,6 +382,8 @@ function confirmPreview() {
     csInterface.evalScript("sa_doConfirm()", function (result) {
         if (result && result.indexOf("confirmed") === 0) {
             hasPreview = false;
+            userOverrideShape = null;
+            lastSelectionState = "";  // reset so polling resumes auto-detection
             document.getElementById("btnConfirm").disabled = true;
             document.getElementById("simplifySlider").disabled = true;
 
@@ -239,6 +406,7 @@ function undoPreview() {
     csInterface.evalScript("sa_doUndoAverage()", function (result) {
         if (result === "undone") {
             hasPreview = false;
+            userOverrideShape = null;
             document.getElementById("btnConfirm").disabled = true;
             document.getElementById("simplifySlider").disabled = true;
             clearShapeHighlight();
@@ -283,6 +451,11 @@ function pollSelection() {
     csInterface.evalScript("sa_getSelectionInfo()", function (result) {
         if (!result || result === "EvalScript Error" || result === "undefined") {
             document.getElementById("selectionInfo").textContent = "No selection";
+            // Clear auto-detection when nothing selected
+            if (!hasPreview && autoDetectedShape) {
+                autoDetectedShape = null;
+                if (!userOverrideShape) clearShapeHighlight();
+            }
             return;
         }
 
@@ -293,9 +466,27 @@ function pollSelection() {
 
         if (anchorCount === 0) {
             document.getElementById("selectionInfo").textContent = "No selection";
+            if (!hasPreview && autoDetectedShape) {
+                autoDetectedShape = null;
+                if (!userOverrideShape) clearShapeHighlight();
+            }
         } else {
             document.getElementById("selectionInfo").textContent =
                 anchorCount + " anchors on " + pathCount + " path" + (pathCount !== 1 ? "s" : "");
+
+            // Auto-detect shape type when no preview is active
+            if (!hasPreview && result !== lastSelectionState) {
+                lastSelectionState = result;
+                csInterface.evalScript("sa_guessShapeType()", function(guess) {
+                    if (guess && guess !== "none" && guess !== "EvalScript Error" && guess !== "undefined") {
+                        autoDetectedShape = guess;
+                        // Only show auto-detection if user hasn't overridden
+                        if (!userOverrideShape) {
+                            highlightShape(guess, "auto-detected");
+                        }
+                    }
+                });
+            }
         }
 
         // Live re-average when preview is active and selection changes
@@ -305,7 +496,7 @@ function pollSelection() {
                 if (avgResult && avgResult.indexOf("error") !== 0) {
                     var avgParts = avgResult.split("|");
                     updateDetected(avgParts[0], parseFloat(avgParts[1]));
-                    highlightShape(avgParts[0]);
+                    highlightShape(avgParts[0], "active");
                     // Update lastSelectionState to the post-average selection
                     // so the next poll doesn't see this as a change
                     csInterface.evalScript("sa_getSelectionInfo()", function(newSel) {
@@ -364,15 +555,13 @@ function clusterLayers() {
         // to be provided via displayClusters() from the MCP response handler.
         var threshold = parseInt(document.getElementById("distanceSlider").value, 10);
 
-        // Show the clustering section with a "waiting for results" message
-        var section = document.getElementById("clusterSection");
-        section.style.display = "block";
         var readout = document.getElementById("clusterReadout");
         readout.textContent = "Read paths. Awaiting cluster results (threshold: " + threshold + "pt)...";
 
-        // Store path data on the section element for MCP access
-        section.setAttribute("data-path-json", pathJson);
-        section.setAttribute("data-threshold", threshold);
+        // Store path data on the cluster tab for MCP access
+        var clusterTab = document.getElementById("tabCluster");
+        clusterTab.setAttribute("data-path-json", pathJson);
+        clusterTab.setAttribute("data-threshold", threshold);
 
         updateStatus("ready");
     });
@@ -386,8 +575,9 @@ function clusterLayers() {
  */
 function displayClusters(clusters) {
     clusterData = clusters;
-    var section = document.getElementById("clusterSection");
-    section.style.display = "block";
+
+    // Switch to cluster tab if not already there
+    if (activeTab !== "cluster") switchTab("cluster");
 
     // Summary readout
     var high = 0, med = 0, low = 0, totalPaths = 0;
@@ -463,6 +653,12 @@ function displayClusters(clusters) {
             readout.textContent += " — " + coloredCount + " paths colored";
         }
     });
+
+    // Send cluster overlays to C++ plugin if connected
+    if (pluginConnected) {
+        var overlayCommands = buildClusterOverlayCommands(clusters);
+        sendDrawCommands(overlayCommands);
+    }
 }
 
 function selectCluster(index) {
@@ -477,6 +673,7 @@ function selectCluster(index) {
 
 function acceptAllClusters() {
     updateStatus("processing");
+    clearOverlays();
     csInterface.evalScript("sa_acceptAllClusters()", function(result) {
         if (result && result.indexOf("accepted_all") === 0) {
             var count = result.split("|")[1];
@@ -522,8 +719,8 @@ function rejectSelectedCluster() {
 }
 
 function exitClusterMode() {
+    clearOverlays();
     csInterface.evalScript("sa_exitClusterMode()", function() {
-        document.getElementById("clusterSection").style.display = "none";
         document.getElementById("clusterReadout").textContent = "";
         document.getElementById("clusterList").innerHTML = "";
         document.getElementById("btnAcceptAll").disabled = true;
@@ -556,8 +753,8 @@ document.addEventListener("keydown", function(e) {
         }
     }
 
-    // Clustering shortcuts (only when cluster section is visible)
-    var clusterVisible = document.getElementById("clusterSection").style.display !== "none";
+    // Clustering shortcuts (only when cluster tab is active)
+    var clusterVisible = (activeTab === "cluster");
     if (clusterVisible) {
         if (e.key === "A" && e.shiftKey) {
             e.preventDefault();
@@ -598,5 +795,6 @@ function toggleHelp() {
     startSelectionPolling();
     // Run an immediate poll so selection shows right away
     pollSelection();
+    connectPluginBridge();
     updateStatus("ready");
 })();
