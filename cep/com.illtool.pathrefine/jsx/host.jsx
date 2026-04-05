@@ -36,13 +36,14 @@ var _PR_SHARED = (function() {
     } catch (e2) {}
     return "";
 })();
-$.evalFile(_PR_SHARED + "json_es3.jsx");
-$.evalFile(_PR_SHARED + "logging.jsx");
-$.evalFile(_PR_SHARED + "math2d.jsx");
-$.evalFile(_PR_SHARED + "geometry.jsx");
-$.evalFile(_PR_SHARED + "shapes.jsx");
-$.evalFile(_PR_SHARED + "pathutils.jsx");
-$.evalFile(_PR_SHARED + "ui.jsx");
+// Guard against double-loading when multiple panels share the same ExtendScript engine
+if (typeof jsonStringify === "undefined") $.evalFile(_PR_SHARED + "json_es3.jsx");
+if (typeof logInteraction === "undefined") $.evalFile(_PR_SHARED + "logging.jsx");
+if (typeof dist2d === "undefined") $.evalFile(_PR_SHARED + "math2d.jsx");
+if (typeof sortByPCA === "undefined") $.evalFile(_PR_SHARED + "geometry.jsx");
+if (typeof classifyShape === "undefined") $.evalFile(_PR_SHARED + "shapes.jsx");
+if (typeof getSelectedAnchors === "undefined") $.evalFile(_PR_SHARED + "pathutils.jsx");
+if (typeof ensureLayer === "undefined") $.evalFile(_PR_SHARED + "ui.jsx");
 
 // Module-level cache (persists across evalScript calls)
 var _pr_detachedPaths = [];     // references to detached pathItems

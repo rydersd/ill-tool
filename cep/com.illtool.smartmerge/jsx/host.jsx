@@ -36,13 +36,14 @@ var _SM_SHARED = (function() {
     } catch (e2) {}
     return "";
 })();
-$.evalFile(_SM_SHARED + "json_es3.jsx");
-$.evalFile(_SM_SHARED + "logging.jsx");
-$.evalFile(_SM_SHARED + "math2d.jsx");
-$.evalFile(_SM_SHARED + "geometry.jsx");
-$.evalFile(_SM_SHARED + "shapes.jsx");
-$.evalFile(_SM_SHARED + "pathutils.jsx");
-$.evalFile(_SM_SHARED + "ui.jsx");
+// Guard against double-loading when multiple panels share the same ExtendScript engine
+if (typeof jsonStringify === "undefined") $.evalFile(_SM_SHARED + "json_es3.jsx");
+if (typeof logInteraction === "undefined") $.evalFile(_SM_SHARED + "logging.jsx");
+if (typeof dist2d === "undefined") $.evalFile(_SM_SHARED + "math2d.jsx");
+if (typeof sortByPCA === "undefined") $.evalFile(_SM_SHARED + "geometry.jsx");
+if (typeof classifyShape === "undefined") $.evalFile(_SM_SHARED + "shapes.jsx");
+if (typeof getSelectedAnchors === "undefined") $.evalFile(_SM_SHARED + "pathutils.jsx");
+if (typeof ensureLayer === "undefined") $.evalFile(_SM_SHARED + "ui.jsx");
 
 // Module-level cache
 var _sm_cachedPaths = null;        // from getSelectedPaths()
@@ -276,6 +277,8 @@ function sm_executeMerge(chainMerge, preserveHandles) {
     var totalMerged = 0;
     var iterations = 0;
     var maxIterations = chainMerge ? 10 : 1;
+    var mergeTimestamp = new Date().getTime();
+    var mergeCounter = 0;
 
     // Attach _ref to cached paths on the first iteration so lookups
     // don't fall through to the positional pathItems fallback (which
@@ -345,7 +348,7 @@ function sm_executeMerge(chainMerge, preserveHandles) {
 
             // Create the merged path
             var newPath = createPathWithHandles(targetLayer, merged, {
-                name: "merged_" + new Date().getTime() + "_" + p,
+                name: "merged_" + mergeTimestamp + "_" + (mergeCounter++),
                 closed: false,
                 stroked: true,
                 strokeColor: [30, 30, 30],

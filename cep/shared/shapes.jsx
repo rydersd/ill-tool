@@ -46,7 +46,8 @@ function classifyShape(sortedPoints, surfaceHint) {
             "cylindrical": "arc",
             "convex": "arc",
             "concave": "arc",
-            "saddle": "scurve"
+            "saddle": "scurve",
+            "rectangular": "rectangle"
         };
         var suggestedShape = hintMapping[surfaceHint];
         if (suggestedShape && best.shape === suggestedShape) {

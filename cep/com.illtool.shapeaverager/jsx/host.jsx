@@ -38,13 +38,14 @@ var _SA_SHARED = (function() {
     } catch (e2) {}
     return "";
 })();
-$.evalFile(_SA_SHARED + "json_es3.jsx");
-$.evalFile(_SA_SHARED + "logging.jsx");
-$.evalFile(_SA_SHARED + "math2d.jsx");
-$.evalFile(_SA_SHARED + "geometry.jsx");
-$.evalFile(_SA_SHARED + "shapes.jsx");
-$.evalFile(_SA_SHARED + "pathutils.jsx");
-$.evalFile(_SA_SHARED + "ui.jsx");
+// Guard against double-loading when multiple panels share the same ExtendScript engine
+if (typeof jsonStringify === "undefined") $.evalFile(_SA_SHARED + "json_es3.jsx");
+if (typeof logInteraction === "undefined") $.evalFile(_SA_SHARED + "logging.jsx");
+if (typeof dist2d === "undefined") $.evalFile(_SA_SHARED + "math2d.jsx");
+if (typeof sortByPCA === "undefined") $.evalFile(_SA_SHARED + "geometry.jsx");
+if (typeof classifyShape === "undefined") $.evalFile(_SA_SHARED + "shapes.jsx");
+if (typeof getSelectedAnchors === "undefined") $.evalFile(_SA_SHARED + "pathutils.jsx");
+if (typeof ensureLayer === "undefined") $.evalFile(_SA_SHARED + "ui.jsx");
 
 // Module-level cache (persists across evalScript calls)
 var _sa_cachedSortedPoints = null;
@@ -67,13 +68,14 @@ function sa_getSelectionInfo() {
  * precomputeLOD() primitive-aware simplification.
  *
  * @param {string} shapeType - detected shape: "line", "arc", "lshape", "rectangle", "scurve", "ellipse", "freeform"
- * @returns {string|null} surface hint: "flat", "cylindrical", "angular", "saddle", or null
+ * @returns {string|null} surface hint: "flat", "cylindrical", "angular", "rectangular", "saddle", or null
  */
 function _sa_deriveSurfaceHint(shapeType) {
     switch (shapeType) {
         case "line":
-        case "rectangle":
             return "flat";
+        case "rectangle":
+            return "rectangular";
         case "arc":
         case "ellipse":
             return "cylindrical";
@@ -343,8 +345,13 @@ function sa_readLayerPaths(layerNames) {
 
     var allPaths = [];
     var names = layerNames ? layerNames.split(",") : null;
+    // Cap total points to prevent evalScript return overflow (~500KB JSON)
+    var MAX_TOTAL_POINTS = 5000;
+    var totalPts = 0;
+    var capReached = false;
 
     for (var li = 0; li < doc.layers.length; li++) {
+        if (capReached) break;
         var lyr = doc.layers[li];
         // If layer names specified, filter; otherwise include extraction layers
         if (names) {
@@ -372,6 +379,7 @@ function sa_readLayerPaths(layerNames) {
         // Ensure unique path names before collecting
         var nameCount = {};
         for (var pi = 0; pi < lyr.pathItems.length; pi++) {
+            if (capReached) break;
             var path = lyr.pathItems[pi];
             if (!path.name || path.name === "") {
                 path.name = "__cluster_" + lyr.name.replace(/[^a-zA-Z0-9]/g, "_") + "_" + pi + "__";
@@ -380,10 +388,17 @@ function sa_readLayerPaths(layerNames) {
             }
             nameCount[path.name] = (nameCount[path.name] || 0) + 1;
 
+            // Check if adding this path would exceed the safety cap
+            if (totalPts + path.pathPoints.length > MAX_TOTAL_POINTS) {
+                capReached = true;
+                break;
+            }
+
             var pts = [];
             for (var pp = 0; pp < path.pathPoints.length; pp++) {
                 pts.push([path.pathPoints[pp].anchor[0], path.pathPoints[pp].anchor[1]]);
             }
+            totalPts += pts.length;
             allPaths.push({
                 name: path.name,
                 layer: lyr.name,
@@ -623,6 +638,28 @@ function sa_exitClusterMode() {
 }
 
 /**
+ * Approximate bezier arc length between two Illustrator PathPoints.
+ * Uses the average of chord length and control polygon length,
+ * which is more accurate than straight chord distance for curves.
+ *
+ * @param {PathPoint} pp1 - first path point
+ * @param {PathPoint} pp2 - second path point
+ * @returns {number} approximate arc length
+ */
+function _approxSegmentLength(pp1, pp2) {
+    var p0 = pp1.anchor;
+    var p1 = pp1.rightDirection;
+    var p2 = pp2.leftDirection;
+    var p3 = pp2.anchor;
+    // Chord length
+    var chord = dist2d(p0, p3);
+    // Control polygon length
+    var poly = dist2d(p0, p1) + dist2d(p1, p2) + dist2d(p2, p3);
+    // Approximate arc length is average of chord and control polygon
+    return (chord + poly) / 2;
+}
+
+/**
  * Select all small/noisy paths on visible, unlocked layers.
  *
  * Selects paths with fewer than maxPoints anchor points,
@@ -671,22 +708,18 @@ function sa_selectSmallPaths(maxPoints, maxArcLength) {
             }
 
             // Check arc length threshold if specified
+            // Uses bezier arc approximation: average of chord and control polygon lengths
             if (!isSmall && maxArcLength > 0 && pointCount >= 2) {
                 var totalLength = 0;
                 for (var pp = 1; pp < path.pathPoints.length; pp++) {
-                    var a = path.pathPoints[pp - 1].anchor;
-                    var b = path.pathPoints[pp].anchor;
-                    var dx = b[0] - a[0];
-                    var dy = b[1] - a[1];
-                    totalLength += Math.sqrt(dx * dx + dy * dy);
+                    totalLength += _approxSegmentLength(path.pathPoints[pp - 1], path.pathPoints[pp]);
                 }
                 // Close the loop if path is closed
                 if (path.closed && path.pathPoints.length > 2) {
-                    var first = path.pathPoints[0].anchor;
-                    var last = path.pathPoints[path.pathPoints.length - 1].anchor;
-                    var cdx = first[0] - last[0];
-                    var cdy = first[1] - last[1];
-                    totalLength += Math.sqrt(cdx * cdx + cdy * cdy);
+                    totalLength += _approxSegmentLength(
+                        path.pathPoints[path.pathPoints.length - 1],
+                        path.pathPoints[0]
+                    );
                 }
                 if (totalLength < maxArcLength) {
                     isSmall = true;

@@ -250,6 +250,8 @@ function precomputeLOD(pts, numLevels, surfaceHint) {
             primitiveFit = fitToShape(pts, "scurve");
         } else if (surfaceHint === "angular") {
             primitiveFit = fitToShape(pts, "lshape");
+        } else if (surfaceHint === "rectangular") {
+            primitiveFit = fitToShape(pts, "rectangle");
         }
     }
 

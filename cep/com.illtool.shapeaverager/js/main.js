@@ -19,6 +19,7 @@ var activeTab = "Simplify";      // current tab: "Simplify" or "Cluster"
 var isIsolated = false;          // isolation mode state
 var reAverageTimer = null;       // debounce timer for live re-average
 var reAverageInProgress = false; // guard against re-average → selection change → re-average loop
+var operationInProgress = false; // guard against concurrent evalScript calls
 
 // ── Status Display ─────────────────────────────────────────────────
 
@@ -47,6 +48,10 @@ function updateStatus(state) {
 // ── Tab Switching ──────────────────────────────────────────────────
 
 function switchTab(tabName) {
+    // Auto-cancel preview when switching away from Simplify with an active preview
+    if (activeTab === "Simplify" && tabName === "Cluster" && hasPreview) {
+        undoPreview();
+    }
     activeTab = tabName;
     var tabs = document.querySelectorAll(".tab-btn");
     for (var i = 0; i < tabs.length; i++) {
@@ -175,9 +180,12 @@ function initSliders() {
  * happen in ExtendScript — no WebSocket needed.
  */
 function averageSelection() {
+    if (operationInProgress) return;
+    operationInProgress = true;
     updateStatus("processing");
 
     csInterface.evalScript("sa_averageSelectedAnchors()", function (result) {
+        operationInProgress = false;
         if (!result || result.indexOf("error") === 0) {
             updateStatus("ready");
             var errMsg = result ? result.replace(/^error\|/, "") : "No selection";
@@ -214,17 +222,28 @@ var VALID_SHAPES = ["line","arc","lshape","rectangle","scurve","ellipse","freefo
 
 function reclassify(shapeType) {
     if (VALID_SHAPES.indexOf(shapeType) === -1) return;
+    if (operationInProgress) return;
+    operationInProgress = true;
     updateStatus("processing");
 
     csInterface.evalScript("sa_reclassifyAs('" + shapeType + "')", function (result) {
+        operationInProgress = false;
         if (!result || result.indexOf("error") === 0) {
             updateStatus(hasPreview ? "preview" : "ready");
             return;
         }
 
         var parts = result.split("|");
+        // parts: [shape, confidence, outputPointCount]
         updateDetected(parts[0], parseFloat(parts[1]));
         highlightShape(parts[0]);
+
+        // Update simplified point count display
+        var countEl = document.getElementById("simplifiedCount");
+        if (countEl && parts[2]) {
+            countEl.textContent = parts[2];
+        }
+
         updateStatus("preview");
     });
 }
@@ -262,8 +281,11 @@ function updateDetected(shapeName, confidence) {
  * Confirm the preview path — solidify, enter isolation mode, clear state.
  */
 function confirmPreview() {
+    if (operationInProgress) return;
+    operationInProgress = true;
     var layerName = document.getElementById("cleanupLayerName").value.replace(/'/g, "\\'") || "";
     csInterface.evalScript("sa_doConfirm('" + layerName + "')", function (result) {
+        operationInProgress = false;
         if (result && result.indexOf("confirmed") === 0) {
             hasPreview = false;
             document.getElementById("btnConfirm").disabled = true;
@@ -287,7 +309,10 @@ function confirmPreview() {
  * Undo the preview path — remove and clear state.
  */
 function undoPreview() {
+    if (operationInProgress) return;
+    operationInProgress = true;
     csInterface.evalScript("sa_doUndoAverage()", function (result) {
+        operationInProgress = false;
         if (result === "undone") {
             hasPreview = false;
             document.getElementById("btnConfirm").disabled = true;
@@ -623,10 +648,11 @@ document.addEventListener("keydown", function(e) {
         if (hasPreview) confirmPreview();
         else averageSelection();
     } else if (e.key === "Escape") {
-        if (document.getElementById("isolationHint").style.display !== "none") {
-            exitIsolation();
-        } else {
+        // Priority: 1) cancel preview (also exits isolation), 2) exit isolation, 3) nothing
+        if (hasPreview) {
             undoPreview();
+        } else if (isIsolated) {
+            exitIsolation();
         }
     } else if (hasPreview && e.key >= "1" && e.key <= "7") {
         var shapes = ["line", "arc", "lshape", "rectangle", "scurve", "ellipse", "freeform"];

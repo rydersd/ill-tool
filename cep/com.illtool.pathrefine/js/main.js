@@ -14,6 +14,7 @@ var csInterface = new CSInterface();
 var hasDetached = false;         // tracks whether detached paths exist
 var originalPointCount = 0;      // point count before simplification
 var selectionPollTimer = null;   // timer for polling selection state
+var operationInProgress = false; // guard against concurrent evalScript calls
 
 // ── Status Display ─────────────────────────────────────────────────
 
@@ -90,11 +91,14 @@ function stopSelectionPolling() {
  * in ExtendScript for instant slider scrubbing.
  */
 function detachSelection() {
+    if (operationInProgress) return;
+    operationInProgress = true;
     updateStatus("processing");
 
     var padding = 5;  // fixed padding (bounding box UI removed)
     var groupName = document.getElementById("groupName").value.replace(/'/g, "\\'").replace(/\\/g, "\\\\") || "";
     csInterface.evalScript("pr_detachAndPrecompute(" + padding + ", '" + groupName + "')", function (result) {
+        operationInProgress = false;
         if (!result || result.indexOf("error") === 0) {
             updateStatus("ready");
             var errMsg = result ? result.replace(/^error\|/, "") : "No selection";
@@ -147,9 +151,12 @@ function requestSimplify() {
  * Apply: solidify detached paths (remove dashes, make solid stroke).
  */
 function applyDetached() {
+    if (operationInProgress) return;
+    operationInProgress = true;
     updateStatus("processing");
 
     csInterface.evalScript("pr_doApply()", function (result) {
+        operationInProgress = false;
         if (result && result.indexOf("applied") === 0) {
             resetPanelState();
             updateStatus("ready");
@@ -183,9 +190,12 @@ function resetDetached() {
  * Undo: remove all detached paths and bounding box guide.
  */
 function undoDetach() {
+    if (operationInProgress) return;
+    operationInProgress = true;
     updateStatus("processing");
 
     csInterface.evalScript("pr_doUndoDetach()", function (result) {
+        operationInProgress = false;
         if (result === "undone") {
             resetPanelState();
             updateStatus("ready");
