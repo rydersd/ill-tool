@@ -137,17 +137,39 @@ function sa_averageSelectedAnchors() {
     // Precompute LOD levels for instant slider scrubbing (surface-aware)
     _sa_cachedLOD = precomputeLOD(sorted, 20, surfaceHint);
 
-    // Place preview path on "Cleaned Forms" layer (pass handles if available)
-    var previewPath = placePreview(classification.points, classification.closed, "Cleaned Forms", classification.handles || null);
+    // Create a working group with copies of selected objects + the preview
+    var cleanLayer = ensureLayer("Cleaned Forms");
+    var workGroup = cleanLayer.groupItems.add();
+    workGroup.name = "__preview_group__";
 
-    // No bounding box — go straight into isolation mode with native handles
+    // Copy the dimmed source paths into the group (for reference during editing)
+    for (var sc = 0; sc < _sa_hiddenSourcePaths.length; sc++) {
+        try {
+            var srcCopy = _sa_hiddenSourcePaths[sc].item.duplicate();
+            srcCopy.opacity = 30;
+            srcCopy.name = "__src_copy_" + sc + "__";
+            srcCopy.move(workGroup, ElementPlacement.PLACEATEND);
+        } catch (e) {}
+    }
+
+    // Place preview path inside the group
+    var previewPath = placePreview(classification.points, classification.closed, "Cleaned Forms", classification.handles || null);
     try {
-        doc.selection = null;
-        previewPath.selected = true;
-        app.executeMenuCommand("isolate");
+        previewPath.move(workGroup, ElementPlacement.PLACEATEND);
     } catch (e) {}
 
-    // Switch to Direct Selection tool so user sees anchor handles immediately
+    // Isolate the group — user can only interact with contents
+    try {
+        doc.selection = null;
+        workGroup.selected = true;
+        app.executeMenuCommand("isolate");
+
+        // Select the preview path for direct editing
+        doc.selection = null;
+        previewPath.selected = true;
+    } catch (e) {}
+
+    // Switch to Direct Selection tool for anchor handle editing
     try {
         app.executeMenuCommand("direct");
     } catch (e2) {}
@@ -250,20 +272,26 @@ function sa_doConfirm(targetLayerName) {
          layer: layerName},
         null, null);
 
-    // If using a custom layer name, move the preview to that layer first
-    if (layerName !== "Cleaned Forms") {
-        try {
-            var targetLyr = ensureLayer(layerName);
-            var cleanLyr = app.activeDocument.layers.getByName("Cleaned Forms");
-            var preview = cleanLyr.pathItems.getByName("__preview__");
-            preview.move(targetLyr, ElementPlacement.PLACEATEND);
-        } catch (e) {
-            // Fall through to confirm on Cleaned Forms
-        }
+    // Exit isolation mode first
+    try {
+        app.executeMenuCommand("exitisolation");
+    } catch (e) {}
+
+    // Move preview out of the working group to the target layer
+    var targetLyr = ensureLayer(layerName);
+    try {
+        var cleanLyr = app.activeDocument.layers.getByName("Cleaned Forms");
+        var previewGroup = cleanLyr.groupItems.getByName("__preview_group__");
+        // Find the preview path inside the group
+        var preview = previewGroup.pathItems.getByName("__preview__");
+        preview.move(targetLyr, ElementPlacement.PLACEATEND);
+        // Delete the working group (contains source copies)
+        previewGroup.remove();
+    } catch (e) {
+        // If group structure isn't there, fall through to normal confirm
     }
 
     var pathName = confirmPreview(layerName);
-    // No bounding box to remove — using isolation mode instead
     // Delete hidden source paths — they've been replaced by the confirmed preview
     for (var hp = _sa_hiddenSourcePaths.length - 1; hp >= 0; hp--) {
         try { _sa_hiddenSourcePaths[hp].item.remove(); } catch(e3) {}
@@ -298,8 +326,22 @@ function sa_doConfirm(targetLayerName) {
  */
 function sa_doUndoAverage() {
     logInteraction("shapeaverager", "undo", null, null, null);
+
+    // Exit isolation mode
+    try {
+        app.executeMenuCommand("exitisolation");
+    } catch (e) {}
+
+    // Remove the working group (contains preview + source copies)
+    try {
+        var cleanLyr = app.activeDocument.layers.getByName("Cleaned Forms");
+        var previewGroup = cleanLyr.groupItems.getByName("__preview_group__");
+        previewGroup.remove();
+    } catch (e) {}
+
+    // Also clean up any preview not in a group (fallback)
     undoPreview("Cleaned Forms");
-    // No bounding box to remove — using isolation mode instead
+
     _sa_restoreHiddenPaths();
     _sa_cachedSortedPoints = null;
     _sa_cachedClassification = null;

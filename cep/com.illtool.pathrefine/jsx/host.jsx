@@ -235,12 +235,18 @@ function pr_detachAndPrecompute(padding, groupName) {
     }
 
     // Go into isolation mode — no bounding box, use native handles
+    // Isolate the working group — select GROUP first (isolation requires group selection)
     try {
         doc.selection = null;
-        if (_pr_detachedPaths.length > 0) {
-            _pr_detachedPaths[0].selected = true;
+        if (_pr_group) {
+            _pr_group.selected = true;
+            app.executeMenuCommand("isolate");
+            // Now select the first path inside for direct editing
+            doc.selection = null;
+            if (_pr_detachedPaths.length > 0) {
+                _pr_detachedPaths[0].selected = true;
+            }
         }
-        app.executeMenuCommand("isolate");
         app.executeMenuCommand("direct");
     } catch (e) {}
 
@@ -303,6 +309,9 @@ function pr_applySimplifyLevel(level) {
  * Returns "applied|count"
  */
 function pr_doApply() {
+    // Exit isolation mode first
+    try { app.executeMenuCommand("exitisolation"); } catch(e) {}
+
     var count = 0;
     for (var i = 0; i < _pr_detachedPaths.length; i++) {
         try {
@@ -377,6 +386,9 @@ function pr_doReset() {
  * Returns "undone"
  */
 function pr_doUndoDetach() {
+    // Exit isolation mode first
+    try { app.executeMenuCommand("exitisolation"); } catch(e) {}
+
     _pr_cleanDetachedPaths();
     // Remove the working group
     if (_pr_group) {
