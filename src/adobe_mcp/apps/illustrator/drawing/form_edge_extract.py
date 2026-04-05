@@ -141,6 +141,16 @@ class FormEdgeExtractInput(BaseModel):
         description="Minimum contour arc length in pixels.",
         ge=1,
     )
+    match_placed_item: bool = Field(
+        default=True,
+        description=(
+            "When True, query for a PlacedItem on a 'ref' or 'Reference' layer "
+            "and use its bounds instead of the artboard bounds for coordinate "
+            "scaling.  This ensures contours align with the actual image position "
+            "when the reference doesn't fill the artboard.  Set False to always "
+            "use artboard bounds (legacy behavior)."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -685,17 +695,69 @@ def _build_cross_contour_jsx(
 # ---------------------------------------------------------------------------
 
 
+def _cap_contour_points(
+    points: list[list[float]],
+    max_points: int = 200,
+) -> list[list[float]]:
+    """Reduce point count using Douglas-Peucker if above threshold.
+
+    The heuristic backend can produce contours with 500-1900+ points,
+    which generates JSX strings too large for Illustrator's evalScript.
+    This applies a secondary simplification in AI-coordinate space,
+    independent of the pixel-space simplification in edge_mask_to_contours.
+
+    Args:
+        points: List of [x, y] coordinate pairs.
+        max_points: Maximum allowed points per contour.
+
+    Returns:
+        Simplified point list (may be the original if already under limit).
+    """
+    if len(points) <= max_points:
+        return points
+
+    pts_array = np.array(points, dtype=np.float32).reshape(-1, 1, 2)
+    epsilon = 1.0  # start with small epsilon
+    while len(pts_array) > max_points and epsilon < 50:
+        pts_array = cv2.approxPolyDP(
+            np.array(points, dtype=np.float32).reshape(-1, 1, 2),
+            epsilon,
+            closed=True,
+        )
+        epsilon *= 1.5
+
+    return pts_array.reshape(-1, 2).tolist()
+
+
+# Maximum points per path before Douglas-Peucker capping kicks in
+MAX_POINTS_PER_PATH = 200
+
+# Maximum JSX payload size in bytes — Illustrator's evalScript has a ~2MB
+# limit; leave headroom for the wrapper and return value.
+MAX_JSX_BYTES = 1_800_000
+
+# Maximum contours per evalScript call when batching
+_BATCH_SIZE = 20
+
+
 def _build_place_jsx(
     contours: list[dict],
     layer_name: str,
     smooth: bool = True,
     stroke_widths: Optional[dict[str, float]] = None,
-) -> str:
+) -> list[str]:
     """Build JSX to place form edge contours as vector paths in Illustrator.
 
     Creates a layer named ``layer_name``, then for each contour creates a
     path using ``pathItems.add()`` + ``setEntirePath()``.  When ``smooth``
     is True, sets all path points to smooth (curved via 1/3 handle distance).
+
+    Point counts are capped at ``MAX_POINTS_PER_PATH`` via Douglas-Peucker
+    simplification to prevent oversized JSX strings that cause silent
+    evalScript failures.
+
+    If the total JSX exceeds ``MAX_JSX_BYTES``, the contours are split
+    into batches of ``_BATCH_SIZE`` and multiple JSX strings are returned.
 
     Args:
         contours: List of contour dicts with ``"name"`` and ``"points"`` keys.
@@ -706,7 +768,8 @@ def _build_place_jsx(
             points, derived from curvature_line_weight sampling.
 
     Returns:
-        JSX string for execution in Illustrator.
+        List of JSX strings for execution in Illustrator.  Caller must
+        execute each in sequence and aggregate the results.
     """
     from adobe_mcp.jsx.templates import escape_jsx_string
 
@@ -715,12 +778,16 @@ def _build_place_jsx(
     if stroke_widths is None:
         stroke_widths = {}
 
-    # Build per-contour placement blocks
+    # Build per-contour placement blocks, capping point counts
     path_blocks = []
     for contour in contours:
         points = contour.get("points", [])
         if not points or len(points) < 3:
             continue
+
+        # Cap high-point-count contours (heuristic backend can produce
+        # 500-1900+ points, making JSX too large for evalScript)
+        points = _cap_contour_points(points, MAX_POINTS_PER_PATH)
 
         name = escape_jsx_string(contour.get("name", "form_edge"))
         points_json = json.dumps(points)
@@ -762,7 +829,9 @@ def _build_place_jsx(
         }})();
 """)
 
-    jsx = f"""
+    def _wrap_jsx(blocks: list[str]) -> str:
+        """Wrap path blocks in the layer-creation boilerplate."""
+        return f"""
 (function() {{
     var doc = app.activeDocument;
     var layer = null;
@@ -779,11 +848,23 @@ def _build_place_jsx(
     doc.activeLayer = layer;
 
     var placed = [];
-    {"".join(path_blocks)}
+    {"".join(blocks)}
     return JSON.stringify({{ paths_placed: placed.length, paths: placed, layer: layer.name }});
 }})();
 """
-    return jsx
+
+    # Try single JSX first
+    single = _wrap_jsx(path_blocks)
+    if len(single.encode("utf-8")) <= MAX_JSX_BYTES:
+        return [single]
+
+    # Too large — split into batches
+    jsx_batches: list[str] = []
+    for i in range(0, len(path_blocks), _BATCH_SIZE):
+        batch = path_blocks[i : i + _BATCH_SIZE]
+        jsx_batches.append(_wrap_jsx(batch))
+
+    return jsx_batches
 
 
 # ---------------------------------------------------------------------------
@@ -891,11 +972,92 @@ def register(mcp):
                     "contours": contours,
                 })
 
-            # Transform contours to AI coordinates — pass the full artboard
-            # bounds dict {left, top, right, bottom} for multi-artboard support.
+            # --- PlacedItem bounds query (Bug 3 fix) ---
+            # When match_placed_item is True, look for a PlacedItem on a
+            # "ref" or "Reference" layer and use its bounds for coordinate
+            # scaling instead of the artboard.  This ensures contours align
+            # with the actual image position when the reference doesn't
+            # fill the full artboard.
+            target_bounds = artboard  # default: artboard bounds
+            placed_item_matched = False
+
+            if params.match_placed_item:
+                jsx_placed = """
+(function() {
+    var doc = app.activeDocument;
+    var refNames = ["ref", "Ref", "reference", "Reference"];
+    for (var n = 0; n < refNames.length; n++) {
+        try {
+            var layer = doc.layers.getByName(refNames[n]);
+        } catch(e) { continue; }
+        // Search for PlacedItems on this layer
+        for (var i = 0; i < layer.placedItems.length; i++) {
+            var pi = layer.placedItems[i];
+            var gb = pi.geometricBounds; // [left, top, right, bottom]
+            return JSON.stringify({
+                found: true,
+                left: gb[0], top: gb[1], right: gb[2], bottom: gb[3],
+                layer: layer.name, name: pi.name || ""
+            });
+        }
+        // Also check rasterItems (embedded images)
+        for (var j = 0; j < layer.rasterItems.length; j++) {
+            var ri = layer.rasterItems[j];
+            var rb = ri.geometricBounds;
+            return JSON.stringify({
+                found: true,
+                left: rb[0], top: rb[1], right: rb[2], bottom: rb[3],
+                layer: layer.name, name: ri.name || ""
+            });
+        }
+    }
+    return JSON.stringify({found: false});
+})();
+"""
+                pi_result = await _async_run_jsx("illustrator", jsx_placed)
+                if pi_result["success"]:
+                    try:
+                        pi_data = json.loads(pi_result["stdout"])
+                        if pi_data.get("found"):
+                            target_bounds = {
+                                "left": pi_data["left"],
+                                "top": pi_data["top"],
+                                "right": pi_data["right"],
+                                "bottom": pi_data["bottom"],
+                            }
+                            placed_item_matched = True
+                    except (json.JSONDecodeError, TypeError, KeyError):
+                        pass  # Fall back to artboard bounds
+
+            # Lock the reference layer so it can't be accidentally selected
+            if placed_item_matched:
+                try:
+                    lock_jsx = """(function() {
+    var doc = app.activeDocument;
+    var names = ['ref', 'Ref', 'reference', 'Reference'];
+    for (var i = 0; i < names.length; i++) {
+        try {
+            var lyr = doc.layers.getByName(names[i]);
+            lyr.locked = true;
+            return 'locked|' + names[i];
+        } catch(e) {}
+    }
+    return 'none';
+})();"""
+                    await _async_run_jsx("illustrator", lock_jsx)
+                except Exception:
+                    pass  # Non-fatal
+
+            # Transform contours to AI coordinates — use PlacedItem bounds
+            # when available, otherwise artboard bounds.
             # contours_to_ai_points() accepts both dict and (w, h) tuple.
+            # When matching a PlacedItem, use margin=1.0 so contours fill
+            # the image bounds exactly (no 5% inset).
             img_size = tuple(extract_result["image_size"])
-            ai_contours = contours_to_ai_points(contours, img_size, artboard)
+            coord_margin = 1.0 if placed_item_matched else 0.95
+            ai_contours = contours_to_ai_points(
+                contours, img_size, target_bounds, margin=coord_margin,
+            )
 
             # --- Normal map integration: sidecar, line weight, cross-contours ---
             normal_map = None
@@ -943,22 +1105,44 @@ def register(mcp):
                     cache_dir=OUTPUT_DIR,
                 )
 
-            # Build and execute JSX for contour paths (with line weight)
-            jsx = _build_place_jsx(
+            # Build and execute JSX for contour paths (with line weight).
+            # _build_place_jsx now returns a list of JSX strings (batched
+            # if the total payload exceeds Illustrator's script size limit).
+            jsx_batches = _build_place_jsx(
                 ai_contours, params.layer_name, params.smooth, stroke_widths,
             )
-            place_result = await _async_run_jsx("illustrator", jsx)
 
-            if not place_result["success"]:
+            # Execute batches sequentially, aggregating results
+            total_placed = 0
+            all_paths: list[dict] = []
+            last_layer = params.layer_name
+            batch_errors: list[str] = []
+
+            for batch_idx, jsx in enumerate(jsx_batches):
+                place_result = await _async_run_jsx("illustrator", jsx)
+
+                if not place_result["success"]:
+                    batch_errors.append(
+                        f"Batch {batch_idx}: {place_result.get('stderr', 'unknown error')}"
+                    )
+                    continue
+
+                try:
+                    batch_data = json.loads(place_result["stdout"])
+                    total_placed += batch_data.get("paths_placed", 0)
+                    all_paths.extend(batch_data.get("paths", []))
+                    last_layer = batch_data.get("layer", last_layer)
+                except (json.JSONDecodeError, TypeError):
+                    batch_errors.append(
+                        f"Batch {batch_idx}: bad JSON response"
+                    )
+
+            if total_placed == 0 and batch_errors:
                 return json.dumps({
-                    "error": f"Path placement failed: {place_result['stderr']}",
+                    "error": f"Path placement failed: {'; '.join(batch_errors)}",
                     "contour_count": len(ai_contours),
+                    "jsx_batches": len(jsx_batches),
                 })
-
-            try:
-                placed = json.loads(place_result["stdout"])
-            except (json.JSONDecodeError, TypeError):
-                placed = {"raw": place_result["stdout"]}
 
             # Place cross-contour guide paths if normal map is available
             if normal_map is not None:
@@ -981,16 +1165,43 @@ def register(mcp):
                 except Exception:
                     pass  # Cross-contour placement is best-effort
 
+            # Initialize working state: group → duplicate → lock+hide original
+            init_state = None
+            if total_placed > 0:
+                try:
+                    init_jsx = (
+                        f'initializeWorkingState("{escape_jsx_string(last_layer)}",'
+                        f' "{escape_jsx_string(last_layer)}")'
+                    )
+                    init_result = await _async_run_jsx("illustrator", init_jsx)
+                    if init_result["success"] and init_result["stdout"].startswith("ok"):
+                        parts = init_result["stdout"].split("|")
+                        init_state = {
+                            "grouped": int(parts[1]) if len(parts) > 1 else 0,
+                            "og_locked": True,
+                            "working_group": parts[2] if len(parts) > 2 else last_layer,
+                        }
+                except Exception:
+                    pass  # Non-fatal — paths are placed, just not organized
+
             response = {
-                "paths_placed": placed.get("paths_placed", 0),
-                "paths": placed.get("paths", []),
-                "layer_name": placed.get("layer", params.layer_name),
+                "paths_placed": total_placed,
+                "paths": all_paths,
+                "layer_name": last_layer,
                 "contour_count": len(ai_contours),
                 "backend": extract_result["backend"],
                 "mask_path": extract_result.get("mask_path"),
                 "image_size": extract_result["image_size"],
                 "timings": extract_result.get("timings"),
             }
+            if init_state:
+                response["working_state"] = init_state
+            if placed_item_matched:
+                response["coordinate_source"] = "placed_item"
+            if len(jsx_batches) > 1:
+                response["jsx_batches"] = len(jsx_batches)
+            if batch_errors:
+                response["batch_errors"] = batch_errors
             if sidecar_path:
                 response["sidecar_path"] = sidecar_path
             if cross_contours_placed > 0:

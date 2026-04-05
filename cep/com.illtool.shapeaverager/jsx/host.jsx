@@ -194,12 +194,29 @@ function sa_resmooth(tension) {
  * Confirm the preview: solidify stroke, clear caches, enter isolation mode.
  * Returns "confirmed|<pathName>" or "confirmed|unknown"
  */
-function sa_doConfirm() {
+function sa_doConfirm(targetLayerName) {
+    // Use custom layer name if provided, otherwise default
+    var layerName = (targetLayerName && targetLayerName.length > 0) ? targetLayerName : "Cleaned Forms";
+
     logInteraction("shapeaverager", "confirm",
         {shape: _sa_cachedClassification ? _sa_cachedClassification.shape : "unknown",
-         confidence: _sa_cachedClassification ? _sa_cachedClassification.confidence : 0},
+         confidence: _sa_cachedClassification ? _sa_cachedClassification.confidence : 0,
+         layer: layerName},
         null, null);
-    var pathName = confirmPreview("Cleaned Forms");
+
+    // If using a custom layer name, move the preview to that layer first
+    if (layerName !== "Cleaned Forms") {
+        try {
+            var targetLyr = ensureLayer(layerName);
+            var cleanLyr = app.activeDocument.layers.getByName("Cleaned Forms");
+            var preview = cleanLyr.pathItems.getByName("__preview__");
+            preview.move(targetLyr, ElementPlacement.PLACEATEND);
+        } catch (e) {
+            // Fall through to confirm on Cleaned Forms
+        }
+    }
+
+    var pathName = confirmPreview(layerName);
     removeBoundingBox("Cleaned Forms");
     // Delete hidden source paths — they've been replaced by the confirmed preview
     for (var hp = _sa_hiddenSourcePaths.length - 1; hp >= 0; hp--) {
@@ -215,19 +232,15 @@ function sa_doConfirm() {
     if (pathName) {
         try {
             var doc = app.activeDocument;
-            doc.selection = null;  // deselect all
-            var lyr = doc.layers.getByName("Cleaned Forms");
+            doc.selection = null;
+            var lyr = doc.layers.getByName(layerName);
             var confirmed = lyr.pathItems.getByName(pathName);
             confirmed.selected = true;
             app.executeMenuCommand("isolate");
-        } catch (e) {
-            // isolation mode not available or path not found — non-fatal
-        }
+        } catch (e) {}
         try {
             app.executeMenuCommand("Live Free Transform");
-        } catch (e2) {
-            // Free Transform may not be available in all versions — non-fatal
-        }
+        } catch (e2) {}
     }
 
     return "confirmed|" + (pathName || "unknown");
@@ -384,9 +397,7 @@ function sa_colorClusters(clusterJson) {
                     }
                     p.strokeColor = clr;
                     p.strokeWidth = cluster.stroke_width || 1;
-                    if (cluster.dashed) {
-                        p.strokeDashes = [4, 4];
-                    }
+                    p.strokeDashes = [];
                     colored++;
                     break;  // found it, stop searching layers
                 } catch(e) {

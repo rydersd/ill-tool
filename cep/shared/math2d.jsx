@@ -187,6 +187,28 @@ function angle2d(a, b) {
  */
 function perp2d(v) { return [-v[1], v[0]]; }
 
+/**
+ * Point-in-polygon test (ray casting algorithm).
+ * Works with any simple polygon (convex or concave).
+ *
+ * @param {Array} point - [x, y]
+ * @param {Array} polygon - array of [x, y] vertices
+ * @returns {boolean} true if point is inside the polygon
+ */
+function pointInPolygon(point, polygon) {
+    var x = point[0], y = point[1];
+    var inside = false;
+    var n = polygon.length;
+    for (var i = 0, j = n - 1; i < n; j = i++) {
+        var xi = polygon[i][0], yi = polygon[i][1];
+        var xj = polygon[j][0], yj = polygon[j][1];
+        if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) {
+            inside = !inside;
+        }
+    }
+    return inside;
+}
+
 
 // ── Statistics ──────────────────────────────────────────────────────
 

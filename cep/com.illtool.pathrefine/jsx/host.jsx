@@ -46,6 +46,7 @@ $.evalFile(_PR_SHARED + "ui.jsx");
 
 // Module-level cache (persists across evalScript calls)
 var _pr_detachedPaths = [];     // references to detached pathItems
+var _pr_gapPaths = [];          // unselected-segment paths (removed on undo/apply)
 var _pr_originalAnchors = [];   // backup anchor data for reset
 var _pr_lodCache = null;        // precomputed LOD levels
 var _pr_originalPointCount = 0; // point count before simplification
@@ -56,14 +57,31 @@ var _pr_originalPointCount = 0; // point count before simplification
  */
 function pr_cleanupOrphans() {
     try {
-        var lyr = app.activeDocument.layers.getByName("Refined Forms");
+        var doc = app.activeDocument;
         var toRemove = [];
-        for (var i = 0; i < lyr.pathItems.length; i++) {
-            var name = lyr.pathItems[i].name;
-            if (name.indexOf("__detached_") === 0 && name.indexOf("__", 11) > 0) {
-                toRemove.push(lyr.pathItems[i]);
+
+        // Clean orphaned __detached_*__ on Refined Forms layer
+        try {
+            var lyr = doc.layers.getByName("Refined Forms");
+            for (var i = 0; i < lyr.pathItems.length; i++) {
+                var name = lyr.pathItems[i].name;
+                if (name.indexOf("__detached_") === 0 && name.indexOf("__", 11) > 0) {
+                    toRemove.push(lyr.pathItems[i]);
+                }
+            }
+        } catch (e) {}
+
+        // Clean orphaned __gap_*__ on any layer
+        for (var li = 0; li < doc.layers.length; li++) {
+            var layer = doc.layers[li];
+            for (var gi = 0; gi < layer.pathItems.length; gi++) {
+                var gname = layer.pathItems[gi].name;
+                if (gname.indexOf("__gap_") === 0 && gname.lastIndexOf("__") > 5) {
+                    toRemove.push(layer.pathItems[gi]);
+                }
             }
         }
+
         for (var j = toRemove.length - 1; j >= 0; j--) toRemove[j].remove();
         if (toRemove.length > 0) app.redraw();
         return toRemove.length + "";
@@ -151,6 +169,7 @@ function pr_detachAndPrecompute(padding, groupName) {
     _pr_group.name = groupName || ("detach_" + new Date().getTime());
 
     _pr_detachedPaths = [];
+    _pr_gapPaths = [];
     _pr_originalAnchors = [];
     var detachedCount = 0;
     var allAnchorsFlat = [];
@@ -158,21 +177,67 @@ function pr_detachAndPrecompute(padding, groupName) {
     for (var i = 0; i < duplicates.length; i++) {
         var path = duplicates[i];
 
+        // Capture original stroke style before we touch the path
+        var origStrokeColor = null;
+        try {
+            var sc = path.strokeColor;
+            if (sc.typename === "RGBColor") {
+                origStrokeColor = [sc.red, sc.green, sc.blue];
+            } else if (sc.typename === "CMYKColor") {
+                // Approximate CMYK→RGB for gap paths
+                var r2 = 255 * (1 - sc.cyan / 100) * (1 - sc.black / 100);
+                var g2 = 255 * (1 - sc.magenta / 100) * (1 - sc.black / 100);
+                var b2 = 255 * (1 - sc.yellow / 100) * (1 - sc.black / 100);
+                origStrokeColor = [Math.round(r2), Math.round(g2), Math.round(b2)];
+            } else if (sc.typename === "GrayColor") {
+                var v = Math.round(255 * (1 - sc.gray / 100));
+                origStrokeColor = [v, v, v];
+            }
+        } catch (e) {}
+        if (!origStrokeColor) origStrokeColor = [0, 0, 0]; // fallback black
+        var origStrokeWidth = 1.0;
+        try { origStrokeWidth = path.strokeWidth; } catch (e) {}
+        var origFilled = false;
+        try { origFilled = path.filled; } catch (e) {}
+        var origFillColor = null;
+        try {
+            if (origFilled) {
+                var fc = path.fillColor;
+                if (fc.typename === "RGBColor") origFillColor = fc;
+            }
+        } catch (e) {}
+
+        // Remember the source layer so gap paths go back there
+        var sourceLayer = path.layer;
+
+        // Read ALL points with their selection state
+        var allPts = [];
+        var selectedCount = 0;
+        for (var j = 0; j < path.pathPoints.length; j++) {
+            var pp = path.pathPoints[j];
+            var isSel = (pp.selected !== PathPointSelection.NOSELECTION);
+            if (isSel) selectedCount++;
+            allPts.push({
+                anchor: [pp.anchor[0], pp.anchor[1]],
+                left: [pp.leftDirection[0], pp.leftDirection[1]],
+                right: [pp.rightDirection[0], pp.rightDirection[1]],
+                type: pp.pointType,
+                selected: isSel
+            });
+        }
+
+        var allSelected = (selectedCount === allPts.length);
+
         // Find contiguous runs of selected points
         var runs = [];
         var currentRun = null;
 
-        for (var j = 0; j < path.pathPoints.length; j++) {
-            var pp = path.pathPoints[j];
-            if (pp.selected !== PathPointSelection.NOSELECTION) {
+        for (var j2 = 0; j2 < allPts.length; j2++) {
+            var pt = allPts[j2];
+            if (pt.selected) {
                 if (!currentRun) currentRun = { points: [] };
-                currentRun.points.push({
-                    anchor: [pp.anchor[0], pp.anchor[1]],
-                    left: [pp.leftDirection[0], pp.leftDirection[1]],
-                    right: [pp.rightDirection[0], pp.rightDirection[1]],
-                    type: pp.pointType
-                });
-                allAnchorsFlat.push([pp.anchor[0], pp.anchor[1]]);
+                currentRun.points.push(pt);
+                allAnchorsFlat.push(pt.anchor.slice(0));
             } else {
                 if (currentRun) {
                     runs.push(currentRun);
@@ -182,7 +247,7 @@ function pr_detachAndPrecompute(padding, groupName) {
         }
         if (currentRun) runs.push(currentRun);
 
-        // Create detached paths from each run, inside the result group
+        // Create detached paths from each selected run, inside the result group
         for (var r = 0; r < runs.length; r++) {
             var run = runs[r];
             if (run.points.length < 2) continue;
@@ -203,19 +268,64 @@ function pr_detachAndPrecompute(padding, groupName) {
                 stroked: true,
                 strokeColor: [200, 100, 30],
                 strokeWidth: 1.0,
-                strokeDashes: [3, 3]
+                strokeDashes: []
             });
 
             _pr_detachedPaths.push(newPath);
             detachedCount++;
         }
 
-        // Remove the duplicate (we've extracted what we need into the group)
+        // ── Build gap paths for UNSELECTED runs (only for partial selections) ──
+        if (!allSelected && runs.length > 0) {
+            var gapRuns = [];
+            var gapRun = null;
+
+            for (var g = 0; g < allPts.length; g++) {
+                if (!allPts[g].selected) {
+                    if (!gapRun) gapRun = { points: [] };
+                    gapRun.points.push(allPts[g]);
+                } else {
+                    if (gapRun) {
+                        gapRuns.push(gapRun);
+                        gapRun = null;
+                    }
+                }
+            }
+            if (gapRun) gapRuns.push(gapRun);
+
+            // Create gap paths on the SOURCE layer with original stroke style
+            for (var gr = 0; gr < gapRuns.length; gr++) {
+                var gap = gapRuns[gr];
+                if (gap.points.length < 2) continue;
+
+                var gapPath = createPathWithHandles(sourceLayer, gap.points, {
+                    name: "__gap_" + i + "_" + gr + "__",
+                    closed: false,
+                    stroked: true,
+                    strokeColor: origStrokeColor,
+                    strokeWidth: origStrokeWidth,
+                    strokeDashes: []
+                });
+
+                // Restore fill if the original had one
+                if (origFilled && origFillColor) {
+                    try {
+                        gapPath.filled = true;
+                        gapPath.fillColor = origFillColor;
+                    } catch (e) {}
+                }
+
+                _pr_gapPaths.push(gapPath);
+            }
+        }
+
+        // Remove the duplicate (we've extracted what we need)
         try { path.remove(); } catch(e) {}
     }
 
     if (detachedCount === 0) {
-        // Nothing detached — restore originals
+        // Nothing detached — clean up gap paths and restore originals
+        _pr_cleanGapPaths();
         try { _pr_group.remove(); } catch(e) {}
         _pr_group = null;
         _pr_restoreOriginals();
@@ -271,7 +381,7 @@ function pr_applySimplifyLevel(level) {
             stroked: true,
             strokeColor: [200, 100, 30],
             strokeWidth: 1.0,
-            strokeDashes: [3, 3],
+            strokeDashes: [],
             computeHandles: true,
             tension: 1 / 6
         });
@@ -324,6 +434,13 @@ function pr_doApply() {
         } catch(e) {}
         _pr_originalGroup = null;
     }
+    // Solidify gap paths — rename so they're no longer tracked as temporary
+    for (var gi = 0; gi < _pr_gapPaths.length; gi++) {
+        try {
+            _pr_gapPaths[gi].name = "remainder_" + new Date().getTime() + "_" + gi;
+        } catch (e) {}
+    }
+    _pr_gapPaths = [];
     _pr_detachedPaths = [];
     _pr_originalAnchors = [];
     _pr_lodCache = null;
@@ -356,7 +473,7 @@ function pr_doReset() {
             stroked: true,
             strokeColor: [200, 100, 30],
             strokeWidth: 1.0,
-            strokeDashes: [3, 3]
+            strokeDashes: []
         });
 
         _pr_detachedPaths.push(newPath);
@@ -373,6 +490,8 @@ function pr_doReset() {
  */
 function pr_doUndoDetach() {
     _pr_cleanDetachedPaths();
+    // Remove gap paths (unselected remainder fragments)
+    _pr_cleanGapPaths();
     // Remove the working group
     if (_pr_group) {
         try { _pr_group.remove(); } catch(e) {}
@@ -382,6 +501,7 @@ function pr_doUndoDetach() {
     _pr_restoreOriginals();
     removeBoundingBox("Refined Forms");
     _pr_detachedPaths = [];
+    _pr_gapPaths = [];
     _pr_originalAnchors = [];
     _pr_lodCache = null;
     _pr_originalPointCount = 0;
@@ -434,6 +554,37 @@ function _pr_cleanDetachedPaths() {
         }
         for (var k = toRemove.length - 1; k >= 0; k--) {
             toRemove[k].remove();
+        }
+    } catch (e) {}
+}
+
+/**
+ * Remove all gap (unselected remainder) path items from the canvas.
+ */
+function _pr_cleanGapPaths() {
+    // Remove tracked gap paths
+    for (var i = _pr_gapPaths.length - 1; i >= 0; i--) {
+        try {
+            _pr_gapPaths[i].remove();
+        } catch (e) {}
+    }
+    _pr_gapPaths = [];
+
+    // Also clean up any orphaned __gap_*__ paths across all layers
+    try {
+        var doc = app.activeDocument;
+        for (var li = 0; li < doc.layers.length; li++) {
+            var layer = doc.layers[li];
+            var toRemove = [];
+            for (var j = 0; j < layer.pathItems.length; j++) {
+                var name = layer.pathItems[j].name;
+                if (name.indexOf("__gap_") === 0 && name.lastIndexOf("__") > 5) {
+                    toRemove.push(layer.pathItems[j]);
+                }
+            }
+            for (var k = toRemove.length - 1; k >= 0; k--) {
+                toRemove[k].remove();
+            }
         }
     } catch (e) {}
 }

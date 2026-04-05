@@ -18,6 +18,7 @@ from adobe_mcp.apps.illustrator.drawing.form_edge_extract import (
     OUTPUT_DIR,
     FormEdgeExtractInput,
     _build_place_jsx,
+    _cap_contour_points,
     _compare,
     _extract,
     _status,
@@ -314,7 +315,7 @@ class TestPlaceJsx:
     def test_jsx_creates_layer(self):
         """JSX should create or find the named layer."""
         contours = [{"name": "edge_0", "points": [[0, 0], [10, 0], [10, 10]]}]
-        jsx = _build_place_jsx(contours, "Form Edges")
+        jsx = "".join(_build_place_jsx(contours, "Form Edges"))
         assert "Form Edges" in jsx
         assert "layer.name" in jsx
 
@@ -324,7 +325,7 @@ class TestPlaceJsx:
             {"name": "edge_0", "points": [[0, 0], [10, 0], [10, 10]]},
             {"name": "edge_1", "points": [[20, 20], [30, 20], [30, 30]]},
         ]
-        jsx = _build_place_jsx(contours, "Form Edges")
+        jsx = "".join(_build_place_jsx(contours, "Form Edges"))
         assert "edge_0" in jsx
         assert "edge_1" in jsx
         assert "pathItems.add()" in jsx
@@ -332,28 +333,28 @@ class TestPlaceJsx:
     def test_jsx_sets_entire_path(self):
         """JSX should call setEntirePath with point arrays."""
         contours = [{"name": "test", "points": [[5, 10], [15, 20], [25, 30]]}]
-        jsx = _build_place_jsx(contours, "Form Edges")
+        jsx = "".join(_build_place_jsx(contours, "Form Edges"))
         assert "setEntirePath" in jsx
         assert "[5, 10]" in jsx
 
     def test_jsx_smoothing_enabled(self):
         """When smooth=True, JSX should set bezier handles."""
         contours = [{"name": "test", "points": [[0, 0], [10, 0], [10, 10]]}]
-        jsx = _build_place_jsx(contours, "Form Edges", smooth=True)
+        jsx = "".join(_build_place_jsx(contours, "Form Edges", smooth=True))
         assert "leftDirection" in jsx
         assert "rightDirection" in jsx
 
     def test_jsx_smoothing_disabled(self):
         """When smooth=False, JSX should not set bezier handles."""
         contours = [{"name": "test", "points": [[0, 0], [10, 0], [10, 10]]}]
-        jsx = _build_place_jsx(contours, "Form Edges", smooth=False)
+        jsx = "".join(_build_place_jsx(contours, "Form Edges", smooth=False))
         # The smoothing block is conditioned on the smooth flag
         assert '"false"' in jsx or "false" in jsx
 
     def test_jsx_returns_json(self):
         """JSX should return JSON with paths_placed count."""
         contours = [{"name": "test", "points": [[0, 0], [10, 0], [10, 10]]}]
-        jsx = _build_place_jsx(contours, "Form Edges")
+        jsx = "".join(_build_place_jsx(contours, "Form Edges"))
         assert "JSON.stringify" in jsx
         assert "paths_placed" in jsx
 
@@ -363,7 +364,7 @@ class TestPlaceJsx:
             {"name": "short", "points": [[0, 0], [10, 0]]},  # Too short
             {"name": "ok", "points": [[0, 0], [10, 0], [10, 10]]},
         ]
-        jsx = _build_place_jsx(contours, "Form Edges")
+        jsx = "".join(_build_place_jsx(contours, "Form Edges"))
         # "short" should not appear as a path name in the JSX
         # but "ok" should
         assert '"ok"' in jsx
@@ -371,8 +372,83 @@ class TestPlaceJsx:
     def test_jsx_custom_layer_name(self):
         """JSX should use the provided custom layer name."""
         contours = [{"name": "test", "points": [[0, 0], [10, 0], [10, 10]]}]
-        jsx = _build_place_jsx(contours, "My Custom Layer")
+        jsx = "".join(_build_place_jsx(contours, "My Custom Layer"))
         assert "My Custom Layer" in jsx
+
+    def test_jsx_returns_list(self):
+        """_build_place_jsx should return a list of JSX strings."""
+        contours = [{"name": "test", "points": [[0, 0], [10, 0], [10, 10]]}]
+        result = _build_place_jsx(contours, "Form Edges")
+        assert isinstance(result, list)
+        assert len(result) >= 1
+        assert all(isinstance(s, str) for s in result)
+
+    def test_jsx_caps_high_point_contours(self):
+        """Contours with >200 points should be simplified before JSX."""
+        # Generate a 500-point contour (circle)
+        import math
+        points = [
+            [round(100 + 50 * math.cos(2 * math.pi * i / 500), 2),
+             round(100 + 50 * math.sin(2 * math.pi * i / 500), 2)]
+            for i in range(500)
+        ]
+        contours = [{"name": "dense", "points": points}]
+        jsx_batches = _build_place_jsx(contours, "Form Edges")
+        jsx = "".join(jsx_batches)
+        # The JSX should contain setEntirePath — path was placed, not dropped
+        assert "setEntirePath" in jsx
+        # Point count in the JSX should be reduced (not all 500 points)
+        # Count occurrences of coordinate pairs — rough check
+        assert jsx.count("[") < 500
+
+
+# ---------------------------------------------------------------------------
+# 5b. Point capping
+# ---------------------------------------------------------------------------
+
+
+class TestCapContourPoints:
+    """Verify Douglas-Peucker point capping for high-count contours."""
+
+    def test_under_threshold_unchanged(self):
+        """Points under max_points should be returned unchanged."""
+        points = [[0, 0], [10, 0], [10, 10]]
+        result = _cap_contour_points(points, max_points=200)
+        assert result == points
+
+    def test_over_threshold_reduced(self):
+        """Points over max_points should be simplified."""
+        import math
+        points = [
+            [round(100 + 50 * math.cos(2 * math.pi * i / 500), 2),
+             round(100 + 50 * math.sin(2 * math.pi * i / 500), 2)]
+            for i in range(500)
+        ]
+        result = _cap_contour_points(points, max_points=200)
+        assert len(result) <= 200
+        assert len(result) >= 3  # Must still be a valid contour
+
+    def test_exactly_at_threshold(self):
+        """Points at exactly max_points should be unchanged."""
+        import math
+        points = [
+            [round(50 * math.cos(2 * math.pi * i / 200), 2),
+             round(50 * math.sin(2 * math.pi * i / 200), 2)]
+            for i in range(200)
+        ]
+        result = _cap_contour_points(points, max_points=200)
+        assert result == points
+
+    def test_very_high_count_capped(self):
+        """1900-point contour (worst case from heuristic backend)."""
+        import math
+        points = [
+            [round(200 + 150 * math.cos(2 * math.pi * i / 1900), 2),
+             round(200 + 150 * math.sin(2 * math.pi * i / 1900), 2)]
+            for i in range(1900)
+        ]
+        result = _cap_contour_points(points, max_points=200)
+        assert len(result) <= 200
 
 
 # ---------------------------------------------------------------------------

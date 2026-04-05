@@ -221,14 +221,14 @@ function sm_previewMerge() {
             var tB = _sm_cachedNormalScores[pathB.name] || "";
             if (tA !== "" && tB !== "" && tA === tB) {
                 strokeColor = [60, 180, 60];    // green — same surface
-                strokeDashes = [4, 4];          // even dashes
+                strokeDashes = [];          // even dashes
             } else {
                 strokeColor = [200, 80, 30];    // dark orange — cross surface
-                strokeDashes = [8, 3, 2, 3];    // long-short (visually distinct)
+                strokeDashes = [];    // long-short (visually distinct)
             }
         } else {
             strokeColor = [200, 100, 30]; // default dark orange
-            strokeDashes = [4, 4];
+            strokeDashes = [];
         }
 
         var preview = createPath(lyr, [ptA, ptB], {

@@ -551,11 +551,12 @@ def contours_to_ai_points(
     contours: list[dict],
     image_size: tuple,
     artboard_dims,
+    margin: float = 0.95,
 ) -> list[dict]:
     """Transform pixel contours to Illustrator coordinates.
 
-    Applies Y-flip (Illustrator Y goes up), scales to fit the artboard
-    (maintaining aspect ratio), and centers the result.  Supports
+    Applies Y-flip (Illustrator Y goes up), scales to fit the target
+    bounds (maintaining aspect ratio), and centers the result.  Supports
     multi-artboard documents where the artboard is not at the origin.
 
     Args:
@@ -565,6 +566,10 @@ def contours_to_ai_points(
             ``bottom`` keys (for multi-artboard support, matching the
             pattern in ``contour_to_path.py``), or a ``(width, height)``
             tuple as a convenience fallback (assumes artboard at origin).
+        margin: Scale factor applied to the target bounds before fitting.
+            Use 0.95 (default) for artboard placement (5% inset).  Use
+            1.0 for PlacedItem alignment where the image should fill the
+            bounds exactly.
 
     Returns:
         New list of contour dicts with transformed ``"points"`` in AI coords.
@@ -591,11 +596,10 @@ def contours_to_ai_points(
     if img_w <= 0 or img_h <= 0:
         return contours  # Can't transform, return as-is
 
-    # Scale to fit artboard, maintaining aspect ratio (with 5% margin)
-    margin = 0.95
+    # Scale to fit target bounds, maintaining aspect ratio
     scale = min((ab_w * margin) / img_w, (ab_h * margin) / img_h)
 
-    # Center offset — use artboard's actual position for the transform,
+    # Center offset — use target's actual position for the transform,
     # matching the pattern in contour_to_path.py which uses ab["top"].
     offset_x = ab_left + (ab_w - img_w * scale) / 2.0
     offset_y = ab_top - (ab_h - img_h * scale) / 2.0

@@ -67,7 +67,7 @@ function placePreview(points, closed, layerName, handles) {
             stroked: true,
             strokeColor: [200, 100, 30],
             strokeWidth: 1.5,
-            strokeDashes: [4, 4]
+            strokeDashes: []
         });
     } else {
         // Original: auto-compute Catmull-Rom handles
@@ -77,7 +77,7 @@ function placePreview(points, closed, layerName, handles) {
             stroked: true,
             strokeColor: [200, 100, 30],
             strokeWidth: 1.5,
-            strokeDashes: [4, 4],
+            strokeDashes: [],
             computeHandles: true,
             tension: 1 / 6
         });
@@ -182,7 +182,7 @@ function drawBoundingBox(cx, cy, w, h, angle, padding, layerName) {
     bbox.stroked = true;
     bbox.strokeColor = bboxClr;
     bbox.strokeWidth = 1.0;
-    bbox.strokeDashes = [6, 3];
+    bbox.strokeDashes = [];
     bbox.closed = true;
 
     for (var j = 0; j < 4; j++) {
@@ -240,4 +240,148 @@ function removeBoundingBox(layerName) {
         }
         app.redraw();
     } catch (e) {}
+}
+
+/**
+ * Polygon lasso selection — select all path points inside a polygon.
+ *
+ * Click points to define polygon edges, double-click to close.
+ * Selects anchor points of all pathItems on visible, unlocked layers
+ * that fall inside the polygon.
+ *
+ * @param {string} polygonJson - JSON array of [x, y] polygon vertices (AI coordinates)
+ * @param {boolean} [addToSelection] - if true, adds to existing selection; if false, replaces
+ * @returns {string} pipe-delimited: "selected|anchorCount|pathCount" or "error|message"
+ */
+function polygonLassoSelect(polygonJson, addToSelection) {
+    try {
+        var polygon = JSON.parse(polygonJson);
+        if (!polygon || polygon.length < 3) return "error|Need at least 3 points";
+
+        var doc = app.activeDocument;
+
+        // Clear selection unless adding
+        if (!addToSelection) {
+            doc.selection = null;
+        }
+
+        var selectedAnchors = 0;
+        var selectedPaths = 0;
+
+        // Iterate all visible, unlocked layers
+        for (var li = 0; li < doc.layers.length; li++) {
+            var lyr = doc.layers[li];
+            if (!lyr.visible || lyr.locked) continue;
+
+            // Check all pathItems on this layer
+            for (var pi = 0; pi < lyr.pathItems.length; pi++) {
+                var path = lyr.pathItems[pi];
+                if (path.hidden || path.locked) continue;
+                // Skip guide/bbox items
+                var pname = path.name;
+                if (pname.indexOf("__") === 0) continue;
+
+                var pathHit = false;
+                for (var ai = 0; ai < path.pathPoints.length; ai++) {
+                    var anchor = path.pathPoints[ai].anchor;
+                    if (pointInPolygon(anchor, polygon)) {
+                        path.pathPoints[ai].selected = PathPointSelection.ANCHORPOINT;
+                        selectedAnchors++;
+                        pathHit = true;
+                    }
+                }
+                if (pathHit) selectedPaths++;
+            }
+
+            // Also check grouped items (one level deep)
+            for (var gi = 0; gi < lyr.groupItems.length; gi++) {
+                var grp = lyr.groupItems[gi];
+                if (grp.hidden || grp.locked) continue;
+
+                for (var gpi = 0; gpi < grp.pathItems.length; gpi++) {
+                    var gpath = grp.pathItems[gpi];
+                    if (gpath.hidden || gpath.locked) continue;
+                    var gpname = gpath.name;
+                    if (gpname.indexOf("__") === 0) continue;
+
+                    var gpathHit = false;
+                    for (var gai = 0; gai < gpath.pathPoints.length; gai++) {
+                        var ganchor = gpath.pathPoints[gai].anchor;
+                        if (pointInPolygon(ganchor, polygon)) {
+                            gpath.pathPoints[gai].selected = PathPointSelection.ANCHORPOINT;
+                            selectedAnchors++;
+                            gpathHit = true;
+                        }
+                    }
+                    if (gpathHit) selectedPaths++;
+                }
+            }
+        }
+
+        app.redraw();
+        return "selected|" + selectedAnchors + "|" + selectedPaths;
+    } catch (e) {
+        return "error|" + e.message;
+    }
+}
+
+/**
+ * Initialize working state for a layer of extracted paths.
+ *
+ * 1. Groups all items on the source layer into a named group
+ * 2. Duplicates the group
+ * 3. Tags the original with "(og)", locks it, hides it
+ * 4. The duplicate becomes the active working copy
+ *
+ * @param {string} layerName - layer containing the extracted paths
+ * @param {string} [groupName] - optional name for the group (defaults to layerName)
+ * @returns {string} pipe-delimited: "ok|itemCount|groupName" or "error|message"
+ */
+function initializeWorkingState(layerName, groupName) {
+    try {
+        var doc = app.activeDocument;
+        var lyr = doc.layers.getByName(layerName);
+
+        if (lyr.pageItems.length === 0) return "error|Layer is empty";
+
+        if (!groupName) groupName = layerName;
+
+        // 1. Group all items on the layer
+        var workGroup = lyr.groupItems.add();
+        workGroup.name = groupName;
+
+        // Move all items into the group (iterate backwards)
+        var itemCount = 0;
+        while (lyr.pageItems.length > 1) { // >1 because the group itself is a pageItem
+            var item = null;
+            // Find first item that isn't our group
+            for (var i = 0; i < lyr.pageItems.length; i++) {
+                if (lyr.pageItems[i] !== workGroup) {
+                    item = lyr.pageItems[i];
+                    break;
+                }
+            }
+            if (!item) break;
+            item.move(workGroup, ElementPlacement.PLACEATEND);
+            itemCount++;
+        }
+
+        // 2. Duplicate the group (stays on same layer)
+        var ogGroup = workGroup.duplicate();
+
+        // 3. Tag original as (og), lock, hide
+        ogGroup.name = groupName + " (og)";
+        ogGroup.locked = true;
+        ogGroup.hidden = true;
+
+        // 4. Working copy stays visible and active
+        // Select the working group
+        doc.selection = null;
+        workGroup.selected = true;
+
+        app.redraw();
+        return "ok|" + itemCount + "|" + groupName;
+    } catch (e) {
+        return "error|" + e.message;
+    }
 }
