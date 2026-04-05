@@ -180,6 +180,10 @@ function sa_reclassifyAs(shapeType) {
 
     placePreview(result.points, result.closed, "Cleaned Forms", result.handles || null);
 
+    // Recompute LOD cache with the new shape's surface hint
+    var hint = _sa_deriveSurfaceHint(shapeType);
+    _sa_cachedLOD = precomputeLOD(_sa_cachedSortedPoints, 20, hint);
+
     logInteraction("shapeaverager", "reclassify",
         {shape: _sa_cachedClassification ? _sa_cachedClassification.shape : "unknown"},
         {shape: result.shape, confidence: result.confidence, pointCount: result.points.length},
@@ -512,6 +516,10 @@ function sa_acceptCluster(clusterIndex) {
             if (found) _sa_origStrokes.splice(oi, 1);
         }
     }
+
+    // Splice this cluster from the ExtendScript-side array to stay in sync
+    // with the JS-side clusterData.splice() that happens in the callback.
+    _sa_clusters.splice(clusterIndex, 1);
 
     logInteraction("shapeaverager", "cluster_accept",
         {cluster_id: clusterIndex, identity_key: cluster.identity_key || "", member_count: names.length},

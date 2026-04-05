@@ -92,7 +92,7 @@ function stopSelectionPolling() {
 function detachSelection() {
     updateStatus("processing");
 
-    var padding = parseInt(document.getElementById("paddingSlider").value, 10) || 5;
+    var padding = 5;  // fixed padding (bounding box UI removed)
     var groupName = document.getElementById("groupName").value.replace(/'/g, "\\'").replace(/\\/g, "\\\\") || "";
     csInterface.evalScript("pr_detachAndPrecompute(" + padding + ", '" + groupName + "')", function (result) {
         if (!result || result.indexOf("error") === 0) {
@@ -282,23 +282,6 @@ function initControls() {
         requestSimplify();
     });
 
-    // Padding slider
-    var paddingSlider = document.getElementById("paddingSlider");
-    var paddingDisplay = document.getElementById("paddingValue");
-    paddingSlider.addEventListener("input", function () {
-        paddingDisplay.textContent = this.value + "pt";
-    });
-
-    // Show bounding box checkbox
-    document.getElementById("showBBox").addEventListener("change", function () {
-        if (hasDetached) {
-            if (!this.checked) {
-                csInterface.evalScript("removeBoundingBox()", function () {});
-            }
-            // Note: bounding box is computed during detach; re-showing would
-            // require re-running minAreaRect. For now, toggling off removes it.
-        }
-    });
 }
 
 // ── Utilities ──────────────────────────────────────────────────────

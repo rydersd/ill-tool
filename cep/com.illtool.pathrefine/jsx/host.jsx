@@ -46,7 +46,6 @@ $.evalFile(_PR_SHARED + "ui.jsx");
 
 // Module-level cache (persists across evalScript calls)
 var _pr_detachedPaths = [];     // references to detached pathItems
-var _pr_gapPaths = [];          // unselected-segment paths (removed on undo/apply)
 var _pr_originalAnchors = [];   // backup anchor data for reset
 var _pr_lodCache = null;        // precomputed LOD levels
 var _pr_originalPointCount = 0; // point count before simplification
@@ -70,17 +69,6 @@ function pr_cleanupOrphans() {
                 }
             }
         } catch (e) {}
-
-        // Clean orphaned __gap_*__ on any layer
-        for (var li = 0; li < doc.layers.length; li++) {
-            var layer = doc.layers[li];
-            for (var gi = 0; gi < layer.pathItems.length; gi++) {
-                var gname = layer.pathItems[gi].name;
-                if (gname.indexOf("__gap_") === 0 && gname.lastIndexOf("__") > 5) {
-                    toRemove.push(layer.pathItems[gi]);
-                }
-            }
-        }
 
         for (var j = toRemove.length - 1; j >= 0; j--) toRemove[j].remove();
         if (toRemove.length > 0) app.redraw();
@@ -156,7 +144,6 @@ function pr_detachAndPrecompute(padding, groupName) {
     _pr_group.name = groupName || ("detach_" + new Date().getTime());
 
     _pr_detachedPaths = [];
-    _pr_gapPaths = [];
     _pr_originalAnchors = [];
     var detachedCount = 0;
     var allAnchorsFlat = [];
@@ -279,8 +266,12 @@ function pr_applySimplifyLevel(level) {
         if (_pr_lodCache[i].value <= level) best = _pr_lodCache[i];
     }
 
-    // For simplification we rebuild detached paths with the simplified points.
-    // Remove existing detached paths and create a single simplified one.
+    // Only apply LOD simplification when there's a single detached path.
+    // Multiple detached runs would be merged into one path, losing separation.
+    // Users should use Shape Cleanup for individual path simplification.
+    if (_pr_detachedPaths.length > 1) return "error|Multiple paths — use Shape Cleanup to simplify individually";
+
+    // For simplification we rebuild the single detached path with the simplified points.
     _pr_cleanDetachedPaths();
 
     if (best.points.length >= 2) {
@@ -337,7 +328,6 @@ function pr_doApply() {
     _pr_group = null;
     // No originals to restore — they were never moved
     _pr_detachedPaths = [];
-    _pr_gapPaths = [];
     _pr_originalAnchors = [];
     _pr_lodCache = null;
     _pr_originalPointCount = 0;
@@ -393,7 +383,6 @@ function pr_doUndoDetach() {
         _pr_group = null;
     }
     _pr_detachedPaths = [];
-    _pr_gapPaths = [];
     _pr_originalAnchors = [];
     _pr_lodCache = null;
     _pr_originalPointCount = 0;
@@ -414,8 +403,9 @@ function pr_detachFromGroup() {
     for (var i = sel.length - 1; i >= 0; i--) {
         try {
             if (sel[i].parent && sel[i].parent.typename === "GroupItem") {
-                var parentLayer = sel[i].parent.layer;
-                sel[i].move(parentLayer, ElementPlacement.PLACEATEND);
+                var parent = sel[i].parent;  // the GroupItem
+                var target = parent.parent;  // either another GroupItem or the Layer
+                sel[i].move(target, ElementPlacement.PLACEATEND);
                 count++;
             }
         } catch(e) {}
@@ -476,33 +466,3 @@ function _pr_cleanDetachedPaths() {
     } catch (e) {}
 }
 
-/**
- * Remove all gap (unselected remainder) path items from the canvas.
- */
-function _pr_cleanGapPaths() {
-    // Remove tracked gap paths
-    for (var i = _pr_gapPaths.length - 1; i >= 0; i--) {
-        try {
-            _pr_gapPaths[i].remove();
-        } catch (e) {}
-    }
-    _pr_gapPaths = [];
-
-    // Also clean up any orphaned __gap_*__ paths across all layers
-    try {
-        var doc = app.activeDocument;
-        for (var li = 0; li < doc.layers.length; li++) {
-            var layer = doc.layers[li];
-            var toRemove = [];
-            for (var j = 0; j < layer.pathItems.length; j++) {
-                var name = layer.pathItems[j].name;
-                if (name.indexOf("__gap_") === 0 && name.lastIndexOf("__") > 5) {
-                    toRemove.push(layer.pathItems[j]);
-                }
-            }
-            for (var k = toRemove.length - 1; k >= 0; k--) {
-                toRemove[k].remove();
-            }
-        }
-    } catch (e) {}
-}

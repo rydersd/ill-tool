@@ -18,6 +18,7 @@ var lastSelectionState = "";     // last polled selection for change detection
 var activeTab = "Simplify";      // current tab: "Simplify" or "Cluster"
 var isIsolated = false;          // isolation mode state
 var reAverageTimer = null;       // debounce timer for live re-average
+var reAverageInProgress = false; // guard against re-average → selection change → re-average loop
 
 // ── Status Display ─────────────────────────────────────────────────
 
@@ -351,10 +352,13 @@ function pollSelection() {
         }
 
         // Live re-average when preview is active and selection changes (debounced)
-        if (hasPreview && result !== lastSelectionState) {
+        // Guard: suppress re-triggering while a re-average is in progress,
+        // since averaging changes the selection which would trigger another poll.
+        if (hasPreview && !reAverageInProgress && result !== lastSelectionState) {
             lastSelectionState = result;
             clearTimeout(reAverageTimer);
             reAverageTimer = setTimeout(function() {
+                reAverageInProgress = true;
                 csInterface.evalScript("sa_averageSelectedAnchors()", function (avgResult) {
                     if (avgResult && avgResult.indexOf("error") !== 0) {
                         var avgParts = avgResult.split("|");
@@ -364,7 +368,10 @@ function pollSelection() {
                         // so the next poll doesn't see this as a change
                         csInterface.evalScript("sa_getSelectionInfo()", function(newSel) {
                             if (newSel) lastSelectionState = newSel;
+                            reAverageInProgress = false;
                         });
+                    } else {
+                        reAverageInProgress = false;
                     }
                 });
             }, 300);

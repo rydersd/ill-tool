@@ -109,7 +109,7 @@ function confirmPreview(layerName) {
         clr.green = 30;
         clr.blue = 30;
         preview.strokeColor = clr;
-        preview.opacity = 70;
+        preview.opacity = 100;
 
         app.redraw();
         return newName;
@@ -255,7 +255,7 @@ function removeBoundingBox(layerName) {
  */
 function polygonLassoSelect(polygonJson, addToSelection) {
     try {
-        var polygon = JSON.parse(polygonJson);
+        var polygon = jsonParse(polygonJson);
         if (!polygon || polygon.length < 3) return "error|Need at least 3 points";
 
         var doc = app.activeDocument;
