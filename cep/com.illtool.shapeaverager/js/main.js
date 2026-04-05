@@ -214,7 +214,8 @@ function updateDetected(shapeName, confidence) {
  * Confirm the preview path — solidify, enter isolation mode, clear state.
  */
 function confirmPreview() {
-    csInterface.evalScript("sa_doConfirm()", function (result) {
+    var layerName = document.getElementById("cleanupLayerName").value.replace(/'/g, "\\'") || "";
+    csInterface.evalScript("sa_doConfirm('" + layerName + "')", function (result) {
         if (result && result.indexOf("confirmed") === 0) {
             hasPreview = false;
             document.getElementById("btnConfirm").disabled = true;

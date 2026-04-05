@@ -32,3 +32,4 @@ def register_drawing_tools(mcp):
     from adobe_mcp.apps.illustrator.drawing.cross_section import register as _r; _safe_register(_r, mcp)
     from adobe_mcp.apps.illustrator.drawing.shading_inference import register as _r; _safe_register(_r, mcp)
     from adobe_mcp.apps.illustrator.drawing.normal_reference import register as _r; _safe_register(_r, mcp)
+    from adobe_mcp.apps.illustrator.drawing.surface_extract import register as _r; _safe_register(_r, mcp)
