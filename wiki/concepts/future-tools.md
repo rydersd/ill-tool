@@ -1,7 +1,7 @@
 # Future Tool Ideas
 
-> Brief: Planned tools and improvements from active experimentation — Smart Merge, interaction capture, shape tool refinements, bounding box as skew modifier.
-> Tags: future, tools, ideas, smart-merge, interaction-capture, bounding-box
+> Brief: Planned tools — C++ plugin toolbar (polygon lasso, handles, click-to-extract), CEP improvements (ref opacity, activity accordion), and active experiments.
+> Tags: future, tools, ideas, c++, backlog, polygon-lasso, surface-extract
 > Created: 2026-04-04
 > Updated: 2026-04-04
 
@@ -54,7 +54,29 @@ illustrator/
 └── tools.py       # registration entry point
 ```
 
+## C++ Plugin Toolbar Tools (blocked on Apple notarization)
+
+### Polygon Lasso Selection Tool
+Click to place polygon vertices on canvas, double-click to close. All anchor points inside get selected. Works on visible/unlocked layers only.
+
+**How it works**: C++ custom tool (AIToolSuite) captures canvas clicks. Annotator overlay draws polygon edges in real-time. On close, calls `polygonLassoSelect()` (already implemented in `cep/shared/ui.jsx` with `pointInPolygon` from `math2d.jsx`). Shift+double-click adds to selection.
+
+### IllTool Handle Tool  
+Non-scaling programmatic handles for cleanup operations. Draggable bezier curve handles. Bounding box as pixel-less line. All via AIAnnotatorSuite — no PathItems, no document pollution.
+
+### Click-to-Extract (Surface Intelligence)
+Click on reference → identify surface type → flood-fill connected region → extract boundary contours. MCP tool `adobe_ai_surface_extract` already built (click_extract, type_extract, region_extract). Needs C++ plugin for canvas click capture.
+
+## CEP Panel Improvements (can ship now)
+
+### Reference Opacity Slider
+Slider in MCP panel to adjust reference layer opacity. Needed because reference should be dimmed while tracing.
+
+### Activity Log Accordion
+Operation log collapsed by default. Expand on click. Don't waste panel space.
+
 ## See Also
+- [[Illustrator C++ Plugin SDK]] — C++ plugin architecture and notarization status
 - [[Form Edge Extraction Workflow]] — the current tool stack
 - [[Normal Map as Shadow-Free Reference]] — the preprocessing architecture
 - [[Correction Learning]] — the pattern for learning from user corrections
