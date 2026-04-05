@@ -74,6 +74,64 @@ body {
 .status-label.processing { color: #ff9800; }
 .status-label.preview    { color: #7cb8f0; }
 
+/* ── Tab Bar ───────────────────────────────────────────────────── */
+.tab-bar {
+    display: flex;
+    background: #2a2a2a;
+    height: 24px;
+    margin-bottom: 10px;
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.tab-btn {
+    flex: 1;
+    height: 24px;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: #888;
+    font-family: inherit;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.tab-btn:hover {
+    color: #bbb;
+}
+
+.tab-btn.active {
+    color: #7cb8f0;
+    border-bottom-color: #7cb8f0;
+}
+
+/* ── Isolation Toggle Button ──────────────────────────────────── */
+.iso-btn {
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    color: #666;
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 1px 3px;
+    transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.iso-btn:hover {
+    color: #aaa;
+    border-color: #555;
+}
+
+.iso-btn.active {
+    color: #7cb8f0;
+    border-color: #4a8ec8;
+}
+
 /* ── Section Dividers ───────────────────────────────────────────── */
 .section {
     margin-bottom: 10px;

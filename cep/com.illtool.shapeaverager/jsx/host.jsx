@@ -61,6 +61,32 @@ function sa_getSelectionInfo() {
 }
 
 /**
+ * Derive a surface hint string from a detected shape type.
+ * Maps shape classification results to surface type names that
+ * can inform both classifyShape() confidence boosting and
+ * precomputeLOD() primitive-aware simplification.
+ *
+ * @param {string} shapeType - detected shape: "line", "arc", "lshape", "rectangle", "scurve", "ellipse", "freeform"
+ * @returns {string|null} surface hint: "flat", "cylindrical", "angular", "saddle", or null
+ */
+function _sa_deriveSurfaceHint(shapeType) {
+    switch (shapeType) {
+        case "line":
+        case "rectangle":
+            return "flat";
+        case "arc":
+        case "ellipse":
+            return "cylindrical";
+        case "lshape":
+            return "angular";
+        case "scurve":
+            return "saddle";
+        default:
+            return null;
+    }
+}
+
+/**
  * Main entry point: read selected anchors, classify shape, place preview.
  *
  * Returns pipe-delimited: "shape|confidence|inputCount|outputCount"
@@ -86,7 +112,7 @@ function sa_averageSelectedAnchors() {
             }
             if (!alreadyTracked) {
                 _sa_hiddenSourcePaths.push({ item: sel[s], prevOpacity: sel[s].opacity });
-                sel[s].opacity = 0;
+                sel[s].opacity = 30;  // dim but visible so user can Shift+click source anchors
             }
         }
     }
@@ -94,25 +120,35 @@ function sa_averageSelectedAnchors() {
     var sorted = sortByPCA(anchors);
     _sa_cachedSortedPoints = sorted;
 
+    // First pass: classify without surface hint to get shape type
     var classification = classifyShape(sorted);
+
+    // Derive surface hint from detected shape type for surface-aware simplification
+    var surfaceHint = _sa_deriveSurfaceHint(classification.shape);
+
+    // Re-classify with surface hint if one was derived (boosts confidence)
+    if (surfaceHint) {
+        classification = classifyShape(sorted, surfaceHint);
+    }
     _sa_cachedClassification = classification;
 
-    // Precompute LOD levels for instant slider scrubbing
-    _sa_cachedLOD = precomputeLOD(sorted, 20);
+    // Precompute LOD levels for instant slider scrubbing (surface-aware)
+    _sa_cachedLOD = precomputeLOD(sorted, 20, surfaceHint);
 
     // Place preview path on "Cleaned Forms" layer (pass handles if available)
     var previewPath = placePreview(classification.points, classification.closed, "Cleaned Forms", classification.handles || null);
 
-    // Compute and draw bounding box with 2x anchor points in blue
-    var rect = minAreaRect(anchors);
-    drawBoundingBox(rect.center[0], rect.center[1], rect.width, rect.height, rect.angle, 5, "Cleaned Forms");
-
-    // Select the preview so user can see/edit its anchor handles
-    // (user can delete stray points with Delete Anchor Point tool)
+    // No bounding box — go straight into isolation mode with native handles
     try {
         doc.selection = null;
         previewPath.selected = true;
+        app.executeMenuCommand("isolate");
     } catch (e) {}
+
+    // Switch to Direct Selection tool so user sees anchor handles immediately
+    try {
+        app.executeMenuCommand("direct");
+    } catch (e2) {}
 
     // Return result as pipe-delimited string
     return classification.shape + "|" + classification.confidence + "|" + sorted.length + "|" + classification.points.length;
@@ -168,7 +204,11 @@ function sa_applyLODLevel(level) {
         if (_sa_cachedLOD[i].value <= level) best = _sa_cachedLOD[i];
     }
 
-    placePreview(best.points, false, "Cleaned Forms");
+    // High-simplification levels may include primitive fit metadata
+    var isClosed = best.closed || false;
+    var handles = best.handles || null;
+
+    placePreview(best.points, isClosed, "Cleaned Forms", handles);
     return best.count + "";
 }
 
@@ -217,7 +257,7 @@ function sa_doConfirm(targetLayerName) {
     }
 
     var pathName = confirmPreview(layerName);
-    removeBoundingBox("Cleaned Forms");
+    // No bounding box to remove — using isolation mode instead
     // Delete hidden source paths — they've been replaced by the confirmed preview
     for (var hp = _sa_hiddenSourcePaths.length - 1; hp >= 0; hp--) {
         try { _sa_hiddenSourcePaths[hp].item.remove(); } catch(e3) {}
@@ -253,7 +293,7 @@ function sa_doConfirm(targetLayerName) {
 function sa_doUndoAverage() {
     logInteraction("shapeaverager", "undo", null, null, null);
     undoPreview("Cleaned Forms");
-    removeBoundingBox("Cleaned Forms");
+    // No bounding box to remove — using isolation mode instead
     _sa_restoreHiddenPaths();
     _sa_cachedSortedPoints = null;
     _sa_cachedClassification = null;
@@ -443,9 +483,13 @@ function sa_acceptCluster(clusterIndex) {
 
     if (anchors.length < 2) return "error|Need at least 2 anchors";
 
-    // Sort, classify, place preview — reusing shared library functions
+    // Sort, classify with surface hint, place preview — reusing shared library functions
     var sorted = sortByPCA(anchors);
     var classification = classifyShape(sorted);
+    var surfaceHint = _sa_deriveSurfaceHint(classification.shape);
+    if (surfaceHint) {
+        classification = classifyShape(sorted, surfaceHint);
+    }
     var previewPath = placePreview(classification.points, classification.closed, "Cleaned Forms", classification.handles || null);
 
     // Rename from __preview__ to a permanent name
@@ -568,5 +612,87 @@ function sa_exitClusterMode() {
     _sa_clusterMode = false;
     app.redraw();
     return "exited";
+}
+
+/**
+ * Select all small/noisy paths on visible, unlocked layers.
+ *
+ * Selects paths with fewer than maxPoints anchor points,
+ * or (if maxArcLength > 0) total arc length shorter than the threshold.
+ * Skips internal paths (__preview__, __bbox_*, __cluster_*).
+ *
+ * @param {number} maxPoints - max anchor count to qualify as "small" (default 3)
+ * @param {number} maxArcLength - max arc length in points; 0 = skip length check
+ * Returns the count of selected paths as a string, or "error|message"
+ */
+function sa_selectSmallPaths(maxPoints, maxArcLength) {
+    var doc;
+    try { doc = app.activeDocument; } catch(e) { return "error|No document"; }
+
+    if (!maxPoints || maxPoints < 1) maxPoints = 3;
+    if (!maxArcLength) maxArcLength = 0;
+
+    // Deselect everything first
+    doc.selection = null;
+
+    var selected = 0;
+
+    for (var li = 0; li < doc.layers.length; li++) {
+        var lyr = doc.layers[li];
+        // Skip hidden or locked layers
+        if (!lyr.visible || lyr.locked) continue;
+
+        for (var pi = 0; pi < lyr.pathItems.length; pi++) {
+            var path = lyr.pathItems[pi];
+
+            // Skip internal/preview paths
+            var name = path.name || "";
+            if (name === "__preview__" ||
+                name.indexOf("__bbox_") === 0 ||
+                name.indexOf("__cluster_") === 0) continue;
+
+            // Skip hidden or locked paths
+            if (path.hidden || path.locked) continue;
+
+            var pointCount = path.pathPoints.length;
+            var isSmall = false;
+
+            // Check point count threshold
+            if (pointCount < maxPoints) {
+                isSmall = true;
+            }
+
+            // Check arc length threshold if specified
+            if (!isSmall && maxArcLength > 0 && pointCount >= 2) {
+                var totalLength = 0;
+                for (var pp = 1; pp < path.pathPoints.length; pp++) {
+                    var a = path.pathPoints[pp - 1].anchor;
+                    var b = path.pathPoints[pp].anchor;
+                    var dx = b[0] - a[0];
+                    var dy = b[1] - a[1];
+                    totalLength += Math.sqrt(dx * dx + dy * dy);
+                }
+                // Close the loop if path is closed
+                if (path.closed && path.pathPoints.length > 2) {
+                    var first = path.pathPoints[0].anchor;
+                    var last = path.pathPoints[path.pathPoints.length - 1].anchor;
+                    var cdx = first[0] - last[0];
+                    var cdy = first[1] - last[1];
+                    totalLength += Math.sqrt(cdx * cdx + cdy * cdy);
+                }
+                if (totalLength < maxArcLength) {
+                    isSmall = true;
+                }
+            }
+
+            if (isSmall) {
+                path.selected = true;
+                selected++;
+            }
+        }
+    }
+
+    app.redraw();
+    return selected + "";
 }
 

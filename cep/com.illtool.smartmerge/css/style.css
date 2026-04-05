@@ -73,6 +73,25 @@ body {
 .status-label.processing { color: #ff9800; }
 .status-label.preview    { color: #7cb8f0; }
 
+.btn-iso {
+    background: none;
+    border: 1px solid #555;
+    border-radius: 3px;
+    color: #666;
+    font-family: "SF Mono", "Fira Code", Consolas, monospace;
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    padding: 1px 4px;
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.btn-iso:hover {
+    color: #aaa;
+    border-color: #777;
+}
+
 /* ── Section Dividers ───────────────────────────────────────────── */
 .section {
     margin-bottom: 10px;

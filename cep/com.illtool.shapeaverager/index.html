@@ -7,7 +7,7 @@
 </head>
 <body>
 
-    <!-- Header with status + help toggle -->
+    <!-- Header with status + help toggle + isolation toggle -->
     <div class="header">
         <span class="header-title">Shape Cleanup</span>
         <div style="display: flex; align-items: center; gap: 8px;">
@@ -16,9 +16,19 @@
                 <div id="statusDot" class="status-dot ready"></div>
                 <span id="statusLabel" class="status-label ready">ready</span>
             </div>
+            <button id="btnIsolation" class="iso-btn" onclick="toggleIsolation()" title="Toggle Isolation Mode">&#9678;</button>
             <span id="helpToggle" onclick="toggleHelp()" style="cursor: pointer; color: #888; font-size: 14px; line-height: 1;" title="Help">&#8943;</span>
         </div>
     </div>
+
+    <!-- Tab bar -->
+    <div class="tab-bar">
+        <button class="tab-btn active" data-tab="Simplify" onclick="switchTab('Simplify')">Simplify</button>
+        <button class="tab-btn" data-tab="Cluster" onclick="switchTab('Cluster')">Cluster</button>
+    </div>
+
+    <!-- ============ SIMPLIFY TAB ============ -->
+    <div id="tabSimplify">
 
     <!-- Shape type buttons -->
     <div class="section">
@@ -55,7 +65,7 @@
         </div>
     </div>
 
-    <!-- Help (hidden by default, toggled via ⋯ button) -->
+    <!-- Help (hidden by default, toggled via ... button) -->
     <div id="helpText" class="section" style="display: none;">
         <div style="color: #aaa; font-size: 10px; line-height: 1.6;">
             <strong>Getting started:</strong><br>
@@ -65,24 +75,6 @@
             4. Click <em>Confirm</em> to place the cleaned path<br>
             <br>
             <strong>Shortcuts:</strong> Enter=Confirm, Esc=Cancel, 1-7=Shape type
-        </div>
-    </div>
-
-    <!-- Clustering -->
-    <div id="clusterSection" class="section" style="display: none;">
-        <div class="slider-row">
-            <span class="slider-label">Distance</span>
-            <input type="range" id="distanceSlider" min="1" max="30" value="8">
-            <span class="slider-value" id="distanceValue">8</span>
-            <span style="color: #666; font-size: 9px;">pt</span>
-        </div>
-        <div id="clusterReadout" style="color: #aaa; font-size: 10px; margin: 4px 0; font-family: 'SF Mono', Consolas, monospace;"></div>
-        <div id="clusterList" style="max-height: 160px; overflow-y: auto; margin: 4px 0;"></div>
-        <div class="action-buttons">
-            <div class="btn-row">
-                <button class="btn btn-primary" id="btnAcceptAll" onclick="acceptAllClusters()" disabled title="Average all clusters (A)">Accept All</button>
-                <button class="btn btn-secondary" id="btnExitCluster" onclick="exitClusterMode()" title="Exit clustering mode">Exit</button>
-            </div>
         </div>
     </div>
 
@@ -98,7 +90,6 @@
     <div class="section">
         <div class="action-buttons">
             <div class="btn-row">
-                <button class="btn btn-secondary" id="btnCluster" onclick="clusterLayers()" title="Auto-cluster paths across extraction layers">Cluster Layers</button>
                 <button class="btn btn-primary" id="btnAverage" onclick="averageSelection()" title="Classify and preview averaged path from selected anchors">
                     Average Selection
                 </button>
@@ -110,6 +101,14 @@
                 <button class="btn btn-secondary" id="btnUndo" onclick="undoPreview()" title="Remove preview and reset (Esc)">
                     Cancel
                 </button>
+                <button class="btn btn-secondary" id="btnSelectSmall" onclick="selectSmallPaths()" title="Select small/noisy paths below threshold">
+                    Select Small
+                </button>
+            </div>
+            <div class="slider-row" style="margin-top: 4px;">
+                <span class="slider-label" style="flex: 0 0 auto;">Small threshold</span>
+                <input type="number" id="smallThreshold" value="3" min="1" max="20" style="width: 40px; background:#333; color:#eee; border:1px solid #555; border-radius:3px; padding:2px 4px; font-size:11px; font-family:'SF Mono',Consolas,monospace; text-align:center;">
+                <span style="color: #888; font-size: 10px;">pts</span>
             </div>
         </div>
     </div>
@@ -121,6 +120,42 @@
         </div>
         <button class="btn btn-secondary" onclick="exitIsolation()" style="margin-top: 4px;">Exit Isolation Mode</button>
     </div>
+
+    </div><!-- /tabSimplify -->
+
+    <!-- ============ CLUSTER TAB ============ -->
+    <div id="tabCluster" style="display:none;">
+
+    <div class="section">
+        <div class="slider-row">
+            <span class="slider-label">Distance</span>
+            <input type="range" id="distanceSlider" min="1" max="30" value="8">
+            <span class="slider-value" id="distanceValue">8</span>
+            <span style="color: #666; font-size: 9px;">pt</span>
+        </div>
+    </div>
+
+    <div class="section">
+        <div class="action-buttons">
+            <div class="btn-row">
+                <button class="btn btn-primary" id="btnCluster" onclick="clusterLayers()" title="Auto-cluster paths across extraction layers">Cluster Layers</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="clusterReadout" style="color: #aaa; font-size: 10px; margin: 4px 0; font-family: 'SF Mono', Consolas, monospace;"></div>
+    <div id="clusterList" style="max-height: 200px; overflow-y: auto; margin: 4px 0;"></div>
+
+    <div class="section" id="clusterActions" style="display:none;">
+        <div class="action-buttons">
+            <div class="btn-row">
+                <button class="btn btn-primary" id="btnAcceptAll" onclick="acceptAllClusters()" disabled title="Average all clusters (Shift+A)">Accept All</button>
+                <button class="btn btn-secondary" id="btnExitCluster" onclick="exitClusterMode()" title="Exit clustering mode">Exit</button>
+            </div>
+        </div>
+    </div>
+
+    </div><!-- /tabCluster -->
 
     <!-- CSInterface library (stub from project shared/) -->
     <script src="./CSInterface.js"></script>

@@ -7,12 +7,15 @@
 </head>
 <body>
 
-    <!-- Header with status -->
+    <!-- Header with status + isolation toggle -->
     <div class="header">
         <span class="header-title">Grouping Tools</span>
-        <div class="status-indicator">
-            <div id="statusDot" class="status-dot ready"></div>
-            <span id="statusLabel" class="status-label ready">ready</span>
+        <div style="display: flex; align-items: center; gap: 8px;">
+            <div class="status-indicator">
+                <div id="statusDot" class="status-dot ready"></div>
+                <span id="statusLabel" class="status-label ready">ready</span>
+            </div>
+            <button id="btnIsolation" class="btn btn-secondary" onclick="toggleIsolation()" style="height:20px; width:20px; padding:0; font-size:13px; line-height:1; flex-shrink:0;" title="Toggle Isolation Mode">&#9673;</button>
         </div>
     </div>
 
@@ -23,10 +26,11 @@
         </div>
         <div class="info-readout">
             From: <span id="pathCount" class="highlight">0</span> paths
+            <span id="inGroupLabel" class="dimmed" style="display:none;"> (in group)</span>
         </div>
     </div>
 
-    <!-- Group name + Detach -->
+    <!-- Group name + Copy to Group -->
     <div class="section">
         <div class="slider-row" style="margin-bottom: 6px;">
             <span class="slider-label">Group Name</span>
@@ -34,8 +38,23 @@
         </div>
         <div class="action-buttons">
             <button class="btn btn-primary" id="btnDetach" onclick="detachSelection()" title="Copy selected anchors to a named group on Refined Forms layer">
-                Detach to Group
+                Copy to Group
             </button>
+        </div>
+    </div>
+
+    <!-- Group operations (visible when selection is inside a group) -->
+    <div class="section" id="groupOpsSection" style="display: none;">
+        <div class="section-label">Group Operations</div>
+        <div class="action-buttons">
+            <div class="btn-row">
+                <button class="btn btn-secondary" id="btnDetachFromGroup" onclick="detachFromGroup()" title="Move selected items out of their parent group to the layer">
+                    Detach from Group
+                </button>
+                <button class="btn btn-secondary" id="btnSplitToGroup" onclick="splitToNewGroup()" title="Move selected items into a new named group">
+                    Split to New Group
+                </button>
+            </div>
         </div>
     </div>
 

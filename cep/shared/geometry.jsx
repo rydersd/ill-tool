@@ -120,14 +120,104 @@ function douglasPeucker(pts, epsilon) {
 }
 
 /**
+ * Find inflection points where curvature sign changes.
+ * Returns an array of indices into pts where cross-product sign flips.
+ *
+ * @param {Array} pts - array of [x, y]
+ * @returns {Array} indices of inflection points (always includes first and last)
+ */
+function _findInflectionIndices(pts) {
+    var result = [0]; // always keep first point
+    if (pts.length < 3) {
+        if (pts.length > 1) result.push(pts.length - 1);
+        return result;
+    }
+
+    var prevSign = 0;
+    for (var i = 1; i < pts.length - 1; i++) {
+        var v1x = pts[i][0] - pts[i - 1][0];
+        var v1y = pts[i][1] - pts[i - 1][1];
+        var v2x = pts[i + 1][0] - pts[i][0];
+        var v2y = pts[i + 1][1] - pts[i][1];
+        var cp = v1x * v2y - v1y * v2x;
+        var sign = cp > 0 ? 1 : (cp < 0 ? -1 : 0);
+        if (sign !== 0 && prevSign !== 0 && sign !== prevSign) {
+            result.push(i);
+        }
+        if (sign !== 0) prevSign = sign;
+    }
+
+    result.push(pts.length - 1); // always keep last point
+    return result;
+}
+
+/**
+ * Merge inflection points into a simplified point set.
+ * Any inflection point not already present in simplified is inserted
+ * at the correct position based on its index in the original array.
+ *
+ * @param {Array} simplified - array of [x, y] from Douglas-Peucker
+ * @param {Array} allPts - original full point array
+ * @param {Array} inflectionIndices - indices into allPts of inflection points
+ * @returns {Array} merged point array with inflection points preserved
+ */
+function _mergeInflectionPoints(simplified, allPts, inflectionIndices) {
+    if (!inflectionIndices || inflectionIndices.length === 0) return simplified;
+
+    // Build a set of points already in simplified (by coordinate match)
+    var EPSILON = 1e-6;
+    var merged = simplified.slice(0);
+
+    for (var ii = 0; ii < inflectionIndices.length; ii++) {
+        var idx = inflectionIndices[ii];
+        var ip = allPts[idx];
+
+        // Check if this inflection point is already in merged
+        var found = false;
+        for (var m = 0; m < merged.length; m++) {
+            var dx = merged[m][0] - ip[0];
+            var dy = merged[m][1] - ip[1];
+            if (dx * dx + dy * dy < EPSILON) {
+                found = true;
+                break;
+            }
+        }
+
+        if (!found) {
+            // Insert at correct position: find where it belongs by closest neighbor
+            var bestInsert = merged.length; // default: append
+            var bestDist = Infinity;
+            for (var s = 0; s < merged.length - 1; s++) {
+                // Check if ip falls between merged[s] and merged[s+1]
+                var d = pointToSegmentDist(ip, merged[s], merged[s + 1]);
+                if (d < bestDist) {
+                    bestDist = d;
+                    bestInsert = s + 1;
+                }
+            }
+            merged.splice(bestInsert, 0, ip.slice(0));
+        }
+    }
+
+    return merged;
+}
+
+/**
  * Precompute LOD levels for a point array.
  * Runs Douglas-Peucker at exponentially spaced epsilon values.
  *
+ * When surfaceHint is provided, the simplification becomes surface-aware:
+ * - Low levels (0-30%): Douglas-Peucker as before
+ * - Medium levels (30-70%): Douglas-Peucker with mandatory inflection point preservation
+ * - High levels (70-100%): Blend toward the mathematically ideal primitive fit
+ * At level 100% with a surface hint, you always get the minimal geometric primitive.
+ *
  * @param {Array} pts - array of [x, y]
  * @param {number} numLevels - number of LOD levels to compute
+ * @param {string} surfaceHint - optional: "flat", "cylindrical", "convex", "concave", "saddle", "angular"
  * @returns {Array} [{value: 0..100, points: [...], count: N}, ...]
  */
-function precomputeLOD(pts, numLevels) {
+function precomputeLOD(pts, numLevels, surfaceHint) {
     if (!numLevels) numLevels = 20;
     var levels = [];
 
@@ -146,13 +236,65 @@ function precomputeLOD(pts, numLevels) {
     // Level 0 = no simplification
     levels.push({ value: 0, points: pts.slice(0), count: pts.length });
 
+    // Precompute the primitive fit for this surface type (only if hint provided)
+    var primitiveFit = null;
+    if (surfaceHint) {
+        if (surfaceHint === "flat") {
+            primitiveFit = fitToShape(pts, "line");
+        } else if (surfaceHint === "cylindrical" || surfaceHint === "convex" || surfaceHint === "concave") {
+            // Try both arc and ellipse, pick best confidence
+            var arcFit = fitToShape(pts, "arc");
+            var ellFit = fitToShape(pts, "ellipse");
+            primitiveFit = arcFit.confidence > ellFit.confidence ? arcFit : ellFit;
+        } else if (surfaceHint === "saddle") {
+            primitiveFit = fitToShape(pts, "scurve");
+        } else if (surfaceHint === "angular") {
+            primitiveFit = fitToShape(pts, "lshape");
+        }
+    }
+
+    // Precompute inflection indices for medium-level preservation
+    var inflectionIndices = _findInflectionIndices(pts);
+
     for (var lv = 1; lv <= numLevels; lv++) {
-        var t = lv / numLevels;
-        // Exponential epsilon scaling: 0.1% to 10% of diagonal
-        var epsilon = diag * 0.001 * Math.pow(100, t);
-        var simplified = douglasPeucker(pts, epsilon);
+        var t = lv / numLevels; // 0..1
         var sliderValue = Math.round(t * 100);
-        levels.push({ value: sliderValue, points: simplified, count: simplified.length });
+
+        if (t < 0.3 || !primitiveFit) {
+            // Low simplification (or no surface hint): pure Douglas-Peucker
+            var epsilon = diag * 0.001 * Math.pow(100, t);
+            var simplified = douglasPeucker(pts, epsilon);
+            levels.push({ value: sliderValue, points: simplified, count: simplified.length });
+
+        } else if (t < 0.7) {
+            // Medium simplification: Douglas-Peucker with mandatory inflection points
+            var epsilon2 = diag * 0.001 * Math.pow(100, t);
+            var dpResult = douglasPeucker(pts, epsilon2);
+            var withInflections = _mergeInflectionPoints(dpResult, pts, inflectionIndices);
+            levels.push({ value: sliderValue, points: withInflections, count: withInflections.length });
+
+        } else {
+            // High simplification: blend toward primitive fit
+            // blendT goes from 0.0 at 70% to 1.0 at 100%
+            var blendT = (t - 0.7) / 0.3;
+
+            if (blendT >= 0.95) {
+                // Pure primitive — the mathematically ideal shape
+                levels.push({
+                    value: sliderValue,
+                    points: primitiveFit.points,
+                    count: primitiveFit.points.length,
+                    shape: primitiveFit.shape,
+                    handles: primitiveFit.handles || null,
+                    closed: primitiveFit.closed || false
+                });
+            } else {
+                // Transitional: increasingly aggressive DP, still preserving endpoints
+                var epsilon3 = diag * 0.001 * Math.pow(100, t);
+                var dpHigh = douglasPeucker(pts, epsilon3);
+                levels.push({ value: sliderValue, points: dpHigh, count: dpHigh.length });
+            }
+        }
     }
 
     return levels;

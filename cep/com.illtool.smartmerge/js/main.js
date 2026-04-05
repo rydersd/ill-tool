@@ -10,6 +10,7 @@
 var csInterface = new CSInterface();
 var hasPreview = false;
 var hasSidecar = false;
+var isIsolated = false;
 
 // ── Status Display ─────────────────────────────────────────────────
 
@@ -182,6 +183,18 @@ function doUndoMerge() {
             document.getElementById("btnUndo").disabled = true;
             updateStatus("ready");
         }
+    });
+}
+
+// ── Isolation Mode ────────────────────────────────────────────────
+
+function toggleIsolation() {
+    var cmd = isIsolated ? "exitisolation" : "isolate";
+    csInterface.evalScript("app.executeMenuCommand('" + cmd + "')", function() {
+        isIsolated = !isIsolated;
+        var btn = document.getElementById("btnIsolation");
+        btn.style.color = isIsolated ? "#ff8800" : "#666";
+        btn.title = isIsolated ? "Exit isolation mode" : "Enter isolation mode";
     });
 }
 

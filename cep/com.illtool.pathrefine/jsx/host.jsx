@@ -90,27 +90,34 @@ function pr_cleanupOrphans() {
 
 /**
  * Get info about the current selection.
- * Returns pipe-delimited: "anchorCount|pathCount"
+ * Returns pipe-delimited: "anchorCount|pathCount|inGroup"
  */
 function pr_getSelectionInfo() {
     var counts = getSelectionCounts();
-    return counts.anchorCount + "|" + counts.pathCount;
+    var inGroup = false;
+    try {
+        var sel = app.activeDocument.selection;
+        if (sel && sel.length > 0 && sel[0].parent && sel[0].parent.typename === "GroupItem") {
+            inGroup = true;
+        }
+    } catch(e) {}
+    return counts.anchorCount + "|" + counts.pathCount + "|" + (inGroup ? "1" : "0");
 }
 
 /**
- * Detach selected anchors and precompute LOD.
+ * Copy selected anchors to a new group on "Refined Forms" layer.
+ * Non-destructive: originals stay on their layer, untouched.
  *
- * 1. Read selected anchors with handles
+ * 1. Duplicate selected paths to read selection state
  * 2. Find contiguous runs of selected points
- * 3. Create detached copies on "Refined Forms" layer
- * 4. Compute bounding box
+ * 3. Remove duplicates (they were only for reading selection)
+ * 4. Create new paths from selected runs in a group on Refined Forms
  * 5. Precompute LOD levels for instant slider scrubbing
  *
  * Returns pipe-delimited: "detachedCount|totalPoints|done"
  * On error: "error|message"
  */
-var _pr_group = null;          // reference to the current detach group (working copy)
-var _pr_originalGroup = null;  // hidden+locked backup of original art
+var _pr_group = null;          // reference to the current working group
 
 function pr_detachAndPrecompute(padding, groupName) {
     if (padding === undefined || padding === null) padding = 5;
@@ -131,40 +138,20 @@ function pr_detachAndPrecompute(padding, groupName) {
     // Clear any previous detached state
     _pr_cleanDetachedPaths();
 
-    // ── Non-destructive: hide+lock originals, work on duplicates ──
-
-    // 1. Group the original selected paths, hide and lock them
-    _pr_originalGroup = lyr.groupItems.add();
-    _pr_originalGroup.name = "__originals_backup__";
-
-    // Collect selected PathItems (snapshot before moving)
+    // Collect selected PathItems (snapshot)
     var selPaths = [];
     for (var si = 0; si < sel.length; si++) {
         if (sel[si].typename === "PathItem") selPaths.push(sel[si]);
     }
 
-    // 2. Duplicate each selected path, move original into backup group
+    // ── Duplicate to read selection state, then discard duplicates ──
+
     var duplicates = [];
     for (var di = 0; di < selPaths.length; di++) {
-        var dup = selPaths[di].duplicate();
-        // Move original into backup group
-        selPaths[di].move(_pr_originalGroup, ElementPlacement.PLACEATEND);
-        duplicates.push(dup);
+        duplicates.push(selPaths[di].duplicate());
     }
 
-    // 3. Hide and lock the backup group
-    _pr_originalGroup.hidden = true;
-    _pr_originalGroup.locked = true;
-
-    // 4. Select the duplicates so the rest of the pipeline works on them
-    doc.selection = null;
-    for (var sd = 0; sd < duplicates.length; sd++) {
-        duplicates[sd].selected = true;
-    }
-
-    // ── Now detach from the duplicates (originals are safe) ──
-
-    // Create a top-level group for the detached result paths
+    // Create a top-level group for the new paths
     _pr_group = lyr.groupItems.add();
     _pr_group.name = groupName || ("detach_" + new Date().getTime());
 
@@ -177,40 +164,7 @@ function pr_detachAndPrecompute(padding, groupName) {
     for (var i = 0; i < duplicates.length; i++) {
         var path = duplicates[i];
 
-        // Capture original stroke style before we touch the path
-        var origStrokeColor = null;
-        try {
-            var sc = path.strokeColor;
-            if (sc.typename === "RGBColor") {
-                origStrokeColor = [sc.red, sc.green, sc.blue];
-            } else if (sc.typename === "CMYKColor") {
-                // Approximate CMYK→RGB for gap paths
-                var r2 = 255 * (1 - sc.cyan / 100) * (1 - sc.black / 100);
-                var g2 = 255 * (1 - sc.magenta / 100) * (1 - sc.black / 100);
-                var b2 = 255 * (1 - sc.yellow / 100) * (1 - sc.black / 100);
-                origStrokeColor = [Math.round(r2), Math.round(g2), Math.round(b2)];
-            } else if (sc.typename === "GrayColor") {
-                var v = Math.round(255 * (1 - sc.gray / 100));
-                origStrokeColor = [v, v, v];
-            }
-        } catch (e) {}
-        if (!origStrokeColor) origStrokeColor = [0, 0, 0]; // fallback black
-        var origStrokeWidth = 1.0;
-        try { origStrokeWidth = path.strokeWidth; } catch (e) {}
-        var origFilled = false;
-        try { origFilled = path.filled; } catch (e) {}
-        var origFillColor = null;
-        try {
-            if (origFilled) {
-                var fc = path.fillColor;
-                if (fc.typename === "RGBColor") origFillColor = fc;
-            }
-        } catch (e) {}
-
-        // Remember the source layer so gap paths go back there
-        var sourceLayer = path.layer;
-
-        // Read ALL points with their selection state
+        // Read ALL points with their selection state from the duplicate
         var allPts = [];
         var selectedCount = 0;
         for (var j = 0; j < path.pathPoints.length; j++) {
@@ -226,7 +180,8 @@ function pr_detachAndPrecompute(padding, groupName) {
             });
         }
 
-        var allSelected = (selectedCount === allPts.length);
+        // Remove the duplicate — we only needed it for selection state
+        try { path.remove(); } catch(e) {}
 
         // Find contiguous runs of selected points
         var runs = [];
@@ -247,7 +202,7 @@ function pr_detachAndPrecompute(padding, groupName) {
         }
         if (currentRun) runs.push(currentRun);
 
-        // Create detached paths from each selected run, inside the result group
+        // Create new paths from each selected run, inside the result group
         for (var r = 0; r < runs.length; r++) {
             var run = runs[r];
             if (run.points.length < 2) continue;
@@ -274,71 +229,16 @@ function pr_detachAndPrecompute(padding, groupName) {
             _pr_detachedPaths.push(newPath);
             detachedCount++;
         }
-
-        // ── Build gap paths for UNSELECTED runs (only for partial selections) ──
-        if (!allSelected && runs.length > 0) {
-            var gapRuns = [];
-            var gapRun = null;
-
-            for (var g = 0; g < allPts.length; g++) {
-                if (!allPts[g].selected) {
-                    if (!gapRun) gapRun = { points: [] };
-                    gapRun.points.push(allPts[g]);
-                } else {
-                    if (gapRun) {
-                        gapRuns.push(gapRun);
-                        gapRun = null;
-                    }
-                }
-            }
-            if (gapRun) gapRuns.push(gapRun);
-
-            // Create gap paths on the SOURCE layer with original stroke style
-            for (var gr = 0; gr < gapRuns.length; gr++) {
-                var gap = gapRuns[gr];
-                if (gap.points.length < 2) continue;
-
-                var gapPath = createPathWithHandles(sourceLayer, gap.points, {
-                    name: "__gap_" + i + "_" + gr + "__",
-                    closed: false,
-                    stroked: true,
-                    strokeColor: origStrokeColor,
-                    strokeWidth: origStrokeWidth,
-                    strokeDashes: []
-                });
-
-                // Restore fill if the original had one
-                if (origFilled && origFillColor) {
-                    try {
-                        gapPath.filled = true;
-                        gapPath.fillColor = origFillColor;
-                    } catch (e) {}
-                }
-
-                _pr_gapPaths.push(gapPath);
-            }
-        }
-
-        // Remove the duplicate (we've extracted what we need)
-        try { path.remove(); } catch(e) {}
     }
 
     if (detachedCount === 0) {
-        // Nothing detached — clean up gap paths and restore originals
-        _pr_cleanGapPaths();
+        // Nothing created — clean up
         try { _pr_group.remove(); } catch(e) {}
         _pr_group = null;
-        _pr_restoreOriginals();
         return "error|No contiguous runs with 2+ points";
     }
 
     _pr_originalPointCount = allAnchorsFlat.length;
-
-    // Compute and draw bounding box
-    if (allAnchorsFlat.length >= 2) {
-        var rect = minAreaRect(allAnchorsFlat);
-        drawBoundingBox(rect.center[0], rect.center[1], rect.width, rect.height, rect.angle, padding, "Refined Forms");
-    }
 
     // Precompute LOD levels
     if (allAnchorsFlat.length >= 3) {
@@ -346,7 +246,17 @@ function pr_detachAndPrecompute(padding, groupName) {
         _pr_lodCache = precomputeLOD(sorted, 20);
     }
 
-    logInteraction("pathrefine", "detach", null,
+    // Go into isolation mode — no bounding box, use native handles
+    try {
+        doc.selection = null;
+        if (_pr_detachedPaths.length > 0) {
+            _pr_detachedPaths[0].selected = true;
+        }
+        app.executeMenuCommand("isolate");
+        app.executeMenuCommand("direct");
+    } catch (e) {}
+
+    logInteraction("pathrefine", "copy-to-group", null,
         {detachedCount: detachedCount, totalPoints: allAnchorsFlat.length}, null);
 
     app.redraw();
@@ -397,7 +307,7 @@ function pr_applySimplifyLevel(level) {
 }
 
 /**
- * Apply: solidify detached paths, clear state.
+ * Apply: finalize group paths (originals untouched), clear state.
  * Returns "applied|count"
  */
 function pr_doApply() {
@@ -423,25 +333,11 @@ function pr_doApply() {
 
     logInteraction("pathrefine", "apply", null, {count: count, group: _pr_group ? _pr_group.name : ""}, null);
 
-    removeBoundingBox("Refined Forms");
     // Keep the result group — it's now permanent with solid paths
     _pr_group = null;
-    // Delete the hidden originals — user accepted the result
-    if (_pr_originalGroup) {
-        try {
-            _pr_originalGroup.locked = false;
-            _pr_originalGroup.remove();
-        } catch(e) {}
-        _pr_originalGroup = null;
-    }
-    // Solidify gap paths — rename so they're no longer tracked as temporary
-    for (var gi = 0; gi < _pr_gapPaths.length; gi++) {
-        try {
-            _pr_gapPaths[gi].name = "remainder_" + new Date().getTime() + "_" + gi;
-        } catch (e) {}
-    }
-    _pr_gapPaths = [];
+    // No originals to restore — they were never moved
     _pr_detachedPaths = [];
+    _pr_gapPaths = [];
     _pr_originalAnchors = [];
     _pr_lodCache = null;
     _pr_originalPointCount = 0;
@@ -485,21 +381,17 @@ function pr_doReset() {
 }
 
 /**
- * Undo: remove all detached paths and bounding box, clear state.
+ * Undo: remove all created group paths, clear state.
+ * Originals are untouched since copy-to-group is non-destructive.
  * Returns "undone"
  */
 function pr_doUndoDetach() {
     _pr_cleanDetachedPaths();
-    // Remove gap paths (unselected remainder fragments)
-    _pr_cleanGapPaths();
     // Remove the working group
     if (_pr_group) {
         try { _pr_group.remove(); } catch(e) {}
         _pr_group = null;
     }
-    // Restore the hidden originals
-    _pr_restoreOriginals();
-    removeBoundingBox("Refined Forms");
     _pr_detachedPaths = [];
     _pr_gapPaths = [];
     _pr_originalAnchors = [];
@@ -509,23 +401,49 @@ function pr_doUndoDetach() {
     return "undone";
 }
 
+// ── Group Operations ─────────────────────────────────────────────
+
 /**
- * Restore hidden original art: unlock, unhide, ungroup back to layer.
+ * Detach selected items from their parent group to the layer.
+ * Returns "detached|count"
  */
-function _pr_restoreOriginals() {
-    if (!_pr_originalGroup) return;
-    try {
-        _pr_originalGroup.locked = false;
-        _pr_originalGroup.hidden = false;
-        // Move paths out of backup group back to the layer
-        var lyr = _pr_originalGroup.layer;
-        while (_pr_originalGroup.pathItems.length > 0) {
-            _pr_originalGroup.pathItems[0].move(lyr, ElementPlacement.PLACEATEND);
-        }
-        // Remove the now-empty backup group
-        _pr_originalGroup.remove();
-    } catch(e) {}
-    _pr_originalGroup = null;
+function pr_detachFromGroup() {
+    var doc = app.activeDocument;
+    var sel = doc.selection;
+    var count = 0;
+    for (var i = sel.length - 1; i >= 0; i--) {
+        try {
+            if (sel[i].parent && sel[i].parent.typename === "GroupItem") {
+                var parentLayer = sel[i].parent.layer;
+                sel[i].move(parentLayer, ElementPlacement.PLACEATEND);
+                count++;
+            }
+        } catch(e) {}
+    }
+    app.redraw();
+    return "detached|" + count;
+}
+
+/**
+ * Split selected items into a new named group on the same layer.
+ * Returns "split|count|groupName" or "error|message"
+ */
+function pr_splitToNewGroup(newGroupName) {
+    var doc = app.activeDocument;
+    var sel = doc.selection;
+    if (!sel || sel.length === 0) return "error|No selection";
+    var lyr = sel[0].layer;
+    var newGroup = lyr.groupItems.add();
+    newGroup.name = newGroupName || ("split_" + new Date().getTime());
+    var count = 0;
+    for (var i = sel.length - 1; i >= 0; i--) {
+        try {
+            sel[i].move(newGroup, ElementPlacement.PLACEATEND);
+            count++;
+        } catch(e) {}
+    }
+    app.redraw();
+    return "split|" + count + "|" + newGroup.name;
 }
 
 // ── Internal helpers ─────────────────────────────────────────────

@@ -41,7 +41,8 @@ function updateStatus(state) {
 // ── Selection Polling ──────────────────────────────────────────────
 
 /**
- * Poll Illustrator selection to update the anchor/path count display.
+ * Poll Illustrator selection to update the anchor/path count display
+ * and show/hide group operation buttons based on context.
  * Runs on a 500ms interval so the panel shows live feedback.
  */
 function pollSelection() {
@@ -49,16 +50,23 @@ function pollSelection() {
         if (!result || result === "EvalScript Error" || result === "undefined") {
             document.getElementById("anchorCount").textContent = "0";
             document.getElementById("pathCount").textContent = "0";
+            document.getElementById("inGroupLabel").style.display = "none";
+            document.getElementById("groupOpsSection").style.display = "none";
             return;
         }
 
-        // Parse pipe-delimited: "anchorCount|pathCount"
+        // Parse pipe-delimited: "anchorCount|pathCount|inGroup"
         var parts = result.split("|");
         var anchorCount = parseInt(parts[0], 10) || 0;
         var pathCount = parseInt(parts[1], 10) || 0;
+        var inGroup = (parts[2] === "1");
 
         document.getElementById("anchorCount").textContent = anchorCount;
         document.getElementById("pathCount").textContent = pathCount;
+
+        // Show/hide group context indicator and operations
+        document.getElementById("inGroupLabel").style.display = inGroup ? "inline" : "none";
+        document.getElementById("groupOpsSection").style.display = inGroup ? "block" : "none";
     });
 }
 
@@ -185,6 +193,62 @@ function undoDetach() {
     });
 }
 
+// ── Group Operations ──────────────────────────────────────────────
+
+/**
+ * Detach selected items from their parent group, moving them to the layer.
+ */
+function detachFromGroup() {
+    updateStatus("processing");
+    csInterface.evalScript("pr_detachFromGroup()", function (result) {
+        updateStatus("ready");
+        if (result && result.indexOf("detached") === 0) {
+            var parts = result.split("|");
+            var count = parseInt(parts[1], 10) || 0;
+            document.getElementById("anchorCount").textContent = count + " items detached";
+        }
+    });
+}
+
+/**
+ * Split selected items into a new named group.
+ */
+function splitToNewGroup() {
+    var groupName = document.getElementById("groupName").value.replace(/'/g, "\\'").replace(/\\/g, "\\\\") || "";
+    updateStatus("processing");
+    csInterface.evalScript("pr_splitToNewGroup('" + groupName + "')", function (result) {
+        updateStatus("ready");
+        if (result && result.indexOf("split") === 0) {
+            var parts = result.split("|");
+            var groupFinalName = parts[2] || "new group";
+            document.getElementById("anchorCount").textContent = "Split to " + groupFinalName;
+        } else if (result && result.indexOf("error") === 0) {
+            document.getElementById("anchorCount").textContent = result.replace(/^error\|/, "");
+        }
+    });
+}
+
+// ── Isolation Mode Toggle ─────────────────────────────────────────
+
+var _isolationActive = false;
+
+/**
+ * Toggle isolation mode on/off. Small button in the header.
+ */
+function toggleIsolation() {
+    if (_isolationActive) {
+        csInterface.evalScript("app.executeMenuCommand('deselectall'); app.executeMenuCommand('exitisolation')", function () {
+            _isolationActive = false;
+            document.getElementById("btnIsolation").style.borderColor = "#555";
+        });
+    } else {
+        csInterface.evalScript("app.executeMenuCommand('isolate')", function () {
+            _isolationActive = true;
+            document.getElementById("btnIsolation").style.borderColor = "#7cb8f0";
+        });
+    }
+}
+
 // ── Panel State Management ────────────────────────────────────────
 
 /**
@@ -263,7 +327,11 @@ document.addEventListener("keydown", function(e) {
     if (e.key === "Enter" && !document.getElementById("btnApply").disabled) {
         applyDetached();
     } else if (e.key === "Escape") {
-        undoDetach();
+        if (hasDetached) {
+            undoDetach();
+        } else if (_isolationActive) {
+            toggleIsolation();
+        }
     }
 });
 

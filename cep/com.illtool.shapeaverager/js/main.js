@@ -15,6 +15,9 @@ var activeShape = null;          // currently highlighted shape type
 var hasPreview = false;          // tracks whether a preview path exists
 var selectionPollId = null;      // timer for polling selection state
 var lastSelectionState = "";     // last polled selection for change detection
+var activeTab = "Simplify";      // current tab: "Simplify" or "Cluster"
+var isIsolated = false;          // isolation mode state
+var reAverageTimer = null;       // debounce timer for live re-average
 
 // ── Status Display ─────────────────────────────────────────────────
 
@@ -38,6 +41,50 @@ function updateStatus(state) {
         preview: "preview active"
     };
     label.textContent = labels[state] || state;
+}
+
+// ── Tab Switching ──────────────────────────────────────────────────
+
+function switchTab(tabName) {
+    activeTab = tabName;
+    var tabs = document.querySelectorAll(".tab-btn");
+    for (var i = 0; i < tabs.length; i++) {
+        if (tabs[i].getAttribute("data-tab") === tabName) {
+            tabs[i].classList.add("active");
+        } else {
+            tabs[i].classList.remove("active");
+        }
+    }
+    document.getElementById("tabSimplify").style.display = (tabName === "Simplify") ? "block" : "none";
+    document.getElementById("tabCluster").style.display = (tabName === "Cluster") ? "block" : "none";
+}
+
+// ── Isolation Mode Toggle ─────────────────────────────────────────
+
+function toggleIsolation() {
+    if (isIsolated) {
+        csInterface.evalScript("app.executeMenuCommand('exitisolation')", function() {
+            isIsolated = false;
+            updateIsolationButton();
+        });
+    } else {
+        csInterface.evalScript("app.executeMenuCommand('isolate')", function() {
+            isIsolated = true;
+            updateIsolationButton();
+        });
+    }
+}
+
+function updateIsolationButton() {
+    var btn = document.getElementById("btnIsolation");
+    if (!btn) return;
+    if (isIsolated) {
+        btn.classList.add("active");
+        btn.title = "Exit Isolation Mode";
+    } else {
+        btn.classList.remove("active");
+        btn.title = "Toggle Isolation Mode";
+    }
 }
 
 // ── Shape Buttons ──────────────────────────────────────────────────
@@ -228,6 +275,8 @@ function confirmPreview() {
             // Show isolation mode hint and guidance
             updateDetected("In isolation mode \u2014 press Esc to exit", null);
             document.getElementById("isolationHint").style.display = "block";
+            isIsolated = true;
+            updateIsolationButton();
             updateStatus("ready");
         }
     });
@@ -270,6 +319,8 @@ function escapeHtml(str) {
 function exitIsolation() {
     csInterface.evalScript("app.executeMenuCommand('deselectall'); app.executeMenuCommand('exitisolation')", function() {
         document.getElementById("isolationHint").style.display = "none";
+        isIsolated = false;
+        updateIsolationButton();
     });
 }
 
@@ -299,21 +350,24 @@ function pollSelection() {
                 anchorCount + " anchors on " + pathCount + " path" + (pathCount !== 1 ? "s" : "");
         }
 
-        // Live re-average when preview is active and selection changes
+        // Live re-average when preview is active and selection changes (debounced)
         if (hasPreview && result !== lastSelectionState) {
             lastSelectionState = result;
-            csInterface.evalScript("sa_averageSelectedAnchors()", function (avgResult) {
-                if (avgResult && avgResult.indexOf("error") !== 0) {
-                    var avgParts = avgResult.split("|");
-                    updateDetected(avgParts[0], parseFloat(avgParts[1]));
-                    highlightShape(avgParts[0]);
-                    // Update lastSelectionState to the post-average selection
-                    // so the next poll doesn't see this as a change
-                    csInterface.evalScript("sa_getSelectionInfo()", function(newSel) {
-                        if (newSel) lastSelectionState = newSel;
-                    });
-                }
-            });
+            clearTimeout(reAverageTimer);
+            reAverageTimer = setTimeout(function() {
+                csInterface.evalScript("sa_averageSelectedAnchors()", function (avgResult) {
+                    if (avgResult && avgResult.indexOf("error") !== 0) {
+                        var avgParts = avgResult.split("|");
+                        updateDetected(avgParts[0], parseFloat(avgParts[1]));
+                        highlightShape(avgParts[0]);
+                        // Update lastSelectionState to the post-average selection
+                        // so the next poll doesn't see this as a change
+                        csInterface.evalScript("sa_getSelectionInfo()", function(newSel) {
+                            if (newSel) lastSelectionState = newSel;
+                        });
+                    }
+                });
+            }, 300);
         }
     });
 }
@@ -361,19 +415,15 @@ function clusterLayers() {
 
         // Store pathJson for MCP bridge — the MCP tool will accept this data,
         // run Python clustering, and return cluster assignments.
-        // For now, the panel stores the path data and waits for cluster results
-        // to be provided via displayClusters() from the MCP response handler.
         var threshold = parseInt(document.getElementById("distanceSlider").value, 10);
 
-        // Show the clustering section with a "waiting for results" message
-        var section = document.getElementById("clusterSection");
-        section.style.display = "block";
         var readout = document.getElementById("clusterReadout");
         readout.textContent = "Read paths. Awaiting cluster results (threshold: " + threshold + "pt)...";
 
-        // Store path data on the section element for MCP access
-        section.setAttribute("data-path-json", pathJson);
-        section.setAttribute("data-threshold", threshold);
+        // Store path data on the Cluster tab container for MCP access
+        var tabCluster = document.getElementById("tabCluster");
+        tabCluster.setAttribute("data-path-json", pathJson);
+        tabCluster.setAttribute("data-threshold", threshold);
 
         updateStatus("ready");
     });
@@ -387,8 +437,11 @@ function clusterLayers() {
  */
 function displayClusters(clusters) {
     clusterData = clusters;
-    var section = document.getElementById("clusterSection");
-    section.style.display = "block";
+    // Switch to Cluster tab so results are visible
+    switchTab("Cluster");
+    // Show the cluster action buttons
+    var actionsSection = document.getElementById("clusterActions");
+    if (actionsSection) actionsSection.style.display = "block";
 
     // Summary readout
     var high = 0, med = 0, low = 0, totalPaths = 0;
@@ -524,12 +577,32 @@ function rejectSelectedCluster() {
 
 function exitClusterMode() {
     csInterface.evalScript("sa_exitClusterMode()", function() {
-        document.getElementById("clusterSection").style.display = "none";
         document.getElementById("clusterReadout").textContent = "";
         document.getElementById("clusterList").innerHTML = "";
         document.getElementById("btnAcceptAll").disabled = true;
+        var actionsSection = document.getElementById("clusterActions");
+        if (actionsSection) actionsSection.style.display = "none";
         clusterData = null;
         selectedCluster = -1;
+        // Switch back to Simplify tab
+        switchTab("Simplify");
+    });
+}
+
+// ── Select Small Paths ────────────────────────────────────────────
+
+function selectSmallPaths() {
+    var threshold = parseInt(document.getElementById("smallThreshold").value, 10) || 3;
+    updateStatus("processing");
+    csInterface.evalScript("sa_selectSmallPaths(" + threshold + ", 0)", function(result) {
+        if (result && result.indexOf("error") !== 0) {
+            var count = parseInt(result, 10) || 0;
+            updateDetected("Selected " + count + " small path" + (count !== 1 ? "s" : ""), null);
+        } else {
+            var errMsg = result ? result.replace(/^error\|/, "") : "No paths found";
+            updateDetected(errMsg, null);
+        }
+        updateStatus("ready");
     });
 }
 
@@ -557,8 +630,8 @@ document.addEventListener("keydown", function(e) {
         }
     }
 
-    // Clustering shortcuts (only when cluster section is visible)
-    var clusterVisible = document.getElementById("clusterSection").style.display !== "none";
+    // Clustering shortcuts (only when Cluster tab is active)
+    var clusterVisible = activeTab === "Cluster";
     if (clusterVisible) {
         if (e.key === "A" && e.shiftKey) {
             e.preventDefault();
