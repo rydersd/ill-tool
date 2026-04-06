@@ -1,9 +1,9 @@
 # Illustrator C++ Plugin SDK — Annotator API
 
-> Brief: AIAnnotatorSuite for screen-space overlays. Official 2026 SDK obtained, Annotator sample builds. Blocked on Apple notarization — AI 2026 loads but blocks unnotarized plugins via SafeMode.
-> Tags: illustrator, c++, plugin, sdk, annotator, overlay, handles, notarization
+> Brief: C++ plugin WORKING in Illustrator 2026. Notarized, loads, registers tool. HTTP bridge on :8787, annotator rendering, polygon lasso selection. Built against 30.2 SDK (30.3 has suite version mismatch with AI 30.0).
+> Tags: illustrator, c++, plugin, sdk, annotator, overlay, handles, notarization, lasso, smart-select
 > Created: 2026-04-04
-> Updated: 2026-04-04
+> Updated: 2026-04-06
 
 ## Motivation
 
@@ -128,10 +128,58 @@ xcrun stapler staple IllTool.aip
 | Installing to ~/Library/Application Support/ | Wrong path — AI 2026 doesn't scan it |
 | Embedded PiPL (__DATA section) | AI uses file-based PiPL since v25.1 |
 
-## Branch
+## Current Status (2026-04-06)
 
-All C++ plugin code is on `feat/cpp-plugin` branch. Master has the CEP panels.
+**PLUGIN LOADS AND RUNS.** Key breakthrough: must use 30.2 SDK, not 30.3. The 30.3 SDK has `kPluginInterfaceVersion30031` which requests suite versions that AI 30.0 doesn't provide (`kSPSuiteNotFoundError`).
+
+### What works:
+- Plugin loads, PluginMain called, StartupPlugin succeeds
+- Tool registered in toolbox ("IllTool Handle")
+- Annotator registered (screen-space overlay drawing)
+- HTTP bridge on localhost:8787 (POST /draw, /clear, /status, /events SSE)
+- Draw command buffer: JSON → DrawCommand → annotator rendering
+- Polygon lasso: click vertices, double-click to select all anchors inside
+- Notarized with Developer ID (Ryder Booth, ASH39KMW4S)
+
+### Architecture:
+```
+IllTool.aip (C++ plugin)
+├── AIAnnotatorSuite — renders draw commands in screen space
+├── AIToolSuite — polygon lasso + smart select
+├── HTTP bridge (:8787) — external control via JSON
+│   ├── CEP panel sends mode/commands
+│   └── Python MCP server sends analysis results
+└── AIPathSuite — programmatic path segment selection
+```
+
+### SDK project:
+`/Users/ryders/Developer/adobe sdk/Adobe Illustrator 2026 SDK 30.2 osx/samplecode/IllTool/`
+
+### Build:
+```bash
+xcodebuild -project '.../IllTool.xcodeproj' -configuration release -arch arm64 build
+codesign --force --sign "Developer ID Application: Ryder Booth (ASH39KMW4S)" --deep --options runtime .../IllTool.aip
+xcrun notarytool submit /tmp/IllTool.zip --keychain-profile "notarytool-profile" --wait
+xcrun stapler staple .../IllTool.aip
+```
+
+### SDK version mismatch discovery:
+- AI 30.0 installed, 30.3 SDK requests suite versions AI 30.0 doesn't have
+- Error code `1394689636` = `S!Fd` = `kSPSuiteNotFoundError`
+- `Plugin::StartupPlugin()` base class fails before our code runs
+- 30.2 SDK works — suite versions match AI 30.0
+
+## Tool Concept
+
+The polygon lasso is a **meta-selection tool** — it feeds into all other workflows:
+- Select with lasso → run shape cleanup
+- Select with lasso → group paths
+- Select with lasso → merge endpoints
+- Smart select mode → click one path → select all structurally related (same boundary signature)
+
+More precise than Illustrator's built-in lasso because it's point-based polygon, not freehand.
 
 ## See Also
-- [[Edge Clustering]] — clustering feature that needs overlay visualization
+- [[Edge Clustering]] — clustering feature that composes with lasso selection
 - [[Adversarial Review Findings]] — patterns the plugin must avoid
+- [[Future Tools]] — smart select, bounding box handles, surface extract
