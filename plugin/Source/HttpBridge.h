@@ -410,6 +410,10 @@ int  BridgeGetBlendSteps();
 void BridgeSetBlendEasing(int preset);
 int  BridgeGetBlendEasing();
 
+/** Set/get custom easing control points (for preset 4). Thread-safe. */
+void BridgeSetCustomEasingPoints(int count, const double* xyPairs);
+int  BridgeGetCustomEasingPoints(double* xyPairs, int maxPairs);
+
 /** Set/get blend pick mode (0=none, 1=pickA, 2=pickB). Thread-safe. */
 void BridgeSetBlendPickMode(int mode);
 int  BridgeGetBlendPickMode();

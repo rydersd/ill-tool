@@ -367,6 +367,23 @@ void BridgeSetBlendSteps(int steps)    { gBlendSteps.store(steps); }
 int  BridgeGetBlendSteps()             { return gBlendSteps.load(); }
 void BridgeSetBlendEasing(int preset)  { gBlendEasing.store(preset); }
 int  BridgeGetBlendEasing()            { return gBlendEasing.load(); }
+// Custom easing control points (for preset 4)
+static std::mutex gCustomEasingMutex;
+static std::vector<double> gCustomEasingXY;  // [x1,y1,x2,y2,...] pairs
+
+void BridgeSetCustomEasingPoints(int count, const double* xyPairs) {
+    std::lock_guard<std::mutex> lock(gCustomEasingMutex);
+    gCustomEasingXY.assign(xyPairs, xyPairs + count * 2);
+}
+
+int BridgeGetCustomEasingPoints(double* xyPairs, int maxPairs) {
+    std::lock_guard<std::mutex> lock(gCustomEasingMutex);
+    int count = (int)(gCustomEasingXY.size() / 2);
+    if (count > maxPairs) count = maxPairs;
+    for (int i = 0; i < count * 2; i++) xyPairs[i] = gCustomEasingXY[i];
+    return count;
+}
+
 void BridgeSetBlendPickMode(int mode)  { gBlendPickMode.store(mode); }
 int  BridgeGetBlendPickMode()          { return gBlendPickMode.load(); }
 bool BridgeHasBlendPathA()             { return gBlendHasPathA.load(); }
@@ -1443,41 +1460,28 @@ bool StartHttpBridge(int port)
 
     gServer->Get("/perspective/status", [](const httplib::Request& /*req*/, httplib::Response& res) {
         AddCorsHeaders(res);
-        extern IllToolPlugin* gPlugin;
+        // Read ONLY from thread-safe bridge state — never touch gPlugin directly (P0/P1 fix)
         json resp;
-        if (gPlugin) {
-            auto& grid = gPlugin->fPerspectiveGrid;
-            resp["valid"] = grid.valid;
-            resp["locked"] = grid.locked;
-            resp["line_count"] = grid.ActiveLineCount();
-            resp["density"] = grid.gridDensity;
-            resp["horizon_y"] = grid.horizonY;
-            // Lines
-            for (int i = 0; i < 3; i++) {
-                BridgePerspectiveLine bl = BridgeGetPerspectiveLine(i);
-                std::string key = (i == 0) ? "left_vp" : (i == 1) ? "right_vp" : "vertical_vp";
-                if (bl.active) {
-                    resp[key] = {
-                        {"active", true},
-                        {"h1", {{"x", bl.h1x}, {"y", bl.h1y}}},
-                        {"h2", {{"x", bl.h2x}, {"y", bl.h2y}}}
-                    };
-                } else {
-                    resp[key] = {{"active", false}};
-                }
+        int activeCount = 0;
+        for (int i = 0; i < 3; i++) {
+            BridgePerspectiveLine bl = BridgeGetPerspectiveLine(i);
+            std::string key = (i == 0) ? "left_vp" : (i == 1) ? "right_vp" : "vertical_vp";
+            if (bl.active) {
+                activeCount++;
+                resp[key] = {
+                    {"active", true},
+                    {"h1", {{"x", bl.h1x}, {"y", bl.h1y}}},
+                    {"h2", {{"x", bl.h2x}, {"y", bl.h2y}}}
+                };
+            } else {
+                resp[key] = {{"active", false}};
             }
-            // Computed VPs
-            if (grid.valid) {
-                resp["computed_vp1"] = { {"x", grid.computedVP1.h}, {"y", grid.computedVP1.v} };
-                resp["computed_vp2"] = { {"x", grid.computedVP2.h}, {"y", grid.computedVP2.v} };
-            }
-            if (grid.verticalVP.active && grid.valid) {
-                resp["computed_vp3"] = { {"x", grid.computedVP3.h}, {"y", grid.computedVP3.v} };
-            }
-        } else {
-            resp["valid"] = false;
-            resp["error"] = "plugin not loaded";
         }
+        resp["line_count"] = activeCount;
+        resp["valid"] = (activeCount >= 2);
+        resp["locked"] = BridgeGetPerspectiveLocked();
+        resp["visible"] = BridgeGetPerspectiveVisible();
+        resp["horizon_y"] = BridgeGetHorizonY();
         res.set_content(resp.dump(), "application/json");
     });
 

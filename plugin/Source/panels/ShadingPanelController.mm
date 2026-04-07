@@ -278,6 +278,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
 {
     [self.pollTimer invalidate];
     self.pollTimer = nil;
+    [super dealloc];
 }
 
 - (void)pollColors:(NSTimer *)timer

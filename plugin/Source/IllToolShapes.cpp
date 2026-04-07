@@ -211,8 +211,9 @@ void IllToolPlugin::ClassifySelection()
                 }
                 double padH = (artMaxH - artMinH) * 0.1, padV = (artMaxV - artMinV) * 0.1;
                 int px, py, pw, ph;
+                // Illustrator Y-up: top=maxV, bottom=minV (P1 fix — was reversed)
                 ve.GetMapping().ArtRectToPixelRect(
-                    artMinH - padH, artMinV - padV, artMaxH + padH, artMaxV + padV,
+                    artMinH - padH, artMaxV + padV, artMaxH + padH, artMinV - padV,
                     px, py, pw, ph);
                 if (pw > 5 && ph > 5) {
                     surfaceHint = ve.InferSurfaceType(px, py, pw, ph);

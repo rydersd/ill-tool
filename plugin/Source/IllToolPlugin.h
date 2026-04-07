@@ -107,6 +107,8 @@ private:
     AIPanelRef              fGroupingPanel;
     AIPanelRef              fMergePanel;
     AIPanelRef              fShadingPanel;
+    AIPanelRef              fBlendPanel;
+    AIPanelRef              fPerspectivePanel;
 
     /** Menu item handles for panel show/hide in Window menu. */
     AIMenuItemHandle        fSelectionMenuHandle;
@@ -114,6 +116,8 @@ private:
     AIMenuItemHandle        fGroupingMenuHandle;
     AIMenuItemHandle        fMergeMenuHandle;
     AIMenuItemHandle        fShadingMenuHandle;
+    AIMenuItemHandle        fBlendMenuHandle;
+    AIMenuItemHandle        fPerspectiveMenuHandle;
 
     //------------------------------------------------------------------------------------
     //  Application menu (Window > IllTool submenu)
@@ -143,6 +147,8 @@ private:
     void*                   fGroupingController;
     void*                   fMergeController;
     void*                   fShadingController;
+    void*                   fBlendController;
+    void*                   fPerspectiveController;
 
     //------------------------------------------------------------------------------------
     //  Polygon lasso state

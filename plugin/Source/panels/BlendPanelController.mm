@@ -441,6 +441,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
 {
     [self.blendTimer invalidate];
     self.blendTimer = nil;
+    [super dealloc];
 }
 
 - (void)pollBlendState:(NSTimer *)timer

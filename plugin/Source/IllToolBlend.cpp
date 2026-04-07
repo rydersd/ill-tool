@@ -630,6 +630,16 @@ int IllToolPlugin::ExecuteBlend(AIArtHandle pathA, AIArtHandle pathB,
         case 1:  easing = EasingCurve::EaseIn();    break;
         case 2:  easing = EasingCurve::EaseOut();   break;
         case 3:  easing = EasingCurve::EaseInOut(); break;
+        case 4: {
+            // Custom easing: read control points from bridge state (P1 fix)
+            double pts[20];  // max 10 control points
+            int count = BridgeGetCustomEasingPoints(pts, 10);
+            if (count >= 2) {
+                for (int ci = 0; ci < count; ci++)
+                    easing.points.push_back({pts[ci*2], pts[ci*2+1]});
+            } else { easing = EasingCurve::Linear(); }
+            break;
+        }
         default: easing = EasingCurve::Linear();    break;
     }
 
@@ -691,6 +701,12 @@ int IllToolPlugin::ExecuteBlend(AIArtHandle pathA, AIArtHandle pathB,
     // Dispose original paths (they're now duplicated in the group)
     sAIArt->DisposeArt(pathA);
     sAIArt->DisposeArt(pathB);
+
+    // P2 fix: Clear stale handles — originals are disposed, references must not be reused
+    if (gPlugin && gPlugin->fBlendPathA == pathA) gPlugin->fBlendPathA = nullptr;
+    if (gPlugin && gPlugin->fBlendPathB == pathB) gPlugin->fBlendPathB = nullptr;
+    BridgeSetBlendPathASet(false);
+    BridgeSetBlendPathBSet(false);
 
     // Store blend parameters on the group art dictionary
     StoreBlendParams(groupArt, steps, easingPreset);
@@ -820,6 +836,16 @@ int IllToolPlugin::ReblendGroup(AIArtHandle groupArt, int steps, int easingPrese
         case 1:  easing = EasingCurve::EaseIn();    break;
         case 2:  easing = EasingCurve::EaseOut();   break;
         case 3:  easing = EasingCurve::EaseInOut(); break;
+        case 4: {
+            // Custom easing: read control points from bridge state (P1 fix)
+            double pts[20];  // max 10 control points
+            int count = BridgeGetCustomEasingPoints(pts, 10);
+            if (count >= 2) {
+                for (int ci = 0; ci < count; ci++)
+                    easing.points.push_back({pts[ci*2], pts[ci*2+1]});
+            } else { easing = EasingCurve::Linear(); }
+            break;
+        }
         default: easing = EasingCurve::Linear();    break;
     }
 

@@ -518,6 +518,37 @@ ASErr IllToolPlugin::ToolMouseDown(AIToolMessage* message)
 {
     ASErr result = kNoErr;
     try {
+        // Blend pick mode: intercept clicks to store path A or B (P1 fix)
+        int blendPickMode = BridgeGetBlendPickMode();
+        if (blendPickMode == 1 || blendPickMode == 2) {
+            AIRealPoint clickPt = message->cursor;
+            if (sAIHitTest) {
+                AIHitRef hitRef = NULL;
+                ASErr hitErr = sAIHitTest->HitTest(NULL, &clickPt, kAllHitRequest, &hitRef);
+                if (hitErr == kNoErr && hitRef && sAIHitTest->IsHit(hitRef)) {
+                    AIArtHandle hitArt = sAIHitTest->GetArt(hitRef);
+                    short artType = kUnknownArt;
+                    if (hitArt) sAIArt->GetArtType(hitArt, &artType);
+                    if (hitArt && artType == kPathArt) {
+                        if (blendPickMode == 1) {
+                            fBlendPathA = hitArt;
+                            BridgeSetBlendPathASet(true);
+                            fprintf(stderr, "[IllTool Blend] Picked path A: %p\n", (void*)hitArt);
+                        } else {
+                            fBlendPathB = hitArt;
+                            BridgeSetBlendPathBSet(true);
+                            fprintf(stderr, "[IllTool Blend] Picked path B: %p\n", (void*)hitArt);
+                        }
+                    } else {
+                        fprintf(stderr, "[IllTool Blend] Click did not hit a path\n");
+                    }
+                    if (hitRef) sAIHitTest->Release(hitRef);
+                }
+            }
+            BridgeSetBlendPickMode(0);  // exit pick mode after click
+            return kNoErr;
+        }
+
         BridgeToolMode mode = BridgeGetToolMode();
 
         if (mode == BridgeToolMode::Lasso) {

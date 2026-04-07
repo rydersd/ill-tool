@@ -19,6 +19,8 @@
 #import "panels/GroupingPanelController.h"
 #import "panels/MergePanelController.h"
 #import "panels/ShadingPanelController.h"
+#import "panels/BlendPanelController.h"
+#import "panels/PerspectivePanelController.h"
 
 #include <cstdio>
 
@@ -70,6 +72,26 @@ static void MergePanelVisibilityChanged(AIPanelRef inPanel, AIBoolean isVisible)
 }
 
 static void ShadingPanelVisibilityChanged(AIPanelRef inPanel, AIBoolean isVisible)
+{
+    AIPanelUserData ud = NULL;
+    sAIPanel->GetUserData(inPanel, ud);
+    if (ud) {
+        IllToolPlugin* plugin = reinterpret_cast<IllToolPlugin*>(ud);
+        plugin->UpdatePanelMenu(inPanel, isVisible);
+    }
+}
+
+static void BlendPanelVisibilityChanged(AIPanelRef inPanel, AIBoolean isVisible)
+{
+    AIPanelUserData ud = NULL;
+    sAIPanel->GetUserData(inPanel, ud);
+    if (ud) {
+        IllToolPlugin* plugin = reinterpret_cast<IllToolPlugin*>(ud);
+        plugin->UpdatePanelMenu(inPanel, isVisible);
+    }
+}
+
+static void PerspectivePanelVisibilityChanged(AIPanelRef inPanel, AIBoolean isVisible)
 {
     AIPanelUserData ud = NULL;
     sAIPanel->GetUserData(inPanel, ud);
@@ -316,6 +338,48 @@ ASErr IllToolPlugin::AddPanels()
         }
     }
 
+    // --- Blend Panel (Stage 11) ---
+    {
+        BlendPanelController *ctrl = [[BlendPanelController alloc] init];
+        fBlendController = (void*)[ctrl retain];
+
+        error = CreateOnePanel(
+            fPluginRef, this,
+            kIllToolBlendPanelID,
+            kIllToolBlendMenuItem,
+            520.0,
+            BlendPanelVisibilityChanged,
+            ctrl, ctrl.rootView,
+            fBlendPanel, fBlendMenuHandle);
+
+        if (error) {
+            fprintf(stderr, "[IllTool] Blend panel creation failed: %d\n", (int)error);
+        } else {
+            fprintf(stderr, "[IllTool] Blend panel registered\n");
+        }
+    }
+
+    // --- Perspective Panel (Stage 10) ---
+    {
+        PerspectivePanelController *ctrl = [[PerspectivePanelController alloc] init];
+        fPerspectiveController = (void*)[ctrl retain];
+
+        error = CreateOnePanel(
+            fPluginRef, this,
+            kIllToolPerspectivePanelID,
+            kIllToolPerspectiveMenuItem,
+            380.0,
+            PerspectivePanelVisibilityChanged,
+            ctrl, ctrl.rootView,
+            fPerspectivePanel, fPerspectiveMenuHandle);
+
+        if (error) {
+            fprintf(stderr, "[IllTool] Perspective panel creation failed: %d\n", (int)error);
+        } else {
+            fprintf(stderr, "[IllTool] Perspective panel registered\n");
+        }
+    }
+
     fprintf(stderr, "[IllTool] AddPanels complete\n");
     return kNoErr;
 }
@@ -333,15 +397,19 @@ void IllToolPlugin::DestroyPanels()
         if (fCleanupPanel)   { sAIPanel->Destroy(fCleanupPanel);   fCleanupPanel = NULL; }
         if (fGroupingPanel)  { sAIPanel->Destroy(fGroupingPanel);  fGroupingPanel = NULL; }
         if (fMergePanel)     { sAIPanel->Destroy(fMergePanel);     fMergePanel = NULL; }
-        if (fShadingPanel)   { sAIPanel->Destroy(fShadingPanel);   fShadingPanel = NULL; }
+        if (fShadingPanel)       { sAIPanel->Destroy(fShadingPanel);       fShadingPanel = NULL; }
+        if (fBlendPanel)         { sAIPanel->Destroy(fBlendPanel);         fBlendPanel = NULL; }
+        if (fPerspectivePanel)   { sAIPanel->Destroy(fPerspectivePanel);   fPerspectivePanel = NULL; }
     }
 
     // Release retained Objective-C controllers
-    if (fSelectionController) { [(id)fSelectionController release]; fSelectionController = NULL; }
-    if (fCleanupController)   { [(id)fCleanupController release];   fCleanupController = NULL; }
-    if (fGroupingController)  { [(id)fGroupingController release];  fGroupingController = NULL; }
-    if (fMergeController)     { [(id)fMergeController release];     fMergeController = NULL; }
-    if (fShadingController)   { [(id)fShadingController release];   fShadingController = NULL; }
+    if (fSelectionController)    { [(id)fSelectionController release];    fSelectionController = NULL; }
+    if (fCleanupController)      { [(id)fCleanupController release];      fCleanupController = NULL; }
+    if (fGroupingController)     { [(id)fGroupingController release];     fGroupingController = NULL; }
+    if (fMergeController)        { [(id)fMergeController release];        fMergeController = NULL; }
+    if (fShadingController)      { [(id)fShadingController release];      fShadingController = NULL; }
+    if (fBlendController)        { [(id)fBlendController release];        fBlendController = NULL; }
+    if (fPerspectiveController)  { [(id)fPerspectiveController release];  fPerspectiveController = NULL; }
 }
 
 //========================================================================================
@@ -352,11 +420,13 @@ void IllToolPlugin::UpdatePanelMenu(AIPanelRef panel, AIBoolean isVisible)
 {
     AIMenuItemHandle menuHandle = NULL;
 
-    if (panel == fSelectionPanel)      menuHandle = fSelectionMenuHandle;
-    else if (panel == fCleanupPanel)   menuHandle = fCleanupMenuHandle;
-    else if (panel == fGroupingPanel)  menuHandle = fGroupingMenuHandle;
-    else if (panel == fMergePanel)     menuHandle = fMergeMenuHandle;
-    else if (panel == fShadingPanel)   menuHandle = fShadingMenuHandle;
+    if (panel == fSelectionPanel)          menuHandle = fSelectionMenuHandle;
+    else if (panel == fCleanupPanel)       menuHandle = fCleanupMenuHandle;
+    else if (panel == fGroupingPanel)      menuHandle = fGroupingMenuHandle;
+    else if (panel == fMergePanel)         menuHandle = fMergeMenuHandle;
+    else if (panel == fShadingPanel)       menuHandle = fShadingMenuHandle;
+    else if (panel == fBlendPanel)         menuHandle = fBlendMenuHandle;
+    else if (panel == fPerspectivePanel)   menuHandle = fPerspectiveMenuHandle;
 
     if (menuHandle && sAIMenu) {
         sAIMenu->CheckItem(menuHandle, isVisible);

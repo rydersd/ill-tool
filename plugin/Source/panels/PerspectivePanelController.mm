@@ -110,6 +110,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
 {
     [self.statusTimer invalidate];
     self.statusTimer = nil;
+    [super dealloc];
 }
 
 - (NSView *)rootView
