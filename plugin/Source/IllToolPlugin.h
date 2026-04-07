@@ -36,6 +36,13 @@
 */
 Plugin* AllocatePlugin(SPPluginRef pluginRef);
 
+/** Isolation-aware art matching: scopes GetMatchingArt to the isolated
+    art tree (or working group) when in isolation mode.
+    Defined in IllToolPlugin.cpp, used by multiple extracted modules. */
+ASErr GetMatchingArtIsolationAware(
+    AIMatchingArtSpec* spec, ai::int16 numSpecs,
+    AIArtHandle*** matches, ai::int32* numMatches);
+
 /** C-callable function to average selected anchor points.
     Computes the centroid of all selected anchors and moves them to it.
     Called from the Cleanup panel's "Average Selection" button. */

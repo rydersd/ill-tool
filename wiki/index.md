@@ -1,7 +1,10 @@
 # Wiki Index
-> Auto-maintained. Last updated: 2026-04-06. Articles: 30. Words: ~65K.
+> Auto-maintained. Last updated: 2026-04-06. Articles: 33. Words: ~70K.
 
 ## Recent
+- 2026-04-06: [Blend Harmonization](concepts/blend-harmonization.md) — Pre-blend point harmonization: arc-length resampling + de Casteljau + rotation alignment = twist-free interpolation for final art. Tags: blend, interpolation, bezier, art-production
+- 2026-04-06: [Plugin Architecture Hardening](concepts/plugin-architecture-hardening.md) — Operation queue, result queue, undo stack, subsystem registration — scaling the plugin to 25+ operations. Tags: architecture, plugin, extensibility
+- 2026-04-06: [AITimer Dispatch Pattern](concepts/aitimer-dispatch-pattern.md) — Universal SDK-context dispatch via AITimerSuite — the fix for DOC? errors blocking panel operations. Tags: sdk, architecture, timer, critical-fix
 - 2026-04-06: [On-Device Learning](concepts/on-device-learning.md) — SQLite-backed ML learns shape preferences, simplification levels, noise thresholds from usage. No cloud, no LLM. Tags: learning, ml, on-device, sqlite
 - 2026-04-06: [Predictive Path Completion](concepts/predictive-path-completion.md) — Place 3 points, tool draws the rest following surface curvature. Normal map + boundary signatures + learned preferences. Tags: prediction, path-completion, normals
 - 2026-04-06: [Form Gradient Tool](concepts/form-gradient-tool.md) — Industrial design form-following gradients. Blend steps follow cross-contour flow, curvature controls falloff. Tags: gradient, blend, industrial-design
@@ -52,6 +55,9 @@
 - [Predictive Path Completion](concepts/predictive-path-completion.md) — Place 3 points, tool extends along surface curvature using normal map + edge clusters. Tags: prediction, normals
 - [Form Gradient Tool](concepts/form-gradient-tool.md) — Form-following gradients that map to surface curvature. Industrial design technique. Tags: gradient, blend
 - [Form Edge Extraction Workflow](concepts/form-edge-extraction-workflow.md) — Ranked tool stack: multi-scale Canny, ink, DSINE form edges, shape averaging. Tags: workflow, edges, normals
+- [AITimer Dispatch Pattern](concepts/aitimer-dispatch-pattern.md) — Universal SDK-context dispatch fixing DOC? errors. Tags: sdk, timer, critical-fix
+- [Plugin Architecture Hardening](concepts/plugin-architecture-hardening.md) — Op queue, result queue, undo stack, subsystem registration. Tags: architecture, extensibility
+- [Blend Harmonization](concepts/blend-harmonization.md) — Arc-length resampling + de Casteljau for twist-free shape interpolation. Tags: blend, bezier, art-production
 
 ## References
 - [Spatial AI Research 2026](references/spatial-ai-research-2026.md) — **FULL SURVEY** migrated from docs/research/. 30+ systems, leaderboard, 3 pipeline options, implementation results. Tags: papers, spatial-ai
