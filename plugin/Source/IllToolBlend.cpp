@@ -416,89 +416,29 @@ static std::vector<AIPathSegment> RotateSegments(const std::vector<AIPathSegment
 }
 
 //========================================================================================
-//  Blend Execution
+//  Blend Core — shared interpolation logic
 //========================================================================================
 
-int IllToolPlugin::ExecuteBlend(AIArtHandle pathA, AIArtHandle pathB,
-                                 int steps, int easingPreset)
+/** Generate N intermediate paths between two harmonized segment arrays.
+    Does NOT create groups or store state — pure geometry.
+    @param resA, resB   Harmonized segment arrays (same count, aligned starts)
+    @param targetCount  Number of segments per path
+    @param isClosed     Whether to close generated paths
+    @param steps        Number of intermediates to create
+    @param easing       Easing curve for t distribution
+    @param style        Path style to copy to each intermediate
+    @param placeRelTo   Art handle for placement (kPlaceAbove)
+    @param outHandles   Output: created art handles appended here
+    @return Number of paths created */
+static int GenerateIntermediates(
+    const std::vector<AIPathSegment>& resA,
+    const std::vector<AIPathSegment>& resB,
+    int targetCount, bool isClosed, int steps,
+    const EasingCurve& easing,
+    const AIPathStyle& style,
+    AIArtHandle placeRelTo,
+    std::vector<AIArtHandle>& outHandles)
 {
-    if (!pathA || !pathB || !sAIPath || !sAIArt || !sAIPathStyle) {
-        fprintf(stderr, "[IllTool Blend] ExecuteBlend: null path or missing suite\n");
-        return 0;
-    }
-    if (steps < 1) steps = 1;
-    if (steps > 20) steps = 20;
-
-    fprintf(stderr, "[IllTool Blend] ExecuteBlend: steps=%d, easing=%d\n", steps, easingPreset);
-
-    // Build easing curve from preset
-    EasingCurve easing;
-    switch (easingPreset) {
-        case 1:  easing = EasingCurve::EaseIn();    break;
-        case 2:  easing = EasingCurve::EaseOut();   break;
-        case 3:  easing = EasingCurve::EaseInOut(); break;
-        default: easing = EasingCurve::Linear();    break;
-    }
-
-    // --- Read segments from both paths ---
-    ai::int16 countA = 0, countB = 0;
-    ASErr err = sAIPath->GetPathSegmentCount(pathA, &countA);
-    if (err != kNoErr || countA < 2) {
-        fprintf(stderr, "[IllTool Blend] Path A: segment count failed or < 2\n");
-        return 0;
-    }
-    err = sAIPath->GetPathSegmentCount(pathB, &countB);
-    if (err != kNoErr || countB < 2) {
-        fprintf(stderr, "[IllTool Blend] Path B: segment count failed or < 2\n");
-        return 0;
-    }
-
-    std::vector<AIPathSegment> segsA(countA), segsB(countB);
-    sAIPath->GetPathSegments(pathA, 0, countA, segsA.data());
-    sAIPath->GetPathSegments(pathB, 0, countB, segsB.data());
-
-    AIBoolean closedA = false, closedB = false;
-    sAIPath->GetPathClosed(pathA, &closedA);
-    sAIPath->GetPathClosed(pathB, &closedB);
-    bool isClosed = (closedA && closedB);  // only align start points if both closed
-
-    fprintf(stderr, "[IllTool Blend] Path A: %d segs (closed=%d), Path B: %d segs (closed=%d)\n",
-            (int)countA, (int)closedA, (int)countB, (int)closedB);
-
-    // --- Determine target count and resample ---
-    int targetCount = std::max((int)countA, (int)countB);
-    std::vector<AIPathSegment> resA = ResamplePath(segsA.data(), countA, closedA != 0, targetCount);
-    std::vector<AIPathSegment> resB = ResamplePath(segsB.data(), countB, closedB != 0, targetCount);
-
-    if ((int)resA.size() != targetCount || (int)resB.size() != targetCount) {
-        fprintf(stderr, "[IllTool Blend] Resample failed: resA=%d resB=%d target=%d\n",
-                (int)resA.size(), (int)resB.size(), targetCount);
-        return 0;
-    }
-
-    // --- Align starting points for closed paths ---
-    if (isClosed && targetCount > 1) {
-        int bestRot = FindBestRotation(resA.data(), resB.data(), targetCount);
-        if (bestRot != 0) {
-            resB = RotateSegments(resB, bestRot);
-            fprintf(stderr, "[IllTool Blend] Rotated B by %d positions for alignment\n", bestRot);
-        }
-    }
-
-    // --- Read style from path A for copying to intermediates ---
-    AIPathStyle style;
-    AIBoolean hasAdvFill = false;
-    err = sAIPathStyle->GetPathStyle(pathA, &style, &hasAdvFill);
-    if (err != kNoErr) {
-        fprintf(stderr, "[IllTool Blend] GetPathStyle failed: %d\n", (int)err);
-        // Continue with default style
-        style.Init();
-    }
-
-    // --- Push undo frame ---
-    fUndoStack.PushFrame();
-
-    // --- Generate intermediate paths ---
     int created = 0;
     for (int step = 1; step <= steps; step++) {
         double rawT = (double)step / (double)(steps + 1);
@@ -516,18 +456,16 @@ int IllToolPlugin::ExecuteBlend(AIArtHandle pathA, AIArtHandle pathB,
             interp[j].in.v  = (AIReal)(a.in.v  + (b.in.v  - a.in.v)  * t);
             interp[j].out.h = (AIReal)(a.out.h + (b.out.h - a.out.h) * t);
             interp[j].out.v = (AIReal)(a.out.v + (b.out.v - a.out.v) * t);
-            interp[j].corner = a.corner;  // preserve corner flag from A
+            interp[j].corner = a.corner;
         }
 
-        // Create new path art above pathA
         AIArtHandle newPath = nullptr;
-        err = sAIArt->NewArt(kPathArt, kPlaceAbove, pathA, &newPath);
+        ASErr err = sAIArt->NewArt(kPathArt, kPlaceAbove, placeRelTo, &newPath);
         if (err != kNoErr || !newPath) {
             fprintf(stderr, "[IllTool Blend] NewArt failed at step %d: err=%d\n", step, (int)err);
             continue;
         }
 
-        // Set segment count, write segments
         err = sAIPath->SetPathSegmentCount(newPath, (ai::int16)targetCount);
         if (err != kNoErr) {
             fprintf(stderr, "[IllTool Blend] SetPathSegmentCount failed: %d\n", (int)err);
@@ -541,21 +479,390 @@ int IllToolPlugin::ExecuteBlend(AIArtHandle pathA, AIArtHandle pathB,
             continue;
         }
 
-        // Set closed state (match source paths — both closed = closed, otherwise open)
         sAIPath->SetPathClosed(newPath, isClosed ? true : false);
-
-        // Copy stroke/fill style from path A
         sAIPathStyle->SetPathStyle(newPath, &style);
 
-        // Snapshot for undo
-        fUndoStack.SnapshotPath(newPath);
-
+        outHandles.push_back(newPath);
         created++;
-        fprintf(stderr, "[IllTool Blend] Step %d/%d: t=%.3f (raw=%.3f), created art %p\n",
+        fprintf(stderr, "[IllTool Blend] Step %d/%d: t=%.3f (raw=%.3f), art=%p\n",
                 step, steps, t, rawT, (void*)newPath);
     }
+    return created;
+}
 
-    fprintf(stderr, "[IllTool Blend] ExecuteBlend complete: %d paths created\n", created);
+/** Harmonize two paths: read segments, resample to matching count, align starts.
+    Returns false on failure. On success, resA/resB have equal length, isClosed is set. */
+static bool HarmonizePaths(AIArtHandle pathA, AIArtHandle pathB,
+                            std::vector<AIPathSegment>& resA,
+                            std::vector<AIPathSegment>& resB,
+                            int& targetCount, bool& isClosed)
+{
+    ai::int16 countA = 0, countB = 0;
+    ASErr err = sAIPath->GetPathSegmentCount(pathA, &countA);
+    if (err != kNoErr || countA < 2) {
+        fprintf(stderr, "[IllTool Blend] Path A: segment count failed or < 2\n");
+        return false;
+    }
+    err = sAIPath->GetPathSegmentCount(pathB, &countB);
+    if (err != kNoErr || countB < 2) {
+        fprintf(stderr, "[IllTool Blend] Path B: segment count failed or < 2\n");
+        return false;
+    }
+
+    std::vector<AIPathSegment> segsA(countA), segsB(countB);
+    sAIPath->GetPathSegments(pathA, 0, countA, segsA.data());
+    sAIPath->GetPathSegments(pathB, 0, countB, segsB.data());
+
+    AIBoolean closedA = false, closedB = false;
+    sAIPath->GetPathClosed(pathA, &closedA);
+    sAIPath->GetPathClosed(pathB, &closedB);
+    isClosed = (closedA && closedB);
+
+    fprintf(stderr, "[IllTool Blend] Path A: %d segs (closed=%d), Path B: %d segs (closed=%d)\n",
+            (int)countA, (int)closedA, (int)countB, (int)closedB);
+
+    targetCount = std::max((int)countA, (int)countB);
+    resA = ResamplePath(segsA.data(), countA, closedA != 0, targetCount);
+    resB = ResamplePath(segsB.data(), countB, closedB != 0, targetCount);
+
+    if ((int)resA.size() != targetCount || (int)resB.size() != targetCount) {
+        fprintf(stderr, "[IllTool Blend] Resample failed: resA=%d resB=%d target=%d\n",
+                (int)resA.size(), (int)resB.size(), targetCount);
+        return false;
+    }
+
+    if (isClosed && targetCount > 1) {
+        int bestRot = FindBestRotation(resA.data(), resB.data(), targetCount);
+        if (bestRot != 0) {
+            resB = RotateSegments(resB, bestRot);
+            fprintf(stderr, "[IllTool Blend] Rotated B by %d positions for alignment\n", bestRot);
+        }
+    }
+    return true;
+}
+
+//========================================================================================
+//  Dictionary persistence helpers
+//========================================================================================
+
+// Dictionary keys for blend parameters stored on group art
+static const char* kBlendKeyMarker   = "IllToolBlendGroup";  // boolean — identifies blend groups
+static const char* kBlendKeySteps    = "IllToolBlendSteps";
+static const char* kBlendKeyEasing   = "IllToolBlendEasing";
+
+/** Write blend parameters to an art dictionary. */
+static void StoreBlendParams(AIArtHandle groupArt, int steps, int easingPreset)
+{
+    if (!sAIDictionary || !sAIArt) return;
+
+    AIDictionaryRef dict = nullptr;
+    ASErr err = sAIArt->GetDictionary(groupArt, &dict);
+    if (err != kNoErr || !dict) {
+        fprintf(stderr, "[IllTool Blend] GetDictionary failed: %d\n", (int)err);
+        return;
+    }
+
+    AIDictKey markerKey = sAIDictionary->Key(kBlendKeyMarker);
+    AIDictKey stepsKey  = sAIDictionary->Key(kBlendKeySteps);
+    AIDictKey easingKey = sAIDictionary->Key(kBlendKeyEasing);
+
+    sAIDictionary->SetBooleanEntry(dict, markerKey, true);
+    sAIDictionary->SetIntegerEntry(dict, stepsKey, (ai::int32)steps);
+    sAIDictionary->SetIntegerEntry(dict, easingKey, (ai::int32)easingPreset);
+
+    sAIDictionary->Release(dict);
+    fprintf(stderr, "[IllTool Blend] Stored params: steps=%d, easing=%d on group %p\n",
+            steps, easingPreset, (void*)groupArt);
+}
+
+/** Read blend parameters from an art dictionary. Returns false if not a blend group. */
+static bool ReadBlendParams(AIArtHandle groupArt, int& steps, int& easingPreset)
+{
+    if (!sAIDictionary || !sAIArt) return false;
+
+    AIBoolean hasDictionary = false;
+    hasDictionary = sAIArt->HasDictionary(groupArt);
+    if (!hasDictionary) return false;
+
+    AIDictionaryRef dict = nullptr;
+    ASErr err = sAIArt->GetDictionary(groupArt, &dict);
+    if (err != kNoErr || !dict) return false;
+
+    AIDictKey markerKey = sAIDictionary->Key(kBlendKeyMarker);
+    AIBoolean isBlend = false;
+    err = sAIDictionary->GetBooleanEntry(dict, markerKey, &isBlend);
+    if (err != kNoErr || !isBlend) {
+        sAIDictionary->Release(dict);
+        return false;
+    }
+
+    AIDictKey stepsKey  = sAIDictionary->Key(kBlendKeySteps);
+    AIDictKey easingKey = sAIDictionary->Key(kBlendKeyEasing);
+    ai::int32 s = 5, e = 0;
+    sAIDictionary->GetIntegerEntry(dict, stepsKey, &s);
+    sAIDictionary->GetIntegerEntry(dict, easingKey, &e);
+    steps = (int)s;
+    easingPreset = (int)e;
+
+    sAIDictionary->Release(dict);
+    return true;
+}
+
+//========================================================================================
+//  Blend Execution (with grouping + state persistence)
+//========================================================================================
+
+int IllToolPlugin::ExecuteBlend(AIArtHandle pathA, AIArtHandle pathB,
+                                 int steps, int easingPreset)
+{
+    if (!pathA || !pathB || !sAIPath || !sAIArt || !sAIPathStyle) {
+        fprintf(stderr, "[IllTool Blend] ExecuteBlend: null path or missing suite\n");
+        return 0;
+    }
+    if (steps < 1) steps = 1;
+    if (steps > 20) steps = 20;
+
+    fprintf(stderr, "[IllTool Blend] ExecuteBlend: steps=%d, easing=%d\n", steps, easingPreset);
+
+    // Build easing curve
+    EasingCurve easing;
+    switch (easingPreset) {
+        case 1:  easing = EasingCurve::EaseIn();    break;
+        case 2:  easing = EasingCurve::EaseOut();   break;
+        case 3:  easing = EasingCurve::EaseInOut(); break;
+        default: easing = EasingCurve::Linear();    break;
+    }
+
+    // Harmonize paths
+    std::vector<AIPathSegment> resA, resB;
+    int targetCount = 0;
+    bool isClosed = false;
+    if (!HarmonizePaths(pathA, pathB, resA, resB, targetCount, isClosed))
+        return 0;
+
+    // Read style from path A
+    AIPathStyle style;
+    AIBoolean hasAdvFill = false;
+    ASErr err = sAIPathStyle->GetPathStyle(pathA, &style, &hasAdvFill);
+    if (err != kNoErr) {
+        fprintf(stderr, "[IllTool Blend] GetPathStyle failed: %d\n", (int)err);
+        style.Init();
+    }
+
+    // Push undo frame
+    fUndoStack.PushFrame();
+
+    // --- Create blend group ---
+    AIArtHandle groupArt = nullptr;
+    err = sAIArt->NewArt(kGroupArt, kPlaceAboveAll, nullptr, &groupArt);
+    if (err != kNoErr || !groupArt) {
+        fprintf(stderr, "[IllTool Blend] NewArt(kGroupArt) failed: %d\n", (int)err);
+        return 0;
+    }
+
+    // Name the group
+    fBlendGroupCounter++;
+    char groupName[64];
+    snprintf(groupName, sizeof(groupName), "Blend Group %d", fBlendGroupCounter);
+    ai::UnicodeString uName(groupName);
+    sAIArt->SetArtName(groupArt, uName);
+    fprintf(stderr, "[IllTool Blend] Created group '%s' (%p)\n", groupName, (void*)groupArt);
+
+    // Move source paths into the group
+    AIArtHandle movedA = nullptr, movedB = nullptr;
+    err = sAIArt->DuplicateArt(pathA, kPlaceInsideOnTop, groupArt, &movedA);
+    if (err != kNoErr || !movedA) {
+        fprintf(stderr, "[IllTool Blend] DuplicateArt(A) failed: %d\n", (int)err);
+        sAIArt->DisposeArt(groupArt);
+        return 0;
+    }
+    err = sAIArt->DuplicateArt(pathB, kPlaceInsideOnTop, groupArt, &movedB);
+    if (err != kNoErr || !movedB) {
+        fprintf(stderr, "[IllTool Blend] DuplicateArt(B) failed: %d\n", (int)err);
+        sAIArt->DisposeArt(groupArt);
+        return 0;
+    }
+
+    // Generate intermediates inside the group (placed above movedA)
+    std::vector<AIArtHandle> intermediates;
+    int created = GenerateIntermediates(resA, resB, targetCount, isClosed, steps,
+                                         easing, style, movedA, intermediates);
+
+    // Dispose original paths (they're now duplicated in the group)
+    sAIArt->DisposeArt(pathA);
+    sAIArt->DisposeArt(pathB);
+
+    // Store blend parameters on the group art dictionary
+    StoreBlendParams(groupArt, steps, easingPreset);
+
+    // Track state in memory for fast re-blend
+    BlendState state;
+    state.groupArt = groupArt;
+    state.pathA = movedA;
+    state.pathB = movedB;
+    state.steps = steps;
+    state.easingPreset = easingPreset;
+    state.intermediates = intermediates;
+    fBlendStates.push_back(state);
+
+    // Snapshot group for undo
+    fUndoStack.SnapshotPath(groupArt);
+
+    fprintf(stderr, "[IllTool Blend] ExecuteBlend complete: %d intermediates in '%s'\n",
+            created, groupName);
+    return created;
+}
+
+//========================================================================================
+//  Re-Blend (edit existing blend group)
+//========================================================================================
+
+IllToolPlugin::BlendState* IllToolPlugin::FindBlendState(AIArtHandle groupArt)
+{
+    for (auto& bs : fBlendStates) {
+        if (bs.groupArt == groupArt) return &bs;
+    }
+    return nullptr;
+}
+
+AIArtHandle IllToolPlugin::FindBlendGroupForArt(AIArtHandle art)
+{
+    if (!art || !sAIArt) return nullptr;
+
+    // Check if art itself is a blend group
+    int dummySteps, dummyEasing;
+    if (ReadBlendParams(art, dummySteps, dummyEasing)) return art;
+
+    // Walk up parents
+    AIArtHandle parent = nullptr;
+    sAIArt->GetArtParent(art, &parent);
+    while (parent) {
+        if (ReadBlendParams(parent, dummySteps, dummyEasing)) return parent;
+        AIArtHandle next = nullptr;
+        sAIArt->GetArtParent(parent, &next);
+        parent = next;
+    }
+    return nullptr;
+}
+
+int IllToolPlugin::ReblendGroup(AIArtHandle groupArt, int steps, int easingPreset)
+{
+    if (!groupArt || !sAIArt || !sAIPath) {
+        fprintf(stderr, "[IllTool Blend] ReblendGroup: null group or missing suite\n");
+        return 0;
+    }
+    if (steps < 1) steps = 1;
+    if (steps > 20) steps = 20;
+
+    fprintf(stderr, "[IllTool Blend] ReblendGroup: group=%p, steps=%d, easing=%d\n",
+            (void*)groupArt, steps, easingPreset);
+
+    // Find or reconstruct BlendState
+    BlendState* state = FindBlendState(groupArt);
+
+    AIArtHandle srcA = nullptr, srcB = nullptr;
+
+    if (state) {
+        srcA = state->pathA;
+        srcB = state->pathB;
+    } else {
+        // Reconstruct from group children: first two kPathArt children are A and B
+        AIArtHandle child = nullptr;
+        sAIArt->GetArtFirstChild(groupArt, &child);
+        while (child) {
+            ai::int16 artType = kUnknownArt;
+            sAIArt->GetArtType(child, &artType);
+            if (artType == kPathArt) {
+                if (!srcA) srcA = child;
+                else if (!srcB) { srcB = child; break; }
+            }
+            AIArtHandle next = nullptr;
+            sAIArt->GetArtSibling(child, &next);
+            child = next;
+        }
+    }
+
+    if (!srcA || !srcB) {
+        fprintf(stderr, "[IllTool Blend] ReblendGroup: could not find source paths in group\n");
+        return 0;
+    }
+
+    // Delete old intermediates
+    if (state) {
+        for (AIArtHandle h : state->intermediates) {
+            if (h) sAIArt->DisposeArt(h);
+        }
+        state->intermediates.clear();
+        fprintf(stderr, "[IllTool Blend] Deleted %d old intermediates\n",
+                (int)state->intermediates.size());
+    } else {
+        // No cached state — delete all children that aren't srcA or srcB
+        std::vector<AIArtHandle> toDelete;
+        AIArtHandle child = nullptr;
+        sAIArt->GetArtFirstChild(groupArt, &child);
+        while (child) {
+            if (child != srcA && child != srcB) {
+                ai::int16 artType = kUnknownArt;
+                sAIArt->GetArtType(child, &artType);
+                if (artType == kPathArt) toDelete.push_back(child);
+            }
+            AIArtHandle next = nullptr;
+            sAIArt->GetArtSibling(child, &next);
+            child = next;
+        }
+        for (AIArtHandle h : toDelete) sAIArt->DisposeArt(h);
+        fprintf(stderr, "[IllTool Blend] Deleted %d orphaned intermediates\n", (int)toDelete.size());
+    }
+
+    // Build easing curve
+    EasingCurve easing;
+    switch (easingPreset) {
+        case 1:  easing = EasingCurve::EaseIn();    break;
+        case 2:  easing = EasingCurve::EaseOut();   break;
+        case 3:  easing = EasingCurve::EaseInOut(); break;
+        default: easing = EasingCurve::Linear();    break;
+    }
+
+    // Harmonize paths
+    std::vector<AIPathSegment> resA, resB;
+    int targetCount = 0;
+    bool isClosed = false;
+    if (!HarmonizePaths(srcA, srcB, resA, resB, targetCount, isClosed))
+        return 0;
+
+    // Read style from path A
+    AIPathStyle pathStyle;
+    AIBoolean hasAdvFill = false;
+    sAIPathStyle->GetPathStyle(srcA, &pathStyle, &hasAdvFill);
+
+    // Push undo frame
+    fUndoStack.PushFrame();
+
+    // Generate new intermediates
+    std::vector<AIArtHandle> newIntermediates;
+    int created = GenerateIntermediates(resA, resB, targetCount, isClosed, steps,
+                                         easing, pathStyle, srcA, newIntermediates);
+
+    // Update dictionary
+    StoreBlendParams(groupArt, steps, easingPreset);
+
+    // Update or create BlendState
+    if (state) {
+        state->steps = steps;
+        state->easingPreset = easingPreset;
+        state->intermediates = newIntermediates;
+    } else {
+        BlendState newState;
+        newState.groupArt = groupArt;
+        newState.pathA = srcA;
+        newState.pathB = srcB;
+        newState.steps = steps;
+        newState.easingPreset = easingPreset;
+        newState.intermediates = newIntermediates;
+        fBlendStates.push_back(newState);
+    }
+
+    fprintf(stderr, "[IllTool Blend] ReblendGroup complete: %d new intermediates\n", created);
     return created;
 }
 // End IllToolBlend.cpp
