@@ -69,14 +69,17 @@ IllToolPlugin::IllToolPlugin(SPPluginRef pluginRef) :
     fIsolationChangedNotifier(NULL),
     fSelectionPanel(NULL), fCleanupPanel(NULL),
     fGroupingPanel(NULL), fMergePanel(NULL),
+    fShadingPanel(NULL), fBlendPanel(NULL), fPerspectivePanel(NULL),
     fSelectionMenuHandle(NULL), fCleanupMenuHandle(NULL),
     fGroupingMenuHandle(NULL), fMergeMenuHandle(NULL),
+    fShadingMenuHandle(NULL), fBlendMenuHandle(NULL), fPerspectiveMenuHandle(NULL),
     fAppMenuRootHandle(NULL),
     fMenuLassoHandle(NULL), fMenuSmartHandle(NULL),
     fMenuCleanupHandle(NULL), fMenuGroupingHandle(NULL),
     fMenuMergeHandle(NULL), fMenuSelectionHandle(NULL),
     fSelectionController(NULL), fCleanupController(NULL),
     fGroupingController(NULL), fMergeController(NULL),
+    fShadingController(NULL), fBlendController(NULL), fPerspectiveController(NULL),
     fLastClickTime(0.0)
 {
     fLastCursorPos.h = 0;
@@ -333,6 +336,7 @@ ASErr IllToolPlugin::GoMenuItem(AIMenuMessage* message)
                 { fCleanupMenuHandle,   fCleanupPanel,   "Cleanup" },
                 { fGroupingMenuHandle,  fGroupingPanel,  "Grouping" },
                 { fMergeMenuHandle,     fMergePanel,     "Merge" },
+                { fShadingMenuHandle,   fShadingPanel,   "Shading" },
                 // Application submenu panel toggles (same panels, different menu items)
                 { fMenuCleanupHandle,   fCleanupPanel,   "Cleanup (menu)" },
                 { fMenuGroupingHandle,  fGroupingPanel,  "Grouping (menu)" },
@@ -393,6 +397,7 @@ ASErr IllToolPlugin::UpdateMenuItem(AIMenuMessage* message)
                 { fMenuGroupingHandle,  fGroupingPanel },
                 { fMenuMergeHandle,     fMergePanel },
                 { fMenuSelectionHandle, fSelectionPanel },
+                { fShadingMenuHandle,   fShadingPanel },
             };
             for (auto& item : items) {
                 if (message->menuItem == item.menu && item.panel) {
@@ -513,6 +518,39 @@ ASErr IllToolPlugin::ToolMouseDown(AIToolMessage* message)
 {
     ASErr result = kNoErr;
     try {
+        // Blend pick mode: intercept clicks to store path A or B (P1 fix)
+        int blendPickMode = BridgeGetBlendPickMode();
+        if (blendPickMode == 1 || blendPickMode == 2) {
+            AIRealPoint clickPt = message->cursor;
+            if (sAIHitTest) {
+                AIHitRef hitRef = NULL;
+                ASErr hitErr = sAIHitTest->HitTest(NULL, &clickPt, kAllHitRequest, &hitRef);
+                if (hitErr == kNoErr && hitRef && sAIHitTest->IsHit(hitRef)) {
+                    AIArtHandle hitArt = sAIHitTest->GetArt(hitRef);
+                    short artType = kUnknownArt;
+                    if (hitArt) sAIArt->GetArtType(hitArt, &artType);
+                    if (hitArt && artType == kPathArt) {
+                        if (blendPickMode == 1) {
+                            fBlendPathA = hitArt;
+                            BridgeSetBlendPathASet(true);
+                            fprintf(stderr, "[IllTool Blend] Picked path A: %p\n", (void*)hitArt);
+                        } else {
+                            fBlendPathB = hitArt;
+                            BridgeSetBlendPathBSet(true);
+                            fprintf(stderr, "[IllTool Blend] Picked path B: %p\n", (void*)hitArt);
+                        }
+                    } else {
+                        fprintf(stderr, "[IllTool Blend] Click did not hit a path\n");
+                    }
+                    if (hitRef) sAIHitTest->Release(hitRef);
+                } else if (hitRef) {
+                    sAIHitTest->Release(hitRef);
+                }
+            }
+            BridgeSetBlendPickMode(0);  // exit pick mode after click
+            return kNoErr;
+        }
+
         BridgeToolMode mode = BridgeGetToolMode();
 
         if (mode == BridgeToolMode::Lasso) {
@@ -588,145 +626,214 @@ ASErr IllToolPlugin::ToolMouseDown(AIToolMessage* message)
 
 /*
     ProcessOperationQueue — called from AITimerSuite at ~10Hz in SDK message context.
-    Checks all atomic flags set by HTTP bridge and panel buttons, then executes
-    the corresponding SDK operations.  This is the ONLY safe place for SDK API calls
-    triggered by non-SDK threads (Cocoa buttons, HTTP handlers).
+    Dequeues operations from the H1 operation queue and executes them.
+    This is the ONLY safe place for SDK API calls triggered by non-SDK threads
+    (Cocoa buttons, HTTP handlers).
 */
 void IllToolPlugin::ProcessOperationQueue()
 {
+    // Stage 10: sync perspective grid state from bridge (continuous state, not queued)
+    SyncPerspectiveFromBridge();
+
     // Check dirty flag for HTTP-sent draw commands
     if (IsDirty()) {
         SetDirty(false);
         InvalidateFullView();
     }
 
-    // Check for lasso close request (Enter key or HTTP /lasso/close)
-    if (BridgeIsLassoCloseRequested()) {
-        BridgeClearLassoCloseRequest();
-        if (fPolygonVertices.size() >= 3) {
-            fprintf(stderr, "[IllTool Timer] Lasso close — closing polygon with %zu vertices\n",
-                    fPolygonVertices.size());
-            ExecutePolygonSelection();
-            fPolygonVertices.clear();
-            UpdatePolygonOverlay();
-            InvalidateFullView();
+    // H1: Dequeue and process all pending operations
+    PluginOp op;
+    while (BridgeDequeueOp(op)) {
+        switch (op.type) {
+            case OpType::LassoClose:
+                if (fPolygonVertices.size() >= 3) {
+                    fprintf(stderr, "[IllTool Timer] Lasso close — closing polygon with %zu vertices\n",
+                            fPolygonVertices.size());
+                    ExecutePolygonSelection();
+                    fPolygonVertices.clear();
+                    UpdatePolygonOverlay();
+                    InvalidateFullView();
+                }
+                break;
+
+            case OpType::LassoClear:
+                if (!fPolygonVertices.empty()) {
+                    fprintf(stderr, "[IllTool Timer] Lasso clear — discarding %zu vertices\n",
+                            fPolygonVertices.size());
+                    fPolygonVertices.clear();
+                    UpdatePolygonOverlay();
+                    InvalidateFullView();
+                }
+                break;
+
+            case OpType::WorkingApply:
+                fprintf(stderr, "[IllTool Timer] Working Apply (deleteOriginals=%s)\n",
+                        op.boolParam1 ? "true" : "false");
+                ApplyWorkingMode(op.boolParam1);
+                InvalidateFullView();
+                break;
+
+            case OpType::WorkingCancel:
+                fprintf(stderr, "[IllTool Timer] Working Cancel\n");
+                CancelWorkingMode();
+                InvalidateFullView();
+                break;
+
+            case OpType::AverageSelection:
+                fprintf(stderr, "[IllTool Timer] Average Selection\n");
+                AverageSelection();
+                InvalidateFullView();
+                break;
+
+            case OpType::Classify:
+                fprintf(stderr, "[IllTool Timer] Classify Selection\n");
+                ClassifySelection();
+                break;
+
+            case OpType::Reclassify:
+                fprintf(stderr, "[IllTool Timer] Reclassify as type %d\n", op.intParam);
+                ReclassifyAs(static_cast<BridgeShapeType>(op.intParam));
+                InvalidateFullView();
+                break;
+
+            case OpType::Simplify: {
+                double tolerance = op.param1 * 0.5;  // slider 0-100 → tolerance 0-50pt
+                fprintf(stderr, "[IllTool Timer] Simplify (slider=%.0f, tolerance=%.1f)\n",
+                        op.param1, tolerance);
+                SimplifySelection(tolerance);
+                InvalidateFullView();
+                break;
+            }
+
+            case OpType::CopyToGroup:
+                fprintf(stderr, "[IllTool Timer] Copy to Group '%s'\n", op.strParam.c_str());
+                CopyToGroup(op.strParam);
+                InvalidateFullView();
+                break;
+
+            case OpType::Detach:
+                fprintf(stderr, "[IllTool Timer] Detach from Group\n");
+                DetachFromGroup();
+                InvalidateFullView();
+                break;
+
+            case OpType::Split:
+                fprintf(stderr, "[IllTool Timer] Split to New Group\n");
+                SplitToNewGroup();
+                InvalidateFullView();
+                break;
+
+            case OpType::ScanEndpoints:
+                fprintf(stderr, "[IllTool Timer] Scan Endpoints (tolerance=%.1f)\n", op.param1);
+                ScanEndpoints(op.param1);
+                InvalidateFullView();
+                break;
+
+            case OpType::MergeEndpoints:
+                fprintf(stderr, "[IllTool Timer] Merge Endpoints (chain=%s, preserve=%s)\n",
+                        op.boolParam1 ? "true" : "false", op.boolParam2 ? "true" : "false");
+                MergeEndpoints(op.boolParam1, op.boolParam2);
+                InvalidateFullView();
+                break;
+
+            case OpType::UndoMerge:
+                fprintf(stderr, "[IllTool Timer] Undo Merge\n");
+                UndoMerge();
+                InvalidateFullView();
+                break;
+
+            case OpType::SelectSmall:
+                fprintf(stderr, "[IllTool Timer] Select Small (threshold=%.1f)\n", op.param1);
+                SelectSmall(op.param1);
+                InvalidateFullView();
+                break;
+
+            case OpType::UndoShape:
+                fprintf(stderr, "[IllTool Timer] Undo Shape\n");
+                fUndoStack.Undo();
+                InvalidateFullView();
+                break;
+
+            case OpType::ClearPerspective:
+                ClearPerspectiveGrid();
+                break;
+
+            case OpType::LockPerspective:
+                fPerspectiveGrid.locked = op.boolParam1;
+                fprintf(stderr, "[IllTool Timer] Perspective grid %s\n",
+                        op.boolParam1 ? "locked" : "unlocked");
+                InvalidateFullView();
+                break;
+
+            case OpType::SetGridDensity:
+                fPerspectiveGrid.gridDensity = op.intParam;
+                if (fPerspectiveGrid.gridDensity < 2) fPerspectiveGrid.gridDensity = 2;
+                if (fPerspectiveGrid.gridDensity > 20) fPerspectiveGrid.gridDensity = 20;
+                fprintf(stderr, "[IllTool Timer] Set Grid Density: %d\n", fPerspectiveGrid.gridDensity);
+                InvalidateFullView();
+                break;
+
+            // Stage 11: Blend Harmonization
+            case OpType::BlendPickA:
+                fprintf(stderr, "[IllTool Timer] Blend Pick A mode\n");
+                BridgeSetBlendPickMode(1);
+                break;
+
+            case OpType::BlendPickB:
+                fprintf(stderr, "[IllTool Timer] Blend Pick B mode\n");
+                BridgeSetBlendPickMode(2);
+                break;
+
+            case OpType::BlendExecute:
+                if (fBlendPathA && fBlendPathB) {
+                    // Validate handles before use (P1 fix — paths could be stale)
+                    short typeA = 0, typeB = 0;
+                    if (sAIArt->GetArtType(fBlendPathA, &typeA) != kNoErr || typeA != kPathArt) {
+                        fprintf(stderr, "[IllTool Timer] Blend Execute: path A is stale\n");
+                        fBlendPathA = nullptr; BridgeSetBlendPathASet(false);
+                        break;
+                    }
+                    if (sAIArt->GetArtType(fBlendPathB, &typeB) != kNoErr || typeB != kPathArt) {
+                        fprintf(stderr, "[IllTool Timer] Blend Execute: path B is stale\n");
+                        fBlendPathB = nullptr; BridgeSetBlendPathBSet(false);
+                        break;
+                    }
+                    int steps = BridgeGetBlendSteps();
+                    int easing = BridgeGetBlendEasing();
+                    fprintf(stderr, "[IllTool Timer] Blend Execute (steps=%d, easing=%d)\n", steps, easing);
+                    int created = ExecuteBlend(fBlendPathA, fBlendPathB, steps, easing);
+                    fprintf(stderr, "[IllTool Timer] Blend created %d paths\n", created);
+                    InvalidateFullView();
+                } else {
+                    fprintf(stderr, "[IllTool Timer] Blend Execute: paths not set (A=%p B=%p)\n",
+                            (void*)fBlendPathA, (void*)fBlendPathB);
+                }
+                break;
+
+            case OpType::BlendSetSteps:
+                BridgeSetBlendSteps(op.intParam);
+                fprintf(stderr, "[IllTool Timer] Blend set steps=%d\n", op.intParam);
+                break;
+
+            case OpType::BlendSetEasing:
+                BridgeSetBlendEasing(op.intParam);
+                fprintf(stderr, "[IllTool Timer] Blend set easing=%d\n", op.intParam);
+                break;
+
+            // Stage 12: Surface Shading
+            case OpType::ShadingApplyBlend:
+            case OpType::ShadingApplyMesh:
+                fprintf(stderr, "[IllTool Timer] Shading %s\n",
+                        op.type == OpType::ShadingApplyBlend ? "Apply Blend" : "Apply Mesh");
+                DispatchShadingOp(op.type);
+                InvalidateFullView();
+                break;
+
+            case OpType::ShadingSetMode:
+                BridgeSetShadingMode(op.intParam);
+                fprintf(stderr, "[IllTool Timer] Shading set mode=%d\n", op.intParam);
+                break;
         }
-    }
-
-    // Check for lasso clear request (Escape key or HTTP /lasso/clear)
-    if (BridgeIsLassoClearRequested()) {
-        BridgeClearLassoClearRequest();
-        if (!fPolygonVertices.empty()) {
-            fprintf(stderr, "[IllTool Timer] Lasso clear — discarding %zu vertices\n",
-                    fPolygonVertices.size());
-            fPolygonVertices.clear();
-            UpdatePolygonOverlay();
-            InvalidateFullView();
-        }
-    }
-
-    // Check for working mode apply request (panel Apply button or HTTP /working/apply)
-    if (BridgeIsWorkingApplyRequested()) {
-        bool delOrig = BridgeGetWorkingApplyDeleteOriginals();
-        BridgeClearWorkingApplyRequest();
-        fprintf(stderr, "[IllTool Timer] Working Apply (deleteOriginals=%s)\n",
-                delOrig ? "true" : "false");
-        ApplyWorkingMode(delOrig);
-        InvalidateFullView();
-    }
-
-    // Check for working mode cancel request (panel Cancel button or HTTP /working/cancel)
-    if (BridgeIsWorkingCancelRequested()) {
-        BridgeClearWorkingCancelRequest();
-        fprintf(stderr, "[IllTool Timer] Working Cancel\n");
-        CancelWorkingMode();
-        InvalidateFullView();
-    }
-
-    // Check for average selection request (panel button)
-    if (BridgeIsAverageSelectionRequested()) {
-        BridgeClearAverageSelectionRequest();
-        fprintf(stderr, "[IllTool Timer] Average Selection — executing in SDK context\n");
-        AverageSelection();
-        InvalidateFullView();
-    }
-
-    // Check for shape classification request
-    if (BridgeIsClassifyRequested()) {
-        BridgeClearClassifyRequest();
-        fprintf(stderr, "[IllTool Timer] Classify Selection — executing in SDK context\n");
-        ClassifySelection();
-    }
-
-    // Check for shape reclassification request (force-fit to shape type)
-    if (BridgeIsReclassifyRequested()) {
-        BridgeShapeType shapeType = BridgeGetReclassifyShapeType();
-        BridgeClearReclassifyRequest();
-        fprintf(stderr, "[IllTool Timer] Reclassify as type %d — executing in SDK context\n",
-                (int)shapeType);
-        ReclassifyAs(shapeType);
-        InvalidateFullView();
-    }
-
-    // Check for simplification request (slider)
-    if (BridgeIsSimplifyRequested()) {
-        double sliderValue = BridgeGetSimplifySliderValue();
-        BridgeClearSimplifyRequest();
-        double tolerance = sliderValue * 0.5;  // slider 0-100 → tolerance 0-50pt
-        fprintf(stderr, "[IllTool Timer] Simplify (slider=%.0f, tolerance=%.1f) — executing in SDK context\n",
-                sliderValue, tolerance);
-        SimplifySelection(tolerance);
-        InvalidateFullView();
-    }
-
-    // Stage 5: Grouping operations
-    if (BridgeIsCopyToGroupRequested()) {
-        std::string name = BridgeGetCopyToGroupName();
-        BridgeClearCopyToGroupRequest();
-        fprintf(stderr, "[IllTool Timer] Copy to Group '%s' — executing in SDK context\n", name.c_str());
-        CopyToGroup(name);
-        InvalidateFullView();
-    }
-
-    if (BridgeIsDetachRequested()) {
-        BridgeClearDetachRequest();
-        fprintf(stderr, "[IllTool Timer] Detach from Group — executing in SDK context\n");
-        DetachFromGroup();
-        InvalidateFullView();
-    }
-
-    if (BridgeIsSplitRequested()) {
-        BridgeClearSplitRequest();
-        fprintf(stderr, "[IllTool Timer] Split to New Group — executing in SDK context\n");
-        SplitToNewGroup();
-        InvalidateFullView();
-    }
-
-    // Stage 6: Merge operations
-    if (BridgeIsScanEndpointsRequested()) {
-        double tolerance = BridgeGetScanTolerance();
-        BridgeClearScanEndpointsRequest();
-        fprintf(stderr, "[IllTool Timer] Scan Endpoints (tolerance=%.1f) — executing in SDK context\n",
-                tolerance);
-        ScanEndpoints(tolerance);
-        InvalidateFullView();
-    }
-
-    if (BridgeIsMergeEndpointsRequested()) {
-        bool chain = BridgeGetMergeChainMerge();
-        bool preserve = BridgeGetMergePreserveHandles();
-        BridgeClearMergeEndpointsRequest();
-        fprintf(stderr, "[IllTool Timer] Merge Endpoints (chain=%s, preserve=%s) — executing in SDK context\n",
-                chain ? "true" : "false", preserve ? "true" : "false");
-        MergeEndpoints(chain, preserve);
-        InvalidateFullView();
-    }
-
-    if (BridgeIsUndoMergeRequested()) {
-        BridgeClearUndoMergeRequest();
-        fprintf(stderr, "[IllTool Timer] Undo Merge — executing in SDK context\n");
-        UndoMerge();
-        InvalidateFullView();
     }
 
     // Stage 8: Enforce locked isolation mode (timer-based safety net).
@@ -1064,6 +1171,8 @@ ASErr IllToolPlugin::DrawAnnotation(AIAnnotatorMessage* message)
             result = this->fAnnotator->Draw(message);
             aisdk::check_ai_error(result);
         }
+        // Stage 10: draw perspective grid overlay
+        DrawPerspectiveOverlay(message);
     }
     catch (ai::Error& ex) {
         result = ex;

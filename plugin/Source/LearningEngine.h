@@ -15,6 +15,7 @@
 
 #include <string>
 #include <vector>
+#include <mutex>
 
 //----------------------------------------------------------------------------------------
 //  LearningEngine — singleton that records interactions and predicts preferences
@@ -121,6 +122,7 @@ private:
     /** Get the database file path: ~/Library/Application Support/illtool/learning.db */
     static std::string GetDBPath();
 
+    mutable std::recursive_mutex mMutex;  // P0: protects all DB operations
     void* db = nullptr;  // sqlite3* — opaque to avoid exposing sqlite3.h
 };
 

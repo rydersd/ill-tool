@@ -1,7 +1,11 @@
 # Wiki Index
-> Auto-maintained. Last updated: 2026-04-06. Articles: 33. Words: ~70K.
+> Auto-maintained. Last updated: 2026-04-07. Articles: 37. Words: ~78K.
 
 ## Recent
+- 2026-04-07: [Adversarial Review Round 3](concepts/plugin-adversarial-review-round3.md) — 40 issues from 5 specialist reviewers (thread, math, memory, integration, MRC). All P0s fixed. Tags: review, thread-safety, adversarial
+- 2026-04-07: [Perspective Grid Foundation](concepts/perspective-grid-foundation.md) — Draggable-line perspective grid, VPs derived from extensions, annotator overlay. Tags: perspective, grid, annotator, tool
+- 2026-04-07: [Blend Tool Implementation](concepts/blend-tool-implementation.md) — Production blend: arc-length resampling, easing curve editor, re-editable groups, AIDictionarySuite persistence. Tags: blend, easing, tool
+- 2026-04-07: [Pipeline Gaps Closed](concepts/plugin-pipeline-gaps-closed.md) — All 6 gaps fixed, H1-H3 architecture hardening, dual adversarial review (Claude + Codex). Tags: plugin, architecture, review
 - 2026-04-06: [Blend Harmonization](concepts/blend-harmonization.md) — Pre-blend point harmonization: arc-length resampling + de Casteljau + rotation alignment = twist-free interpolation for final art. Tags: blend, interpolation, bezier, art-production
 - 2026-04-06: [Plugin Architecture Hardening](concepts/plugin-architecture-hardening.md) — Operation queue, result queue, undo stack, subsystem registration — scaling the plugin to 25+ operations. Tags: architecture, plugin, extensibility
 - 2026-04-06: [AITimer Dispatch Pattern](concepts/aitimer-dispatch-pattern.md) — Universal SDK-context dispatch via AITimerSuite — the fix for DOC? errors blocking panel operations. Tags: sdk, architecture, timer, critical-fix
@@ -48,6 +52,10 @@
 - [Normal Map as Shadow-Free Reference](concepts/normal-map-as-reference.md) — DSINE normals → 15 renderings (5 original + 10 eigendecomposition) as preprocessor for all tools. Tags: normals, architecture
 - [Expanded Normal Renderings](concepts/expanded-normal-renderings.md) — Shape operator eigendecomposition: curvatures, surface types, ridge/valley, silhouettes, flow fields, cross-contours, auto line weight. Tags: normals, differential-geometry
 - [Smart Merge Architecture](concepts/smart-merge.md) — Form-edge-aware path merging with normal sidecar intelligence. Tags: tools, merge, cep
+- [Pipeline Gaps Closed](concepts/plugin-pipeline-gaps-closed.md) — 6 gaps fixed + H1-H3 hardening + dual adversarial review. Tags: plugin, architecture, review
+- [Blend Tool Implementation](concepts/blend-tool-implementation.md) — Production blend with easing curve editor, state persistence, re-editable groups. Tags: blend, tool
+- [Perspective Grid Foundation](concepts/perspective-grid-foundation.md) — Draggable-line perspective, derived VPs, annotator overlay. Tags: perspective, grid, tool
+- [Adversarial Review Round 3](concepts/plugin-adversarial-review-round3.md) — 40 issues from 5 specialist reviewers. Thread mutexes, MRC fixes, integration wiring. Tags: review, adversarial
 - [Adversarial Review Findings](concepts/adversarial-review-findings.md) — 80+ bugs from 5 hostile agents, root causes, patterns to prevent recurrence. Tags: review, bugs, patterns
 - [Illustrator C++ Plugin SDK](concepts/illustrator-cpp-plugin-sdk.md) — WORKING: notarized plugin with lasso, panels, vision engine, learning engine. Tags: illustrator, c++, plugin
 - [Local Vision Engine](concepts/vision-engine.md) — Pure C++ CV: 14 algorithms, no OpenCV. Canny, Hough, active contours, learning-integrated grouping. Tags: vision, cv, c++

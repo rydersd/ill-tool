@@ -16,6 +16,7 @@
 #include "VisionEngine.h"
 #include "LearningEngine.h"
 
+#include <mutex>
 #include <cstdio>
 #include <cstring>
 #include <cmath>
@@ -50,6 +51,7 @@ VisionEngine::~VisionEngine() {}
 
 bool VisionEngine::LoadImage(const char* filePath)
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     if (!filePath || filePath[0] == '\0') {
         VE_LOG("ERROR: LoadImage called with null/empty path");
         return false;
@@ -76,11 +78,12 @@ bool VisionEngine::LoadImage(const char* filePath)
 
 bool VisionEngine::IsLoaded() const
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     return !pixels.empty() && imgWidth > 0 && imgHeight > 0;
 }
 
-int VisionEngine::Width() const  { return imgWidth; }
-int VisionEngine::Height() const { return imgHeight; }
+int VisionEngine::Width() const  { std::lock_guard<std::recursive_mutex> lock(mMutex); return imgWidth; }
+int VisionEngine::Height() const { std::lock_guard<std::recursive_mutex> lock(mMutex); return imgHeight; }
 
 //========================================================================================
 //  2. Gaussian blur (separable 1D convolutions)
@@ -303,7 +306,8 @@ std::vector<uint8_t> VisionEngine::HysteresisThreshold(const std::vector<double>
 // 4c. Full Canny pipeline
 std::vector<uint8_t> VisionEngine::CannyEdges(double lowThresh, double highThresh)
 {
-    if (!IsLoaded()) {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
+    if (pixels.empty() || imgWidth <= 0 || imgHeight <= 0) {
         VE_LOG("ERROR: CannyEdges called with no image loaded");
         return {};
     }
@@ -327,7 +331,8 @@ std::vector<uint8_t> VisionEngine::CannyEdges(double lowThresh, double highThres
 // Sobel edges (simpler: just threshold the gradient magnitude)
 std::vector<uint8_t> VisionEngine::SobelEdges(double threshold)
 {
-    if (!IsLoaded()) {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
+    if (pixels.empty() || imgWidth <= 0 || imgHeight <= 0) {
         VE_LOG("ERROR: SobelEdges called with no image loaded");
         return {};
     }
@@ -435,6 +440,7 @@ VisionEngine::Contour VisionEngine::TraceContour(const std::vector<uint8_t>& bin
 std::vector<VisionEngine::Contour> VisionEngine::FindContours(
     const std::vector<uint8_t>& binary, int w, int h, int minLength)
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     std::vector<Contour> contours;
     std::vector<bool> visited(w * h, false);
 
@@ -533,7 +539,8 @@ std::vector<std::pair<double,double>> VisionEngine::DouglasPeucker(
 
 std::vector<uint8_t> VisionEngine::MultiScaleEdges(int numScales, double voteThreshold)
 {
-    if (!IsLoaded()) {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
+    if (pixels.empty() || imgWidth <= 0 || imgHeight <= 0) {
         VE_LOG("ERROR: MultiScaleEdges called with no image loaded");
         return {};
     }
@@ -577,7 +584,8 @@ std::vector<uint8_t> VisionEngine::MultiScaleEdges(int numScales, double voteThr
 
 std::vector<uint8_t> VisionEngine::FloodFillMask(int seedX, int seedY, int tolerance)
 {
-    if (!IsLoaded()) {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
+    if (pixels.empty() || imgWidth <= 0 || imgHeight <= 0) {
         VE_LOG("ERROR: FloodFillMask called with no image loaded");
         return {};
     }
@@ -667,6 +675,7 @@ private:
 std::vector<std::vector<std::pair<int,int>>> VisionEngine::ConnectedComponents(
     const std::vector<uint8_t>& binary, int w, int h)
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     int n = w * h;
     DisjointSet ds(n);
 
@@ -715,6 +724,7 @@ std::vector<VisionEngine::HoughLine> VisionEngine::DetectLines(
     const std::vector<uint8_t>& edges,
     double rhoRes, double thetaRes, int threshold)
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     if (edges.empty()) return {};
 
     int w = imgWidth;
@@ -783,6 +793,7 @@ std::vector<VisionEngine::Circle> VisionEngine::DetectCircles(
     const std::vector<uint8_t>& edges,
     double minRadius, double maxRadius, int threshold)
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     if (edges.empty()) return {};
 
     int w = imgWidth;
@@ -882,7 +893,8 @@ std::vector<std::pair<double,double>> VisionEngine::SnapToEdge(
     const std::vector<std::pair<double,double>>& initialPath,
     double alpha, double beta, double gamma, int iterations)
 {
-    if (initialPath.size() < 3 || !IsLoaded()) {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
+    if (initialPath.size() < 3 || pixels.empty() || imgWidth <= 0 || imgHeight <= 0) {
         return initialPath;
     }
 
@@ -1056,6 +1068,7 @@ std::pair<double,double> VisionEngine::Centroid(const Contour& c)
 
 std::vector<int> VisionEngine::DetectNoise(const std::vector<Contour>& contours)
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     std::vector<int> noiseIndices;
 
     LearningEngine& le = LearningEngine::Instance();
@@ -1087,6 +1100,7 @@ std::vector<int> VisionEngine::DetectNoise(const std::vector<Contour>& contours)
 std::vector<VisionEngine::ContourGroup> VisionEngine::SuggestGroups(
     const std::vector<Contour>& contours)
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     int n = static_cast<int>(contours.size());
     if (n < 2) return {};
 
@@ -1270,4 +1284,229 @@ int PluginVisionGetWidth()
 int PluginVisionGetHeight()
 {
     return VisionEngine::Instance().Height();
+}
+
+//========================================================================================
+//  Surface type inference (Gap 1)
+//========================================================================================
+
+void VisionEngine::ArtToPixelMapping::ArtRectToPixelRect(
+    double aLeft, double aTop, double aRight, double aBottom,
+    int& pX, int& pY, int& pW, int& pH) const
+{
+    if (!valid || pixelWidth == 0 || pixelHeight == 0) {
+        pX = pY = pW = pH = 0;
+        return;
+    }
+    double artW = artRight - artLeft;
+    double artH = artTop - artBottom;  // Illustrator Y-up: top > bottom
+    if (artW < 1e-6 || artH < 1e-6) { pX = pY = pW = pH = 0; return; }
+
+    double scaleX = pixelWidth / artW;
+    double scaleY = pixelHeight / artH;
+
+    // Artwork coords: origin bottom-left, Y-up. Pixel coords: origin top-left, Y-down.
+    pX = (int)((aLeft - artLeft) * scaleX);
+    pY = (int)((artTop - aTop) * scaleY);   // flip Y
+    pW = (int)((aRight - aLeft) * scaleX);
+    pH = (int)((aTop - aBottom) * scaleY);
+
+    // Clamp to image bounds
+    if (pX < 0) { pW += pX; pX = 0; }
+    if (pY < 0) { pH += pY; pY = 0; }
+    if (pX + pW > pixelWidth)  pW = pixelWidth - pX;
+    if (pY + pH > pixelHeight) pH = pixelHeight - pY;
+    if (pW < 0) pW = 0;
+    if (pH < 0) pH = 0;
+}
+
+void VisionEngine::SetArtToPixelMapping(double aLeft, double aTop, double aRight, double aBottom)
+{
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
+    artMapping.artLeft   = aLeft;
+    artMapping.artTop    = aTop;
+    artMapping.artRight  = aRight;
+    artMapping.artBottom = aBottom;
+    artMapping.pixelWidth  = imgWidth;
+    artMapping.pixelHeight = imgHeight;
+    artMapping.valid = (imgWidth > 0 && imgHeight > 0);
+    VE_LOG("SetArtToPixelMapping: art=[%.0f,%.0f,%.0f,%.0f] px=[%d,%d] valid=%d",
+           aLeft, aTop, aRight, aBottom, imgWidth, imgHeight, artMapping.valid);
+}
+
+VisionEngine::SurfaceHint VisionEngine::InferSurfaceType(int x, int y, int w, int h)
+{
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
+    SurfaceHint result;
+    result.type = SurfaceType::Unknown;
+    result.confidence = 0.0;
+    result.gradientAngle = 0.0;
+
+    if (!IsLoaded() || w < 5 || h < 5) return result;
+
+    // Clamp region to image bounds
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > imgWidth)  w = imgWidth - x;
+    if (y + h > imgHeight) h = imgHeight - y;
+    if (w < 5 || h < 5) return result;
+
+    // Step 1: Extract sub-region, downsample if large
+    int step = 1;
+    while (w / step > 200 || h / step > 200) step++;
+    int sw = w / step, sh = h / step;
+    if (sw < 5 || sh < 5) return result;
+
+    std::vector<uint8_t> subImage(sw * sh);
+    for (int sy = 0; sy < sh; sy++) {
+        for (int sx = 0; sx < sw; sx++) {
+            int srcX = x + sx * step;
+            int srcY = y + sy * step;
+            subImage[sy * sw + sx] = pixels[srcY * imgWidth + srcX];
+        }
+    }
+
+    // Step 2: Blur and compute gradient on sub-region
+    auto blurred = GaussianBlur(subImage, sw, sh, 1.5);
+    Gradient grad = ComputeGradient(blurred, sw, sh);
+
+    // Step 3: Find magnitude threshold (5% of max) to ignore noise
+    double maxMag = 0;
+    for (int i = 0; i < sw * sh; i++) {
+        if (grad.magnitude[i] > maxMag) maxMag = grad.magnitude[i];
+    }
+    double magThresh = maxMag * 0.05;
+    if (maxMag < 1.0) {
+        // No significant gradients — flat region
+        result.type = SurfaceType::Flat;
+        result.confidence = 0.9;
+        return result;
+    }
+
+    // Step 4: Build AXIAL gradient direction histogram (18 bins, 10 degrees each, 0..180°)
+    // Gradients are axial — edges on both sides of a ridge point in opposite directions.
+    // Folding to 0..π merges them into the same bin (Codex P1 fix).
+    const int NBINS = 18;
+    double histogram[NBINS] = {};
+    double totalWeight = 0;
+    int pixelsAboveThresh = 0;
+
+    for (int i = 0; i < sw * sh; i++) {
+        if (grad.magnitude[i] < magThresh) continue;
+        pixelsAboveThresh++;
+        double angle = grad.direction[i];  // radians, -pi to pi
+        // Fold to 0..pi (axial: direction and direction+pi are the same axis)
+        if (angle < 0) angle += M_PI;
+        if (angle >= M_PI) angle -= M_PI;
+        int bin = (int)(angle / M_PI * NBINS);
+        if (bin >= NBINS) bin = NBINS - 1;
+        histogram[bin] += grad.magnitude[i];
+        totalWeight += grad.magnitude[i];
+    }
+
+    double activeRatio = (double)pixelsAboveThresh / (sw * sh);
+
+    // Step 5: If very few active pixels, it's flat
+    if (activeRatio < 0.15) {
+        result.type = SurfaceType::Flat;
+        result.confidence = 0.7 + 0.3 * (1.0 - activeRatio / 0.15);
+        return result;
+    }
+
+    // Step 6: Find peaks and classify histogram shape
+    int peakBin = 0;
+    double peakVal = 0;
+    for (int b = 0; b < NBINS; b++) {
+        if (histogram[b] > peakVal) { peakVal = histogram[b]; peakBin = b; }
+    }
+
+    // Weight in peak bin + neighbors (wrapped)
+    double peakWeight = histogram[peakBin]
+                      + histogram[(peakBin + 1) % NBINS]
+                      + histogram[(peakBin + NBINS - 1) % NBINS];
+    double peakRatio = (totalWeight > 0) ? peakWeight / totalWeight : 0;
+
+    // Dominant gradient angle from peak bin (in axial range 0..pi)
+    result.gradientAngle = (peakBin + 0.5) * (M_PI / NBINS);
+
+    // Check for cylindrical: one strong directional peak in the axial histogram
+    if (peakRatio > 0.50) {
+        result.type = SurfaceType::Cylindrical;
+        result.confidence = 0.5 + 0.5 * (peakRatio - 0.50) / 0.50;
+        if (result.confidence > 1.0) result.confidence = 1.0;
+        return result;
+    }
+
+    // Check for saddle: two peaks ~45 degrees apart in axial space (= 90° in full space)
+    // In 18-bin axial histogram, 45° = 4.5 bins
+    int peak2Bin = -1;
+    double peak2Val = 0;
+    for (int b = 0; b < NBINS; b++) {
+        int dist = abs(b - peakBin);
+        if (dist > NBINS / 2) dist = NBINS - dist;
+        if (dist < 3) continue;  // too close to first peak
+        if (histogram[b] > peak2Val) { peak2Val = histogram[b]; peak2Bin = b; }
+    }
+
+    if (peak2Bin >= 0) {
+        int angularDist = abs(peak2Bin - peakBin);
+        if (angularDist > NBINS / 2) angularDist = NBINS - angularDist;
+        double degreesDist = angularDist * (180.0 / NBINS);  // axial degrees
+
+        double peak2Weight = histogram[peak2Bin]
+                           + histogram[(peak2Bin + 1) % NBINS]
+                           + histogram[(peak2Bin + NBINS - 1) % NBINS];
+        double peak2Ratio = (totalWeight > 0) ? peak2Weight / totalWeight : 0;
+
+        // Saddle: two axial peaks 35-55° apart (= 70-110° in full space), each > 15% weight
+        if (degreesDist >= 35 && degreesDist <= 55 && peakRatio > 0.15 && peak2Ratio > 0.15) {
+            result.type = SurfaceType::Saddle;
+            result.confidence = 0.5 + 0.3 * fmin(peakRatio, peak2Ratio) / 0.25;
+            if (result.confidence > 1.0) result.confidence = 1.0;
+            return result;
+        }
+    }
+
+    // Step 7: Broad histogram — curved surface (convex or concave).
+    // Codex P1 fix: divergence sign is NOT reliable (flips with contrast polarity).
+    // Instead, use absolute divergence magnitude to detect curvature WITHOUT
+    // distinguishing convex from concave. Report as Convex with a note that
+    // the Python MCP pipeline (DSINE normals) can refine this.
+    std::vector<double> gx(sw * sh, 0), gy(sw * sh, 0);
+    for (int i = 0; i < sw * sh; i++) {
+        gx[i] = grad.magnitude[i] * cos(grad.direction[i]);
+        gy[i] = grad.magnitude[i] * sin(grad.direction[i]);
+    }
+
+    double totalAbsDiv = 0;
+    int divCount = 0;
+    for (int py = 1; py < sh - 1; py++) {
+        for (int px = 1; px < sw - 1; px++) {
+            int idx = py * sw + px;
+            if (grad.magnitude[idx] < magThresh) continue;
+            double dGxdx = (gx[idx + 1] - gx[idx - 1]) * 0.5;
+            double dGydy = (gy[idx + sw] - gy[idx - sw]) * 0.5;
+            totalAbsDiv += fabs(dGxdx + dGydy);
+            divCount++;
+        }
+    }
+
+    double avgAbsDiv = (divCount > 0) ? totalAbsDiv / divCount : 0;
+
+    if (avgAbsDiv > 0.5) {
+        // Significant divergence = curved surface. Report as Convex (heuristic).
+        // Python MCP override can refine to Concave when DSINE data is available.
+        result.type = SurfaceType::Convex;
+        result.confidence = 0.35 + 0.35 * fmin(avgAbsDiv / 3.0, 1.0);
+    } else {
+        // Low divergence + broad histogram = ambiguous. Default flat, low confidence.
+        result.type = SurfaceType::Flat;
+        result.confidence = 0.3;
+    }
+
+    if (result.confidence > 1.0) result.confidence = 1.0;
+    VE_LOG("InferSurfaceType: region=[%d,%d,%dx%d] type=%d conf=%.2f angle=%.1f°",
+           x, y, w, h, (int)result.type, result.confidence,
+           result.gradientAngle * 180.0 / M_PI);
+    return result;
 }

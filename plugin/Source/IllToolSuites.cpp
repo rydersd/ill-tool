@@ -34,6 +34,10 @@ extern "C"
     AIBlendStyleSuite*          sAIBlendStyle = NULL;
     AILayerSuite*               sAILayer = NULL;
     AITimerSuite*               sAITimer = NULL;
+    AIPathStyleSuite*           sAIPathStyle = NULL;
+    AIDictionarySuite*          sAIDictionary = NULL;
+    AIMeshSuite*                sAIMesh = NULL;
+    AIMeshVertexIteratorSuite*  sAIMeshVertex = NULL;
 }
 
 ImportSuite gImportSuites[] =
@@ -59,6 +63,10 @@ ImportSuite gImportSuites[] =
     kAIBlendStyleSuite, kAIBlendStyleSuiteVersion, &sAIBlendStyle,
     kAILayerSuite, kAILayerSuiteVersion, &sAILayer,
     kAITimerSuite, kAITimerSuiteVersion, &sAITimer,
+    kAIPathStyleSuite, kAIPathStyleSuiteVersion, &sAIPathStyle,
+    kAIDictionarySuite, kAIDictionarySuiteVersion, &sAIDictionary,
+    kAIMeshSuite, kAIMeshSuiteVersion, &sAIMesh,
+    kAIMeshVertexIteratorSuite, kAIMeshVertexIteratorSuiteVersion, &sAIMeshVertex,
     nullptr, 0, nullptr
 };
 // End IllToolSuites.cpp

@@ -177,6 +177,13 @@
   },
   "active": "918ec29a2b1e930c",
   "lastOpenFiles": [
+    "concepts/plugin-adversarial-review-round3.md",
+    "concepts/perspective-grid-foundation.md",
+    "concepts/blend-tool-implementation.md",
+    "concepts/plugin-pipeline-gaps-closed.md",
+    "concepts/blend-harmonization.md",
+    "concepts/plugin-architecture-hardening.md",
+    "concepts/aitimer-dispatch-pattern.md",
     "concepts/vision-engine.md",
     "concepts/form-gradient-tool.md",
     "concepts/predictive-path-completion.md",
@@ -196,13 +203,6 @@
     "references/form-understanding-without-reconstruction-2026.md",
     "references/blog-teaching-ai-to-see.md",
     "references",
-    "index.md",
-    "concepts/websocket-relay.md",
-    "concepts/void-engine.md",
-    "concepts/tool-inventory.md",
-    "concepts/test-infrastructure.md",
-    "concepts/storyboarding.md",
-    "concepts/spatial-3d-pipeline.md",
-    "concepts/shadow-vs-form.md"
+    "index.md"
   ]
 }

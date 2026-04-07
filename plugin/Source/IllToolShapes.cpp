@@ -7,6 +7,7 @@
 #include "IllToolPlugin.h"
 #include "IllToolSuites.h"
 #include "HttpBridge.h"
+#include "VisionEngine.h"
 #include <cstdio>
 #include <cmath>
 #include <vector>
@@ -91,6 +92,7 @@ void IllToolPlugin::ClassifySelection()
         ai::int32 numMatches = 0;
         ASErr result = GetMatchingArtIsolationAware(&spec, 1, &matches, &numMatches);
         if (result != kNoErr || numMatches == 0) {
+            if (matches) sAIMdMemory->MdMemoryDisposeHandle((AIMdMemoryHandle)matches);
             fLastDetectedShape = "---"; return;
         }
         AIArtHandle targetPath = FindSelectedPath(matches, numMatches);
@@ -194,14 +196,68 @@ void IllToolPlugin::ClassifySelection()
             {lConf, BridgeShapeType::LShape}, {rectConf, BridgeShapeType::Rect},
             {sConf, BridgeShapeType::SCurve}, {ellConf, BridgeShapeType::Ellipse},
         };
+
+        // Gap 1: Surface hint from VisionEngine — boost matching shape candidate
+        VisionEngine::SurfaceHint surfaceHint;
+        {
+            VisionEngine& ve = VisionEngine::Instance();
+            if (ve.IsLoaded() && ve.GetMapping().valid) {
+                double artMinH = pts[0].h, artMaxH = pts[0].h;
+                double artMinV = pts[0].v, artMaxV = pts[0].v;
+                for (int i = 1; i < n; i++) {
+                    if (pts[i].h < artMinH) artMinH = pts[i].h;
+                    if (pts[i].h > artMaxH) artMaxH = pts[i].h;
+                    if (pts[i].v < artMinV) artMinV = pts[i].v;
+                    if (pts[i].v > artMaxV) artMaxV = pts[i].v;
+                }
+                double padH = (artMaxH - artMinH) * 0.1, padV = (artMaxV - artMinV) * 0.1;
+                int px, py, pw, ph;
+                // Illustrator Y-up: top=maxV, bottom=minV (P1 fix — was reversed)
+                ve.GetMapping().ArtRectToPixelRect(
+                    artMinH - padH, artMaxV + padV, artMaxH + padH, artMinV - padV,
+                    px, py, pw, ph);
+                if (pw > 5 && ph > 5) {
+                    surfaceHint = ve.InferSurfaceType(px, py, pw, ph);
+                }
+            }
+        }
+
+        if (surfaceHint.type != VisionEngine::SurfaceType::Unknown && surfaceHint.confidence > 0.3) {
+            // Mapping matches shapes.jsx surfaceHint pattern:
+            // flat->Line, cylindrical->Arc, convex->Arc, concave->Arc, saddle->SCurve
+            BridgeShapeType suggested = BridgeShapeType::Freeform;
+            switch (surfaceHint.type) {
+                case VisionEngine::SurfaceType::Flat:        suggested = BridgeShapeType::Line; break;
+                case VisionEngine::SurfaceType::Cylindrical: suggested = BridgeShapeType::Arc; break;
+                case VisionEngine::SurfaceType::Convex:      suggested = BridgeShapeType::Arc; break;
+                case VisionEngine::SurfaceType::Concave:     suggested = BridgeShapeType::Arc; break;
+                case VisionEngine::SurfaceType::Saddle:      suggested = BridgeShapeType::SCurve; break;
+                default: break;
+            }
+            if (suggested != BridgeShapeType::Freeform) {
+                for (auto& c : cands) {
+                    // Codex P2 fix: only boost if geometric candidate is already plausible (>0.2)
+                    // Prevents weak scores getting pushed past strong geometric matches
+                    if (c.type == suggested && c.conf > 0.2) {
+                        c.conf += 0.15 * surfaceHint.confidence;
+                        if (c.conf > 1.0) c.conf = 1.0;
+                    }
+                }
+                fprintf(stderr, "[IllTool Timer] ClassifySelection: surface hint=%d (conf=%.2f) boosted %s\n",
+                        (int)surfaceHint.type, surfaceHint.confidence, kShapeNames[(int)suggested]);
+            }
+        }
+
         BridgeShapeType bestType = BridgeShapeType::Freeform;
         double bestConf = 0.1;
         for (auto& c : cands) { if (c.conf > bestConf) { bestConf = c.conf; bestType = c.type; } }
 
         fLastDetectedShape = kShapeNames[(int)bestType];
+        BridgeSetSurfaceHint((int)surfaceHint.type, surfaceHint.confidence, surfaceHint.gradientAngle);
         fprintf(stderr, "[IllTool Timer] ClassifySelection: detected=%s (conf=%.2f) "
-                "[line=%.2f arc=%.2f L=%.2f rect=%.2f S=%.2f ell=%.2f]\n",
-                fLastDetectedShape, bestConf, lineConf, arcConf, lConf, rectConf, sConf, ellConf);
+                "[line=%.2f arc=%.2f L=%.2f rect=%.2f S=%.2f ell=%.2f] surface=%d\n",
+                fLastDetectedShape, bestConf, lineConf, arcConf, lConf, rectConf, sConf, ellConf,
+                (int)surfaceHint.type);
     }
     catch (ai::Error& ex) { fprintf(stderr, "[IllTool Timer] ClassifySelection error: %d\n", (int)ex); fLastDetectedShape = "ERROR"; }
     catch (...) { fprintf(stderr, "[IllTool Timer] ClassifySelection unknown error\n"); fLastDetectedShape = "ERROR"; }
@@ -213,19 +269,39 @@ void IllToolPlugin::ClassifySelection()
 
 void IllToolPlugin::ReclassifyAs(BridgeShapeType shapeType)
 {
+    // Freeform = no-op, don't destroy existing undo snapshot (Issue #7)
+    if (shapeType == BridgeShapeType::Freeform) {
+        fLastDetectedShape = "FREEFORM";
+        fprintf(stderr, "[IllTool Timer] ReclassifyAs: freeform — no modification\n");
+        return;
+    }
+
     try {
         AIMatchingArtSpec spec(kPathArt, 0, 0);
         AIArtHandle** matches = nullptr;
         ai::int32 numMatches = 0;
         ASErr result = GetMatchingArtIsolationAware(&spec, 1, &matches, &numMatches);
-        if (result != kNoErr || numMatches == 0) { fprintf(stderr, "[IllTool Timer] ReclassifyAs: no path art\n"); return; }
+        if (result != kNoErr || numMatches == 0) {
+            if (matches) sAIMdMemory->MdMemoryDisposeHandle((AIMdMemoryHandle)matches);
+            fprintf(stderr, "[IllTool Timer] ReclassifyAs: no path art\n"); return;
+        }
         AIArtHandle targetPath = FindSelectedPath(matches, numMatches);
         if (matches) sAIMdMemory->MdMemoryDisposeHandle((AIMdMemoryHandle)matches);
         if (!targetPath) { fprintf(stderr, "[IllTool Timer] ReclassifyAs: no selected path\n"); return; }
 
+        // Snapshot before destructive modification (H3 UndoStack)
+        fUndoStack.PushFrame();
+        fUndoStack.SnapshotPath(targetPath);
+
         ai::int16 segCount = 0;
         sAIPath->GetPathSegmentCount(targetPath, &segCount);
         if (segCount < 2) return;
+
+        // Tension scaling: slider 0-100, default 50 = no change (scale 1.0)
+        // Clamped to min 0.1 to prevent degenerate zero-length handles (Issue #6)
+        double tensionScale = fmax(0.1, BridgeGetTension() / 50.0);
+        fprintf(stderr, "[IllTool Timer] ReclassifyAs: tension=%.0f, scale=%.2f\n",
+                BridgeGetTension(), tensionScale);
 
         std::vector<AIPathSegment> segs(segCount);
         sAIPath->GetPathSegments(targetPath, 0, segCount, segs.data());
@@ -260,7 +336,7 @@ void IllToolPlugin::ReclassifyAs(BridgeShapeType shapeType)
                         {(AIReal)(ccxv+r*cos(a1)),(AIReal)(ccyv+r*sin(a1))},
                         {(AIReal)(ccxv+r*cos(am)),(AIReal)(ccyv+r*sin(am))},
                         {(AIReal)(ccxv+r*cos(a1+sweep)),(AIReal)(ccyv+r*sin(a1+sweep))}};
-                    double sa=fabs(sweep/2), hLen=(4.0/3.0)*tan(sa/4.0)*r;
+                    double sa=fabs(sweep/2), hLen=(4.0/3.0)*tan(sa/4.0)*r*tensionScale;
                     double ss=(sweep>=0)?1.0:-1.0;
                     double angs[3]={a1,am,a1+sweep};
                     for(int i=0;i<3;i++){
@@ -304,7 +380,7 @@ void IllToolPlugin::ReclassifyAs(BridgeShapeType shapeType)
                     int sg=(cp>0)?1:((cp<0)?-1:0);
                     if(sg&&ps&&sg!=ps){ii=i;break;} if(sg)ps=sg;
                 }
-                AIRealPoint ip=pts[ii]; double tn=1.0/6.0;
+                AIRealPoint ip=pts[ii]; double tn=(1.0/6.0)*tensionScale;
                 auto ms=[](AIRealPoint p,AIRealPoint ih,AIRealPoint oh){AIPathSegment sg={}; sg.p=p; sg.in=ih; sg.out=oh; sg.corner=false; return sg;};
                 double t0x=(ip.h-first.h)*tn, t0y=(ip.v-first.v)*tn;
                 newSegs.push_back(ms(first, first, {(AIReal)(first.h+t0x),(AIReal)(first.v+t0y)}));
@@ -333,7 +409,7 @@ void IllToolPlugin::ReclassifyAs(BridgeShapeType shapeType)
                     double ltx=-ssa*sin(t), lty=ssb*cos(t);
                     double wtx=ltx*ca-lty*sna, wty=ltx*sna+lty*ca;
                     double tl=sqrt(wtx*wtx+wty*wty); if(tl>1e-10){wtx/=tl;wty/=tl;}
-                    double hl=(j%2==0)?kp*ssb:kp*ssa;
+                    double hl=((j%2==0)?kp*ssb:kp*ssa)*tensionScale;
                     AIPathSegment sg={}; sg.p.h=(AIReal)px; sg.p.v=(AIReal)py;
                     sg.in.h=(AIReal)(px-wtx*hl); sg.in.v=(AIReal)(py-wty*hl);
                     sg.out.h=(AIReal)(px+wtx*hl); sg.out.v=(AIReal)(py+wty*hl);
@@ -341,9 +417,8 @@ void IllToolPlugin::ReclassifyAs(BridgeShapeType shapeType)
                 }
                 break;
             }
-            case BridgeShapeType::Freeform: default:
-                fLastDetectedShape = "FREEFORM";
-                fprintf(stderr, "[IllTool Timer] ReclassifyAs: freeform — no modification\n");
+            default:
+                // Freeform handled by early return above; this covers unknown enum values
                 return;
         }
 
@@ -376,12 +451,18 @@ void IllToolPlugin::SimplifySelection(double tolerance)
         fprintf(stderr, "[IllTool Timer] SimplifySelection: tolerance too small (%.2f), skipping\n", tolerance);
         return;
     }
+
+    // Push undo frame before destructive modification (H3 UndoStack)
+    fUndoStack.PushFrame();
     try {
         AIMatchingArtSpec spec(kPathArt, 0, 0);
         AIArtHandle** matches = nullptr;
         ai::int32 numMatches = 0;
         ASErr result = GetMatchingArtIsolationAware(&spec, 1, &matches, &numMatches);
-        if (result != kNoErr || numMatches == 0) { fprintf(stderr, "[IllTool Timer] SimplifySelection: no path art\n"); return; }
+        if (result != kNoErr || numMatches == 0) {
+            if (matches) sAIMdMemory->MdMemoryDisposeHandle((AIMdMemoryHandle)matches);
+            fprintf(stderr, "[IllTool Timer] SimplifySelection: no path art\n"); return;
+        }
 
         int totalSimplified = 0, totalBefore = 0, totalAfter = 0;
         for (ai::int32 i = 0; i < numMatches; i++) {
@@ -431,6 +512,7 @@ void IllToolPlugin::SimplifySelection(double tolerance)
             for (int j=0; j<segCount; j++) if (keep[j]) ns.push_back(segs[j]);
             ai::int16 nc = (ai::int16)ns.size();
             if (nc >= 2 && nc < segCount) {
+                fUndoStack.SnapshotPath(art);  // H3: snapshot before modifying
                 sAIPath->SetPathSegmentCount(art, nc);
                 sAIPath->SetPathSegments(art, 0, nc, ns.data());
                 totalSimplified++; totalAfter += nc;
@@ -444,4 +526,142 @@ void IllToolPlugin::SimplifySelection(double tolerance)
     }
     catch (ai::Error& ex) { fprintf(stderr, "[IllTool Timer] SimplifySelection error: %d\n", (int)ex); }
     catch (...) { fprintf(stderr, "[IllTool Timer] SimplifySelection unknown error\n"); }
+}
+
+//========================================================================================
+//  SelectSmall — select all paths with arc length below threshold
+//========================================================================================
+
+void IllToolPlugin::SelectSmall(double threshold)
+{
+    try {
+        AIMatchingArtSpec spec(kPathArt, 0, 0);
+        AIArtHandle** matches = nullptr;
+        ai::int32 numMatches = 0;
+        ASErr result = GetMatchingArtIsolationAware(&spec, 1, &matches, &numMatches);
+        if (result != kNoErr || numMatches == 0) {
+            if (matches) sAIMdMemory->MdMemoryDisposeHandle((AIMdMemoryHandle)matches);
+            fprintf(stderr, "[IllTool Timer] SelectSmall: no path art\n");
+            return;
+        }
+
+        // Deselect all paths first so SelectSmall replaces the selection
+        for (ai::int32 d = 0; d < numMatches; d++) {
+            AIArtHandle dArt = (*matches)[d];
+            sAIArt->SetArtUserAttr(dArt, kArtSelected, 0);
+        }
+
+        int selectedCount = 0;
+        for (ai::int32 i = 0; i < numMatches; i++) {
+            AIArtHandle art = (*matches)[i];
+            ai::int32 attrs = 0;
+            sAIArt->GetArtUserAttr(art, kArtLocked | kArtHidden, &attrs);
+            if (attrs & (kArtLocked | kArtHidden)) continue;
+
+            ai::int16 segCount = 0;
+            sAIPath->GetPathSegmentCount(art, &segCount);
+            if (segCount < 2) continue;
+
+            AIBoolean closed = false;
+            sAIPath->GetPathClosed(art, &closed);
+
+            // Codex P2 fix: Use MeasureSegments for accurate bezier arc length
+            // (same pattern as IllToolSmartSelect.cpp ComputeSignature)
+            ai::int16 numPieces = closed ? segCount : (ai::int16)(segCount - 1);
+            double totalLen = 0;
+            if (numPieces > 0) {
+                std::vector<AIReal> pieceLengths(numPieces);
+                std::vector<AIReal> accumLengths(numPieces);
+                ASErr measErr = sAIPath->MeasureSegments(art, 0, numPieces,
+                                                         pieceLengths.data(), accumLengths.data());
+                if (measErr == kNoErr) {
+                    totalLen = (double)accumLengths[numPieces - 1]
+                             + (double)pieceLengths[numPieces - 1];
+                }
+            }
+
+            // Fallback: sum chord distances if MeasureSegments yielded zero
+            if (totalLen <= 0.0) {
+                std::vector<AIPathSegment> segs(segCount);
+                sAIPath->GetPathSegments(art, 0, segCount, segs.data());
+                for (ai::int16 s = 1; s < segCount; s++) {
+                    totalLen += Dist2D(segs[s-1].p, segs[s].p);
+                }
+                if (closed && segCount >= 2) {
+                    totalLen += Dist2D(segs[segCount-1].p, segs[0].p);
+                }
+            }
+
+            if (totalLen < threshold) {
+                sAIArt->SetArtUserAttr(art, kArtSelected, kArtSelected);
+                selectedCount++;
+            }
+        }
+
+        if (matches) sAIMdMemory->MdMemoryDisposeHandle((AIMdMemoryHandle)matches);
+        fprintf(stderr, "[IllTool Timer] SelectSmall: selected %d paths below %.1f pt\n",
+                selectedCount, threshold);
+        if (selectedCount > 0) sAIDocument->RedrawDocument();
+    }
+    catch (ai::Error& ex) { fprintf(stderr, "[IllTool Timer] SelectSmall error: %d\n", (int)ex); }
+    catch (...) { fprintf(stderr, "[IllTool Timer] SelectSmall unknown error\n"); }
+}
+
+//========================================================================================
+//  UndoStack implementation (H3) — generic multi-level undo for path operations
+//========================================================================================
+
+void IllToolPlugin::UndoStack::PushFrame()
+{
+    stack.push_back({});
+    // Trim old frames if over limit
+    while ((int)stack.size() > kMaxFrames) {
+        stack.erase(stack.begin());
+    }
+    fprintf(stderr, "[IllTool] UndoStack: pushed frame (%zu frames total)\n", stack.size());
+}
+
+void IllToolPlugin::UndoStack::SnapshotPath(AIArtHandle art)
+{
+    if (stack.empty()) return;
+    PathSnapshot snap;
+    snap.art = art;
+    ai::int16 segCount = 0;
+    sAIPath->GetPathSegmentCount(art, &segCount);
+    snap.segments.resize(segCount);
+    sAIPath->GetPathSegments(art, 0, segCount, snap.segments.data());
+    sAIPath->GetPathClosed(art, &snap.closed);
+    stack.back().push_back(std::move(snap));
+    fprintf(stderr, "[IllTool] UndoStack: snapshot path (%d segs) in frame %zu\n",
+            (int)segCount, stack.size());
+}
+
+int IllToolPlugin::UndoStack::Undo()
+{
+    if (stack.empty()) {
+        fprintf(stderr, "[IllTool] UndoStack: nothing to undo\n");
+        return 0;
+    }
+
+    auto& frame = stack.back();
+    int restored = 0;
+    for (auto& snap : frame) {
+        // Validate handle before restoring
+        short artType = 0;
+        ASErr err = sAIArt->GetArtType(snap.art, &artType);
+        if (err != kNoErr || artType != kPathArt) {
+            fprintf(stderr, "[IllTool] UndoStack: stale handle, skipping\n");
+            continue;
+        }
+        ai::int16 nc = (ai::int16)snap.segments.size();
+        sAIPath->SetPathSegmentCount(snap.art, nc);
+        sAIPath->SetPathSegments(snap.art, 0, nc, snap.segments.data());
+        sAIPath->SetPathClosed(snap.art, snap.closed);
+        restored++;
+    }
+    stack.pop_back();
+    fprintf(stderr, "[IllTool] UndoStack: restored %d paths (%zu frames remain)\n",
+            restored, stack.size());
+    if (restored > 0) sAIDocument->RedrawDocument();
+    return restored;
 }
