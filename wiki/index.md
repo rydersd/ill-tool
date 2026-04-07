@@ -1,11 +1,12 @@
 # Wiki Index
-> Auto-maintained. Last updated: 2026-04-06. Articles: 29. Words: ~60K.
+> Auto-maintained. Last updated: 2026-04-06. Articles: 30. Words: ~65K.
 
 ## Recent
 - 2026-04-06: [On-Device Learning](concepts/on-device-learning.md) — SQLite-backed ML learns shape preferences, simplification levels, noise thresholds from usage. No cloud, no LLM. Tags: learning, ml, on-device, sqlite
 - 2026-04-06: [Predictive Path Completion](concepts/predictive-path-completion.md) — Place 3 points, tool draws the rest following surface curvature. Normal map + boundary signatures + learned preferences. Tags: prediction, path-completion, normals
 - 2026-04-06: [Form Gradient Tool](concepts/form-gradient-tool.md) — Industrial design form-following gradients. Blend steps follow cross-contour flow, curvature controls falloff. Tags: gradient, blend, industrial-design
-- 2026-04-06: [Illustrator C++ Plugin SDK](concepts/illustrator-cpp-plugin-sdk.md) — WORKING: notarized plugin with polygon lasso, HTTP bridge, 4 native panels, annotator overlays. Tags: illustrator, c++, plugin, annotator
+- 2026-04-06: [Local Vision Engine](concepts/vision-engine.md) — Pure C++ CV engine: 14 algorithms, no OpenCV. Canny, Hough, active contours, smart grouping with learning. Tags: vision, cv, c++
+- 2026-04-06: [Illustrator C++ Plugin SDK](concepts/illustrator-cpp-plugin-sdk.md) — WORKING: notarized plugin with polygon lasso, HTTP bridge, 4 native panels, vision engine, learning engine. Tags: illustrator, c++, plugin
 - 2026-04-04: [Cross-Layer Edge Clustering](concepts/edge-clustering.md) — Auto-cluster paths across extraction layers into structural edge groups. Distance threshold, overlap confidence, learning from accept/split/reject. Tags: clustering, cleanup, learning
 - 2026-04-04: [Expanded Normal Renderings](concepts/expanded-normal-renderings.md) — Shape operator eigendecomposition → 10 new renderings: principal curvatures, surface type classification, ridge/valley, silhouettes, flow fields, cross-contour guides, auto line weight. Tags: normals, differential-geometry, eigendecomposition
 - 2026-04-04: [Adversarial Review Findings](concepts/adversarial-review-findings.md) — 80+ bugs from 5 hostile agents: eval injection, bezier handle math, sidecar path mismatch, namespace collisions, weak tests. Patterns to prevent recurrence. Tags: review, bugs, security, patterns
@@ -45,7 +46,8 @@
 - [Expanded Normal Renderings](concepts/expanded-normal-renderings.md) — Shape operator eigendecomposition: curvatures, surface types, ridge/valley, silhouettes, flow fields, cross-contours, auto line weight. Tags: normals, differential-geometry
 - [Smart Merge Architecture](concepts/smart-merge.md) — Form-edge-aware path merging with normal sidecar intelligence. Tags: tools, merge, cep
 - [Adversarial Review Findings](concepts/adversarial-review-findings.md) — 80+ bugs from 5 hostile agents, root causes, patterns to prevent recurrence. Tags: review, bugs, patterns
-- [Illustrator C++ Plugin SDK](concepts/illustrator-cpp-plugin-sdk.md) — WORKING: notarized plugin with polygon lasso, HTTP bridge :8787, 4 native panels, annotator overlays. Tags: illustrator, c++, plugin
+- [Illustrator C++ Plugin SDK](concepts/illustrator-cpp-plugin-sdk.md) — WORKING: notarized plugin with lasso, panels, vision engine, learning engine. Tags: illustrator, c++, plugin
+- [Local Vision Engine](concepts/vision-engine.md) — Pure C++ CV: 14 algorithms, no OpenCV. Canny, Hough, active contours, learning-integrated grouping. Tags: vision, cv, c++
 - [On-Device Learning](concepts/on-device-learning.md) — SQLite-backed ML learns shape preferences, simplify levels, noise thresholds from usage. No cloud. Tags: learning, ml, sqlite
 - [Predictive Path Completion](concepts/predictive-path-completion.md) — Place 3 points, tool extends along surface curvature using normal map + edge clusters. Tags: prediction, normals
 - [Form Gradient Tool](concepts/form-gradient-tool.md) — Form-following gradients that map to surface curvature. Industrial design technique. Tags: gradient, blend
