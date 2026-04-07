@@ -177,6 +177,7 @@
   },
   "active": "918ec29a2b1e930c",
   "lastOpenFiles": [
+    "concepts/plugin-adversarial-review-round3.md",
     "concepts/perspective-grid-foundation.md",
     "concepts/blend-tool-implementation.md",
     "concepts/plugin-pipeline-gaps-closed.md",
@@ -202,7 +203,6 @@
     "references/form-understanding-without-reconstruction-2026.md",
     "references/blog-teaching-ai-to-see.md",
     "references",
-    "index.md",
-    "concepts/websocket-relay.md"
+    "index.md"
   ]
 }
