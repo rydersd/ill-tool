@@ -293,6 +293,55 @@ bool BridgeIsUndoShapeRequested()   { return false; }  // deprecated
 void BridgeClearUndoShapeRequest()  {}                  // deprecated
 
 //----------------------------------------------------------------------------------------
+//  Perspective grid line state (Stage 10) — continuous state, mutex-protected
+//----------------------------------------------------------------------------------------
+
+static std::mutex gPerspMutex;
+static BridgePerspectiveLine gPerspLines[3];   // 0=left, 1=right, 2=vertical
+static double gPerspHorizonY = 400.0;
+static bool   gPerspLocked = false;
+
+void BridgeSetPerspectiveLine(int lineIndex, double h1x, double h1y, double h2x, double h2y) {
+    if (lineIndex < 0 || lineIndex > 2) return;
+    std::lock_guard<std::mutex> lock(gPerspMutex);
+    gPerspLines[lineIndex] = {h1x, h1y, h2x, h2y, true};
+    fprintf(stderr, "[IllTool Bridge] SetPerspectiveLine(%d) h1=[%.0f,%.0f] h2=[%.0f,%.0f]\n",
+            lineIndex, h1x, h1y, h2x, h2y);
+}
+
+void BridgeClearPerspectiveLine(int lineIndex) {
+    if (lineIndex < 0 || lineIndex > 2) return;
+    std::lock_guard<std::mutex> lock(gPerspMutex);
+    gPerspLines[lineIndex] = {};
+}
+
+BridgePerspectiveLine BridgeGetPerspectiveLine(int lineIndex) {
+    if (lineIndex < 0 || lineIndex > 2) return {};
+    std::lock_guard<std::mutex> lock(gPerspMutex);
+    return gPerspLines[lineIndex];
+}
+
+void BridgeSetHorizonY(double y) {
+    std::lock_guard<std::mutex> lock(gPerspMutex);
+    gPerspHorizonY = y;
+}
+
+double BridgeGetHorizonY() {
+    std::lock_guard<std::mutex> lock(gPerspMutex);
+    return gPerspHorizonY;
+}
+
+void BridgeSetPerspectiveLocked(bool locked) {
+    std::lock_guard<std::mutex> lock(gPerspMutex);
+    gPerspLocked = locked;
+}
+
+bool BridgeGetPerspectiveLocked() {
+    std::lock_guard<std::mutex> lock(gPerspMutex);
+    return gPerspLocked;
+}
+
+//----------------------------------------------------------------------------------------
 //  SSE event emitter
 //----------------------------------------------------------------------------------------
 
@@ -1185,6 +1234,186 @@ bool StartHttpBridge(int port)
             resp["confidence"] = hint.confidence;
             resp["gradient_angle"] = hint.gradientAngle;
             res.set_content(resp.dump(), "application/json");
+        }
+        catch (const json::exception& e) {
+            json resp;
+            resp["ok"] = false;
+            resp["error"] = e.what();
+            res.status = 400;
+            res.set_content(resp.dump(), "application/json");
+        }
+    });
+
+    //------------------------------------------------------------------------------------
+    //  Perspective Grid endpoints (Stage 10) — line-based model
+    //------------------------------------------------------------------------------------
+
+    gServer->Post("/perspective/set-line", [](const httplib::Request& req, httplib::Response& res) {
+        AddCorsHeaders(res);
+        try {
+            auto body = json::parse(req.body);
+            int index = body.value("index", 0);
+            double h1x = body.value("h1x", 0.0);
+            double h1y = body.value("h1y", 0.0);
+            double h2x = body.value("h2x", 0.0);
+            double h2y = body.value("h2y", 0.0);
+            if (index < 0 || index > 2) {
+                json resp;
+                resp["ok"] = false;
+                resp["error"] = "index must be 0-2";
+                res.status = 400;
+                res.set_content(resp.dump(), "application/json");
+                return;
+            }
+            BridgeSetPerspectiveLine(index, h1x, h1y, h2x, h2y);
+            json resp;
+            resp["ok"] = true;
+            resp["index"] = index;
+            res.set_content(resp.dump(), "application/json");
+            fprintf(stderr, "[IllTool HTTP] POST /perspective/set-line index=%d\n", index);
+        }
+        catch (const json::exception& e) {
+            json resp;
+            resp["ok"] = false;
+            resp["error"] = e.what();
+            res.status = 400;
+            res.set_content(resp.dump(), "application/json");
+        }
+    });
+
+    gServer->Post("/perspective/clear-line", [](const httplib::Request& req, httplib::Response& res) {
+        AddCorsHeaders(res);
+        try {
+            auto body = json::parse(req.body);
+            int index = body.value("index", 0);
+            BridgeClearPerspectiveLine(index);
+            json resp;
+            resp["ok"] = true;
+            res.set_content(resp.dump(), "application/json");
+            fprintf(stderr, "[IllTool HTTP] POST /perspective/clear-line index=%d\n", index);
+        }
+        catch (const json::exception& e) {
+            json resp;
+            resp["ok"] = false;
+            resp["error"] = e.what();
+            res.status = 400;
+            res.set_content(resp.dump(), "application/json");
+        }
+    });
+
+    gServer->Post("/perspective/clear", [](const httplib::Request& /*req*/, httplib::Response& res) {
+        AddCorsHeaders(res);
+        PluginOp op;
+        op.type = OpType::ClearPerspective;
+        BridgeEnqueueOp(op);
+        for (int i = 0; i < 3; i++) BridgeClearPerspectiveLine(i);
+        BridgeSetPerspectiveLocked(false);
+        json resp;
+        resp["ok"] = true;
+        res.set_content(resp.dump(), "application/json");
+        fprintf(stderr, "[IllTool HTTP] POST /perspective/clear\n");
+    });
+
+    gServer->Post("/perspective/horizon", [](const httplib::Request& req, httplib::Response& res) {
+        AddCorsHeaders(res);
+        try {
+            auto body = json::parse(req.body);
+            double y = body.value("y", 400.0);
+            BridgeSetHorizonY(y);
+            json resp;
+            resp["ok"] = true;
+            resp["horizon_y"] = y;
+            res.set_content(resp.dump(), "application/json");
+            fprintf(stderr, "[IllTool HTTP] POST /perspective/horizon y=%.0f\n", y);
+        }
+        catch (const json::exception& e) {
+            json resp;
+            resp["ok"] = false;
+            resp["error"] = e.what();
+            res.status = 400;
+            res.set_content(resp.dump(), "application/json");
+        }
+    });
+
+    gServer->Post("/perspective/lock", [](const httplib::Request& req, httplib::Response& res) {
+        AddCorsHeaders(res);
+        try {
+            auto body = json::parse(req.body);
+            bool lock = body.value("locked", true);
+            BridgeSetPerspectiveLocked(lock);
+            PluginOp op;
+            op.type = OpType::LockPerspective;
+            op.boolParam1 = lock;
+            BridgeEnqueueOp(op);
+            json resp;
+            resp["ok"] = true;
+            resp["locked"] = lock;
+            res.set_content(resp.dump(), "application/json");
+            fprintf(stderr, "[IllTool HTTP] POST /perspective/lock locked=%d\n", (int)lock);
+        }
+        catch (const json::exception& e) {
+            json resp;
+            resp["ok"] = false;
+            resp["error"] = e.what();
+            res.status = 400;
+            res.set_content(resp.dump(), "application/json");
+        }
+    });
+
+    gServer->Get("/perspective/status", [](const httplib::Request& /*req*/, httplib::Response& res) {
+        AddCorsHeaders(res);
+        extern IllToolPlugin* gPlugin;
+        json resp;
+        if (gPlugin) {
+            auto& grid = gPlugin->fPerspectiveGrid;
+            resp["valid"] = grid.valid;
+            resp["locked"] = grid.locked;
+            resp["line_count"] = grid.ActiveLineCount();
+            resp["density"] = grid.gridDensity;
+            resp["horizon_y"] = grid.horizonY;
+            // Lines
+            for (int i = 0; i < 3; i++) {
+                BridgePerspectiveLine bl = BridgeGetPerspectiveLine(i);
+                std::string key = (i == 0) ? "left_vp" : (i == 1) ? "right_vp" : "vertical_vp";
+                if (bl.active) {
+                    resp[key] = {
+                        {"active", true},
+                        {"h1", {{"x", bl.h1x}, {"y", bl.h1y}}},
+                        {"h2", {{"x", bl.h2x}, {"y", bl.h2y}}}
+                    };
+                } else {
+                    resp[key] = {{"active", false}};
+                }
+            }
+            // Computed VPs
+            if (grid.valid) {
+                resp["computed_vp1"] = { {"x", grid.computedVP1.h}, {"y", grid.computedVP1.v} };
+                resp["computed_vp2"] = { {"x", grid.computedVP2.h}, {"y", grid.computedVP2.v} };
+            }
+            if (grid.verticalVP.active && grid.valid) {
+                resp["computed_vp3"] = { {"x", grid.computedVP3.h}, {"y", grid.computedVP3.v} };
+            }
+        } else {
+            resp["valid"] = false;
+            resp["error"] = "plugin not loaded";
+        }
+        res.set_content(resp.dump(), "application/json");
+    });
+
+    gServer->Post("/perspective/density", [](const httplib::Request& req, httplib::Response& res) {
+        AddCorsHeaders(res);
+        try {
+            auto body = json::parse(req.body);
+            int density = body.value("density", 5);
+            PluginOp op;
+            op.type = OpType::SetGridDensity;
+            op.intParam = density;
+            BridgeEnqueueOp(op);
+            json resp;
+            resp["ok"] = true;
+            resp["density"] = density;
+            res.set_content(resp.dump(), "application/json");
+            fprintf(stderr, "[IllTool HTTP] POST /perspective/density density=%d\n", density);
         }
         catch (const json::exception& e) {
             json resp;

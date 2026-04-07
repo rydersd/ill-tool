@@ -207,21 +207,39 @@ private:
     MergeSnapshot fMergeSnapshot;
 
 public:
-    /** Snapshot of paths before shape operations (ReclassifyAs, SimplifySelection), for undo. */
-    struct ShapeSnapshot {
-        struct PathData {
-            AIArtHandle            art;        // the art handle that was modified
+    /** Generic undo stack for all destructive path operations (H3).
+        Replaces per-feature ShapeSnapshot; supports multiple undo levels. */
+    class UndoStack {
+    public:
+        struct PathSnapshot {
+            AIArtHandle art;
             std::vector<AIPathSegment> segments;
-            AIBoolean              closed;
+            AIBoolean closed;
         };
-        std::vector<PathData>  originals;
-        bool                   valid = false;
+
+        /** Begin a new undo frame. Call before a destructive operation. */
+        void PushFrame();
+
+        /** Save a path's current state into the top frame. Call for each path being modified. */
+        void SnapshotPath(AIArtHandle art);
+
+        /** Restore all paths in the top frame and pop it. Returns number of paths restored. */
+        int Undo();
+
+        /** Check if there's anything to undo. */
+        bool CanUndo() const { return !stack.empty(); }
+
+        /** Clear all frames (e.g., on document change). */
+        void Clear() { stack.clear(); }
+
+        /** Maximum number of undo frames to keep. */
+        static const int kMaxFrames = 20;
+
+    private:
+        std::vector<std::vector<PathSnapshot>> stack;
     };
 
-    ShapeSnapshot fShapeSnapshot;
-
-    /** Save a snapshot of all selected paths before a destructive shape operation. */
-    void SnapshotSelectedPaths();
+    UndoStack fUndoStack;
 
 public:
     /** Cached selection count — updated from Notify (where SDK calls work).
@@ -320,10 +338,6 @@ public:
         @param threshold  Maximum arc length in points to be selected. */
     void SelectSmall(double threshold);
 
-    /** Undo the last shape operation (ReclassifyAs or SimplifySelection).
-        Restores paths from the shape snapshot stack. */
-    void UndoShapeOperation();
-
     /** Last detected shape name — read by the Cleanup panel to update the "Detected:" label. */
     const char* fLastDetectedShape = "---";
 
@@ -401,6 +415,74 @@ public:
         @param hitArt        The originally hit art (always selected regardless of matching). */
     void SelectMatchingPaths(const BoundarySignature& refSig, double thresholdPct,
                              AIArtHandle hitArt);
+
+    //------------------------------------------------------------------------------------
+    //  Perspective Grid (Stage 10)
+    //------------------------------------------------------------------------------------
+
+    /** A user-placed perspective line: two draggable handles defining a direction.
+        The vanishing point is computed by extending this line to infinity. */
+    struct PerspectiveLine {
+        AIRealPoint handle1 = {0, 0};   ///< First handle position (artwork coords)
+        AIRealPoint handle2 = {0, 0};   ///< Second handle position (artwork coords)
+        bool active = false;             ///< true when line has been placed
+    };
+
+    /** Perspective grid: lines placed by user, VPs derived from line extensions. */
+    struct PerspectiveGrid {
+        PerspectiveLine leftVP;          ///< Line converging to left vanishing point
+        PerspectiveLine rightVP;         ///< Line converging to right vanishing point
+        PerspectiveLine verticalVP;      ///< Line converging to vertical VP (optional, 3-point)
+        double horizonY = 400;           ///< Adjustable horizon line Y coordinate
+        bool locked = false;             ///< true when user confirms the grid
+        int gridDensity = 5;             ///< Number of grid lines per axis (2-20)
+
+        // Computed from lines (updated by Recompute):
+        AIRealPoint computedVP1 = {0,0}; ///< Intersection point of leftVP line extension
+        AIRealPoint computedVP2 = {0,0}; ///< Intersection point of rightVP line extension
+        AIRealPoint computedVP3 = {0,0}; ///< Intersection point of verticalVP line extension
+        bool valid = false;              ///< true when at least leftVP and rightVP are active
+
+        /** Recompute VPs from line handles and validate. */
+        void Recompute();
+
+        /** Clear all lines and reset state. */
+        void Clear();
+
+        /** Return the number of active lines (0-3). */
+        int ActiveLineCount() const;
+
+        /** Compute a 3x3 homography matrix for the floor plane.
+            Maps from grid-space (u,v) to artwork-space (x,y).
+            Returns false if grid is not valid. */
+        bool ComputeFloorHomography(double matrix[9]) const;
+
+        /** Transform a point from artwork space through the perspective grid.
+            @param artPt   Point in artwork coordinates.
+            @param plane   0=floor, 1=left wall, 2=right wall
+            @return Projected point. */
+        AIRealPoint ProjectToPlane(AIRealPoint artPt, int plane) const;
+
+        /** Mirror a point across a perspective-aware axis.
+            @param artPt        Point to mirror.
+            @param axisVertical true = mirror across vertical axis, false = horizontal.
+            @return Mirrored point in artwork coords. */
+        AIRealPoint MirrorInPerspective(AIRealPoint artPt, bool axisVertical) const;
+    };
+
+    PerspectiveGrid fPerspectiveGrid;
+
+    /** Sync perspective grid state from bridge state variables.
+        Called from ProcessOperationQueue before drawing. */
+    void SyncPerspectiveFromBridge();
+
+    /** Clear the perspective grid and invalidate the view. */
+    void ClearPerspectiveGrid();
+
+    /** Draw perspective grid overlay via AIAnnotatorDrawerSuite.
+        Draws: user lines with handles, dotted extensions, computed VP markers,
+        horizon line, and grid lines (when locked). */
+    void DrawPerspectiveOverlay(AIAnnotatorMessage* message);
 };
 
 #endif // __ILLTOOLPLUGIN_H__

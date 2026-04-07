@@ -53,7 +53,10 @@ enum class OpType : int {
     MergeEndpoints,
     UndoMerge,
     SelectSmall,
-    UndoShape
+    UndoShape,
+    ClearPerspective,
+    LockPerspective,     // boolParam1 = lock/unlock
+    SetGridDensity       // intParam = density (2-20)
 };
 
 /** A queued operation with parameters. Pushed by panels/HTTP, popped by timer. */
@@ -349,5 +352,36 @@ bool BridgeIsUndoShapeRequested();
 
 /** Clear the shape-undo request flag after handling it. Thread-safe. */
 void BridgeClearUndoShapeRequest();
+
+//----------------------------------------------------------------------------------------
+//  Perspective grid line state (Stage 10)
+//  Continuous state — read every frame by annotator, written by panel/HTTP.
+//----------------------------------------------------------------------------------------
+
+/** Perspective line data: two handles defining a direction that converges at a VP. */
+struct BridgePerspectiveLine {
+    double h1x = 0, h1y = 0;   // handle 1 position (artwork coords)
+    double h2x = 0, h2y = 0;   // handle 2 position (artwork coords)
+    bool   active = false;       // true when line has been placed
+};
+
+/** Set a perspective line (0=left VP, 1=right VP, 2=vertical VP). Thread-safe. */
+void BridgeSetPerspectiveLine(int lineIndex, double h1x, double h1y, double h2x, double h2y);
+
+/** Clear a perspective line (set inactive). Thread-safe. */
+void BridgeClearPerspectiveLine(int lineIndex);
+
+/** Get a perspective line. Thread-safe. */
+BridgePerspectiveLine BridgeGetPerspectiveLine(int lineIndex);
+
+/** Set the horizon Y position. Thread-safe. */
+void BridgeSetHorizonY(double y);
+
+/** Get the horizon Y position. Thread-safe. */
+double BridgeGetHorizonY();
+
+/** Set/get perspective lock state. Thread-safe. */
+void BridgeSetPerspectiveLocked(bool locked);
+bool BridgeGetPerspectiveLocked();
 
 #endif // __HTTPBRIDGE_H__

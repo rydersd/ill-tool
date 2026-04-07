@@ -274,9 +274,6 @@ void IllToolPlugin::ReclassifyAs(BridgeShapeType shapeType)
         return;
     }
 
-    // Snapshot before destructive modification (Gap 6)
-    SnapshotSelectedPaths();
-
     try {
         AIMatchingArtSpec spec(kPathArt, 0, 0);
         AIArtHandle** matches = nullptr;
@@ -286,6 +283,10 @@ void IllToolPlugin::ReclassifyAs(BridgeShapeType shapeType)
         AIArtHandle targetPath = FindSelectedPath(matches, numMatches);
         if (matches) sAIMdMemory->MdMemoryDisposeHandle((AIMdMemoryHandle)matches);
         if (!targetPath) { fprintf(stderr, "[IllTool Timer] ReclassifyAs: no selected path\n"); return; }
+
+        // Snapshot before destructive modification (H3 UndoStack)
+        fUndoStack.PushFrame();
+        fUndoStack.SnapshotPath(targetPath);
 
         ai::int16 segCount = 0;
         sAIPath->GetPathSegmentCount(targetPath, &segCount);
@@ -446,8 +447,8 @@ void IllToolPlugin::SimplifySelection(double tolerance)
         return;
     }
 
-    // Snapshot before destructive modification (Gap 6) — after validation so we don't destroy undo buffer for no-ops
-    SnapshotSelectedPaths();
+    // Push undo frame before destructive modification (H3 UndoStack)
+    fUndoStack.PushFrame();
     try {
         AIMatchingArtSpec spec(kPathArt, 0, 0);
         AIArtHandle** matches = nullptr;
@@ -503,6 +504,7 @@ void IllToolPlugin::SimplifySelection(double tolerance)
             for (int j=0; j<segCount; j++) if (keep[j]) ns.push_back(segs[j]);
             ai::int16 nc = (ai::int16)ns.size();
             if (nc >= 2 && nc < segCount) {
+                fUndoStack.SnapshotPath(art);  // H3: snapshot before modifying
                 sAIPath->SetPathSegmentCount(art, nc);
                 sAIPath->SetPathSegments(art, 0, nc, ns.data());
                 totalSimplified++; totalAfter += nc;
@@ -598,99 +600,60 @@ void IllToolPlugin::SelectSmall(double threshold)
 }
 
 //========================================================================================
-//  Shape snapshot helpers — save/restore path state for undo
+//  UndoStack implementation (H3) — generic multi-level undo for path operations
 //========================================================================================
 
-void IllToolPlugin::SnapshotSelectedPaths()
+void IllToolPlugin::UndoStack::PushFrame()
 {
-    fShapeSnapshot.originals.clear();
-    fShapeSnapshot.valid = false;
-
-    try {
-        AIMatchingArtSpec spec(kPathArt, 0, 0);
-        AIArtHandle** matches = nullptr;
-        ai::int32 numMatches = 0;
-        ASErr result = GetMatchingArtIsolationAware(&spec, 1, &matches, &numMatches);
-        if (result != kNoErr || numMatches == 0) {
-            if (matches) sAIMdMemory->MdMemoryDisposeHandle((AIMdMemoryHandle)matches);
-            return;
-        }
-
-        for (ai::int32 i = 0; i < numMatches; i++) {
-            AIArtHandle art = (*matches)[i];
-            ai::int32 attrs = 0;
-            sAIArt->GetArtUserAttr(art, kArtLocked | kArtHidden | kArtSelected, &attrs);
-            if (attrs & (kArtLocked | kArtHidden)) continue;
-
-            // Check if path or its segments are selected
-            bool hasSel = false;
-            if (attrs & kArtSelected) { hasSel = true; }
-            else {
-                ai::int16 sc = 0; sAIPath->GetPathSegmentCount(art, &sc);
-                for (ai::int16 s = 0; s < sc; s++) {
-                    ai::int16 sel = kSegmentNotSelected;
-                    sAIPath->GetPathSegmentSelected(art, s, &sel);
-                    if (sel & kSegmentPointSelected) { hasSel = true; break; }
-                }
-            }
-            if (!hasSel) continue;
-
-            ai::int16 segCount = 0;
-            sAIPath->GetPathSegmentCount(art, &segCount);
-            if (segCount < 1) continue;
-
-            ShapeSnapshot::PathData pd;
-            pd.art = art;
-            pd.segments.resize(segCount);
-            sAIPath->GetPathSegments(art, 0, segCount, pd.segments.data());
-            sAIPath->GetPathClosed(art, &pd.closed);
-            fShapeSnapshot.originals.push_back(std::move(pd));
-        }
-
-        if (matches) sAIMdMemory->MdMemoryDisposeHandle((AIMdMemoryHandle)matches);
-        fShapeSnapshot.valid = !fShapeSnapshot.originals.empty();
-        fprintf(stderr, "[IllTool] Shape snapshot: saved %zu paths\n",
-                fShapeSnapshot.originals.size());
+    stack.push_back({});
+    // Trim old frames if over limit
+    while ((int)stack.size() > kMaxFrames) {
+        stack.erase(stack.begin());
     }
-    catch (...) { fprintf(stderr, "[IllTool] Shape snapshot failed\n"); }
+    fprintf(stderr, "[IllTool] UndoStack: pushed frame (%zu frames total)\n", stack.size());
 }
 
-void IllToolPlugin::UndoShapeOperation()
+void IllToolPlugin::UndoStack::SnapshotPath(AIArtHandle art)
 {
-    if (!fShapeSnapshot.valid || fShapeSnapshot.originals.empty()) {
-        fprintf(stderr, "[IllTool Timer] UndoShape: no snapshot available\n");
-        return;
+    if (stack.empty()) return;
+    PathSnapshot snap;
+    snap.art = art;
+    ai::int16 segCount = 0;
+    sAIPath->GetPathSegmentCount(art, &segCount);
+    snap.segments.resize(segCount);
+    sAIPath->GetPathSegments(art, 0, segCount, snap.segments.data());
+    sAIPath->GetPathClosed(art, &snap.closed);
+    stack.back().push_back(std::move(snap));
+    fprintf(stderr, "[IllTool] UndoStack: snapshot path (%d segs) in frame %zu\n",
+            (int)segCount, stack.size());
+}
+
+int IllToolPlugin::UndoStack::Undo()
+{
+    if (stack.empty()) {
+        fprintf(stderr, "[IllTool] UndoStack: nothing to undo\n");
+        return 0;
     }
 
-    try {
-        int restored = 0;
-        int skippedInvalid = 0;
-        for (auto& pd : fShapeSnapshot.originals) {
-            // Issue #1: Validate art handle is still alive before dereferencing.
-            // GetArtType returns an error for invalid/freed handles.
-            short artType = 0;
-            ASErr validateErr = sAIArt->GetArtType(pd.art, &artType);
-            if (validateErr != kNoErr || artType != kPathArt) {
-                fprintf(stderr, "[IllTool Timer] UndoShape: stale handle detected, skipping\n");
-                skippedInvalid++;
-                continue;
-            }
-
-            ai::int16 nc = (ai::int16)pd.segments.size();
-            ASErr result = sAIPath->SetPathSegmentCount(pd.art, nc);
-            if (result != kNoErr) { fprintf(stderr, "[IllTool Timer] UndoShape: SetPathSegmentCount failed\n"); continue; }
-            result = sAIPath->SetPathSegments(pd.art, 0, nc, pd.segments.data());
-            if (result != kNoErr) { fprintf(stderr, "[IllTool Timer] UndoShape: SetPathSegments failed\n"); continue; }
-            sAIPath->SetPathClosed(pd.art, pd.closed);
-            restored++;
+    auto& frame = stack.back();
+    int restored = 0;
+    for (auto& snap : frame) {
+        // Validate handle before restoring
+        short artType = 0;
+        ASErr err = sAIArt->GetArtType(snap.art, &artType);
+        if (err != kNoErr || artType != kPathArt) {
+            fprintf(stderr, "[IllTool] UndoStack: stale handle, skipping\n");
+            continue;
         }
-
-        fShapeSnapshot.valid = false;
-        fShapeSnapshot.originals.clear();
-        fprintf(stderr, "[IllTool Timer] UndoShape: restored %d paths (%d stale handles skipped)\n",
-                restored, skippedInvalid);
-        if (restored > 0) sAIDocument->RedrawDocument();
+        ai::int16 nc = (ai::int16)snap.segments.size();
+        sAIPath->SetPathSegmentCount(snap.art, nc);
+        sAIPath->SetPathSegments(snap.art, 0, nc, snap.segments.data());
+        sAIPath->SetPathClosed(snap.art, snap.closed);
+        restored++;
     }
-    catch (ai::Error& ex) { fprintf(stderr, "[IllTool Timer] UndoShape error: %d\n", (int)ex); }
-    catch (...) { fprintf(stderr, "[IllTool Timer] UndoShape unknown error\n"); }
+    stack.pop_back();
+    fprintf(stderr, "[IllTool] UndoStack: restored %d paths (%zu frames remain)\n",
+            restored, stack.size());
+    if (restored > 0) sAIDocument->RedrawDocument();
+    return restored;
 }

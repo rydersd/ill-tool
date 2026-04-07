@@ -594,6 +594,9 @@ ASErr IllToolPlugin::ToolMouseDown(AIToolMessage* message)
 */
 void IllToolPlugin::ProcessOperationQueue()
 {
+    // Stage 10: sync perspective grid state from bridge (continuous state, not queued)
+    SyncPerspectiveFromBridge();
+
     // Check dirty flag for HTTP-sent draw commands
     if (IsDirty()) {
         SetDirty(false);
@@ -709,7 +712,26 @@ void IllToolPlugin::ProcessOperationQueue()
 
             case OpType::UndoShape:
                 fprintf(stderr, "[IllTool Timer] Undo Shape\n");
-                UndoShapeOperation();
+                fUndoStack.Undo();
+                InvalidateFullView();
+                break;
+
+            case OpType::ClearPerspective:
+                ClearPerspectiveGrid();
+                break;
+
+            case OpType::LockPerspective:
+                fPerspectiveGrid.locked = op.boolParam1;
+                fprintf(stderr, "[IllTool Timer] Perspective grid %s\n",
+                        op.boolParam1 ? "locked" : "unlocked");
+                InvalidateFullView();
+                break;
+
+            case OpType::SetGridDensity:
+                fPerspectiveGrid.gridDensity = op.intParam;
+                if (fPerspectiveGrid.gridDensity < 2) fPerspectiveGrid.gridDensity = 2;
+                if (fPerspectiveGrid.gridDensity > 20) fPerspectiveGrid.gridDensity = 20;
+                fprintf(stderr, "[IllTool Timer] Set Grid Density: %d\n", fPerspectiveGrid.gridDensity);
                 InvalidateFullView();
                 break;
         }
@@ -1050,6 +1072,8 @@ ASErr IllToolPlugin::DrawAnnotation(AIAnnotatorMessage* message)
             result = this->fAnnotator->Draw(message);
             aisdk::check_ai_error(result);
         }
+        // Stage 10: draw perspective grid overlay
+        DrawPerspectiveOverlay(message);
     }
     catch (ai::Error& ex) {
         result = ex;
