@@ -16,6 +16,7 @@
 #include "VisionEngine.h"
 #include "LearningEngine.h"
 
+#include <mutex>
 #include <cstdio>
 #include <cstring>
 #include <cmath>
@@ -50,6 +51,7 @@ VisionEngine::~VisionEngine() {}
 
 bool VisionEngine::LoadImage(const char* filePath)
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     if (!filePath || filePath[0] == '\0') {
         VE_LOG("ERROR: LoadImage called with null/empty path");
         return false;
@@ -76,11 +78,12 @@ bool VisionEngine::LoadImage(const char* filePath)
 
 bool VisionEngine::IsLoaded() const
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     return !pixels.empty() && imgWidth > 0 && imgHeight > 0;
 }
 
-int VisionEngine::Width() const  { return imgWidth; }
-int VisionEngine::Height() const { return imgHeight; }
+int VisionEngine::Width() const  { std::lock_guard<std::recursive_mutex> lock(mMutex); return imgWidth; }
+int VisionEngine::Height() const { std::lock_guard<std::recursive_mutex> lock(mMutex); return imgHeight; }
 
 //========================================================================================
 //  2. Gaussian blur (separable 1D convolutions)
@@ -303,7 +306,8 @@ std::vector<uint8_t> VisionEngine::HysteresisThreshold(const std::vector<double>
 // 4c. Full Canny pipeline
 std::vector<uint8_t> VisionEngine::CannyEdges(double lowThresh, double highThresh)
 {
-    if (!IsLoaded()) {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
+    if (pixels.empty() || imgWidth <= 0 || imgHeight <= 0) {
         VE_LOG("ERROR: CannyEdges called with no image loaded");
         return {};
     }
@@ -327,7 +331,8 @@ std::vector<uint8_t> VisionEngine::CannyEdges(double lowThresh, double highThres
 // Sobel edges (simpler: just threshold the gradient magnitude)
 std::vector<uint8_t> VisionEngine::SobelEdges(double threshold)
 {
-    if (!IsLoaded()) {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
+    if (pixels.empty() || imgWidth <= 0 || imgHeight <= 0) {
         VE_LOG("ERROR: SobelEdges called with no image loaded");
         return {};
     }
@@ -435,6 +440,7 @@ VisionEngine::Contour VisionEngine::TraceContour(const std::vector<uint8_t>& bin
 std::vector<VisionEngine::Contour> VisionEngine::FindContours(
     const std::vector<uint8_t>& binary, int w, int h, int minLength)
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     std::vector<Contour> contours;
     std::vector<bool> visited(w * h, false);
 
@@ -533,7 +539,8 @@ std::vector<std::pair<double,double>> VisionEngine::DouglasPeucker(
 
 std::vector<uint8_t> VisionEngine::MultiScaleEdges(int numScales, double voteThreshold)
 {
-    if (!IsLoaded()) {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
+    if (pixels.empty() || imgWidth <= 0 || imgHeight <= 0) {
         VE_LOG("ERROR: MultiScaleEdges called with no image loaded");
         return {};
     }
@@ -577,7 +584,8 @@ std::vector<uint8_t> VisionEngine::MultiScaleEdges(int numScales, double voteThr
 
 std::vector<uint8_t> VisionEngine::FloodFillMask(int seedX, int seedY, int tolerance)
 {
-    if (!IsLoaded()) {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
+    if (pixels.empty() || imgWidth <= 0 || imgHeight <= 0) {
         VE_LOG("ERROR: FloodFillMask called with no image loaded");
         return {};
     }
@@ -667,6 +675,7 @@ private:
 std::vector<std::vector<std::pair<int,int>>> VisionEngine::ConnectedComponents(
     const std::vector<uint8_t>& binary, int w, int h)
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     int n = w * h;
     DisjointSet ds(n);
 
@@ -715,6 +724,7 @@ std::vector<VisionEngine::HoughLine> VisionEngine::DetectLines(
     const std::vector<uint8_t>& edges,
     double rhoRes, double thetaRes, int threshold)
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     if (edges.empty()) return {};
 
     int w = imgWidth;
@@ -783,6 +793,7 @@ std::vector<VisionEngine::Circle> VisionEngine::DetectCircles(
     const std::vector<uint8_t>& edges,
     double minRadius, double maxRadius, int threshold)
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     if (edges.empty()) return {};
 
     int w = imgWidth;
@@ -882,7 +893,8 @@ std::vector<std::pair<double,double>> VisionEngine::SnapToEdge(
     const std::vector<std::pair<double,double>>& initialPath,
     double alpha, double beta, double gamma, int iterations)
 {
-    if (initialPath.size() < 3 || !IsLoaded()) {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
+    if (initialPath.size() < 3 || pixels.empty() || imgWidth <= 0 || imgHeight <= 0) {
         return initialPath;
     }
 
@@ -1056,6 +1068,7 @@ std::pair<double,double> VisionEngine::Centroid(const Contour& c)
 
 std::vector<int> VisionEngine::DetectNoise(const std::vector<Contour>& contours)
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     std::vector<int> noiseIndices;
 
     LearningEngine& le = LearningEngine::Instance();
@@ -1087,6 +1100,7 @@ std::vector<int> VisionEngine::DetectNoise(const std::vector<Contour>& contours)
 std::vector<VisionEngine::ContourGroup> VisionEngine::SuggestGroups(
     const std::vector<Contour>& contours)
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     int n = static_cast<int>(contours.size());
     if (n < 2) return {};
 
@@ -1308,6 +1322,7 @@ void VisionEngine::ArtToPixelMapping::ArtRectToPixelRect(
 
 void VisionEngine::SetArtToPixelMapping(double aLeft, double aTop, double aRight, double aBottom)
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     artMapping.artLeft   = aLeft;
     artMapping.artTop    = aTop;
     artMapping.artRight  = aRight;
@@ -1321,6 +1336,7 @@ void VisionEngine::SetArtToPixelMapping(double aLeft, double aTop, double aRight
 
 VisionEngine::SurfaceHint VisionEngine::InferSurfaceType(int x, int y, int w, int h)
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     SurfaceHint result;
     result.type = SurfaceType::Unknown;
     result.confidence = 0.0;

@@ -17,6 +17,7 @@
 #include <string>
 #include <cmath>
 #include <utility>
+#include <mutex>
 
 //----------------------------------------------------------------------------------------
 //  VisionEngine -- singleton providing CV operations on loaded raster images
@@ -250,12 +251,14 @@ public:
         Called after loading an image and determining where it's placed on the artboard. */
     void SetArtToPixelMapping(double artLeft, double artTop, double artRight, double artBottom);
 
-    /** Get the current mapping. */
-    const ArtToPixelMapping& GetMapping() const { return artMapping; }
+    /** Get the current mapping (returns by value for thread safety). */
+    ArtToPixelMapping GetMapping() const { std::lock_guard<std::recursive_mutex> lock(mMutex); return artMapping; }
 
 private:
     VisionEngine();
     ~VisionEngine();
+
+    mutable std::recursive_mutex mMutex;  // P0: protects all mutable state (recursive for internal calls)
 
     ArtToPixelMapping artMapping;
 

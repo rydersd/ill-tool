@@ -66,6 +66,7 @@ std::string LearningEngine::GetDBPath()
 
 void LearningEngine::Open()
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     if (db) {
         LE_LOG("Database already open");
         return;
@@ -105,6 +106,7 @@ void LearningEngine::Open()
 
 void LearningEngine::Close()
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     if (db) {
         sqlite3_close(reinterpret_cast<sqlite3*>(db));
         db = nullptr;
@@ -114,6 +116,7 @@ void LearningEngine::Close()
 
 bool LearningEngine::IsOpen() const
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     return db != nullptr;
 }
 
@@ -196,6 +199,7 @@ void LearningEngine::CreateTables()
 
 void LearningEngine::RecordShapeOverride(const char* surfaceType, const char* autoShape, const char* userShape)
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     if (!db) return;
 
     sqlite3* sqldb = reinterpret_cast<sqlite3*>(db);
@@ -230,6 +234,7 @@ void LearningEngine::RecordShapeOverride(const char* surfaceType, const char* au
 
 void LearningEngine::RecordSimplifyLevel(const char* surfaceType, double level, int pointsBefore, int pointsAfter)
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     if (!db) return;
 
     sqlite3* sqldb = reinterpret_cast<sqlite3*>(db);
@@ -263,6 +268,7 @@ void LearningEngine::RecordSimplifyLevel(const char* surfaceType, double level, 
 
 void LearningEngine::RecordNoiseDelete(double pathLength, int pointCount, double curvatureVariance)
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     if (!db) return;
 
     sqlite3* sqldb = reinterpret_cast<sqlite3*>(db);
@@ -295,6 +301,7 @@ void LearningEngine::RecordNoiseDelete(double pathLength, int pointCount, double
 
 void LearningEngine::RecordGrouping(const std::vector<std::string>& pathNames)
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     if (!db) return;
 
     sqlite3* sqldb = reinterpret_cast<sqlite3*>(db);
@@ -336,6 +343,7 @@ void LearningEngine::RecordGrouping(const std::vector<std::string>& pathNames)
 
 std::string LearningEngine::PredictShape(const char* surfaceType, int /*pointCount*/, double /*curvatureVariance*/)
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     if (!db) return "";
 
     sqlite3* sqldb = reinterpret_cast<sqlite3*>(db);
@@ -379,6 +387,7 @@ std::string LearningEngine::PredictShape(const char* surfaceType, int /*pointCou
 
 double LearningEngine::PredictSimplifyLevel(const char* surfaceType)
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     if (!db) return -1.0;
 
     sqlite3* sqldb = reinterpret_cast<sqlite3*>(db);
@@ -418,6 +427,7 @@ double LearningEngine::PredictSimplifyLevel(const char* surfaceType)
 
 bool LearningEngine::IsLikelyNoise(double pathLength, int pointCount, double /*curvatureVariance*/)
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     if (!db) return false;
 
     sqlite3* sqldb = reinterpret_cast<sqlite3*>(db);
@@ -460,6 +470,7 @@ bool LearningEngine::IsLikelyNoise(double pathLength, int pointCount, double /*c
 
 double LearningEngine::GetNoiseThreshold()
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     if (!db) return -1.0;
 
     sqlite3* sqldb = reinterpret_cast<sqlite3*>(db);
@@ -499,6 +510,7 @@ double LearningEngine::GetNoiseThreshold()
 
 int LearningEngine::GetTotalInteractionCount()
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     if (!db) return 0;
 
     sqlite3* sqldb = reinterpret_cast<sqlite3*>(db);
@@ -521,6 +533,7 @@ int LearningEngine::GetTotalInteractionCount()
 
 int LearningEngine::GetActionCount(const char* action)
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     if (!db || !action) return 0;
 
     sqlite3* sqldb = reinterpret_cast<sqlite3*>(db);

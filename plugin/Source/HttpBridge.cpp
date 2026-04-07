@@ -1691,7 +1691,7 @@ bool StartHttpBridge(int port)
         fprintf(stderr, "[IllTool] HTTP server thread exiting\n");
         gRunning.store(false);
     });
-    gServerThread.detach();
+    // P0: do NOT detach — StopHttpBridge joins this thread for clean shutdown
 
     fprintf(stderr, "[IllTool] HTTP bridge started on 127.0.0.1:%d\n", port);
     return true;
@@ -1712,8 +1712,10 @@ void StopHttpBridge()
 
     if (gServer) {
         gServer->stop();
-        // Thread is detached, so we just delete the server
-        // after stopping — the thread will exit its listen() call
+        // P0: join the server thread to ensure it has fully exited before freeing
+        if (gServerThread.joinable()) {
+            gServerThread.join();
+        }
         delete gServer;
         gServer = nullptr;
     }
