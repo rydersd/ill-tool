@@ -13,8 +13,10 @@
 #define kIllToolPluginName              "IllTool Overlay"
 #define kIllToolIconResourceID          16051
 #define kIllToolTool                    "IllTool Handle"
+#define kIllToolPerspectiveTool         "IllTool Perspective"
 
 #define kIllToolCursorID                16060
+#define kIllToolPerspectiveCursorID     16061
 
 // Panel internal IDs (must be unique strings)
 #define kIllToolSelectionPanelID        "IllTool Selection"

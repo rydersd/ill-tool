@@ -65,6 +65,35 @@ extern "C" void PluginCancelWorkingMode();
 */
 void FixupReload(Plugin* plugin);
 
+//------------------------------------------------------------------------------------
+//  Decompose (Stage 14) — free functions, state in IllToolDecompose.cpp file scope
+//------------------------------------------------------------------------------------
+
+/** Run auto-decompose analysis on selected paths.
+    @param sensitivity 0.0-1.0, maps to endpoint distance threshold 2-50pt. */
+void RunDecompose(float sensitivity);
+
+/** Accept all decompose clusters and create named groups. */
+void AcceptDecompose();
+
+/** Accept a specific cluster by index. */
+void AcceptCluster(int clusterIndex);
+
+/** Split a cluster into two subclusters by spatial bisection. */
+void SplitCluster(int clusterIndex);
+
+/** Merge two clusters into one. */
+void MergeDecomposeClusters(int clusterA, int clusterB);
+
+/** Draw the decompose color-coded overlay. Called from annotator. */
+void DrawDecomposeOverlay(AIAnnotatorMessage* message);
+
+/** Query whether a decompose analysis is active. */
+bool IsDecomposeActive();
+
+/** Cancel the decompose overlay. */
+void CancelDecompose();
+
 /** IllTool Overlay plugin.
     Adds a tool to the toolbar and an annotator for overlay drawing.
     When the tool is selected the annotator activates; when deselected
@@ -76,6 +105,9 @@ class IllToolPlugin : public Plugin
 private:
     /** Handle for the IllTool Handle tool. */
     AIToolHandle            fToolHandle;
+
+    /** Handle for the IllTool Perspective tool (separate tool in the same toolbox group). */
+    AIToolHandle            fPerspectiveToolHandle;
 
     /** Handle for the About SDK Plug-ins menu item. */
     AIMenuItemHandle        fAboutPluginMenu;
@@ -258,6 +290,9 @@ public:
     /** Cached selection count — updated from Notify (where SDK calls work).
         Public so PluginGetSelectedAnchorCount() can read it. */
     std::atomic<int>        fLastKnownSelectionCount{0};
+
+    /** Returns the perspective tool handle (for panel tool activation). */
+    AIToolHandle GetPerspectiveToolHandle() const { return fPerspectiveToolHandle; }
 
     /** Returns the working group art handle (non-null when in working mode). */
     AIArtHandle GetWorkingGroup() const { return fWorkingGroup; }
@@ -450,7 +485,7 @@ public:
         PerspectiveLine verticalVP;      ///< Line converging to vertical VP (optional, 3-point)
         double horizonY = 400;           ///< Adjustable horizon line Y coordinate
         bool locked = false;             ///< true when user confirms the grid
-        bool visible = true;             ///< show/hide overlay without clearing grid
+        bool visible = false;            ///< show/hide overlay — off until user activates
         int gridDensity = 5;             ///< Number of grid lines per axis (2-20)
 
         // Computed from lines (updated by Recompute):
@@ -493,6 +528,22 @@ public:
     };
 
     PerspectiveGrid fPerspectiveGrid;
+
+    //------------------------------------------------------------------------------------
+    //  Perspective tool interaction state
+    //------------------------------------------------------------------------------------
+
+    /** Which perspective line is being dragged (-1 = none, 0-2 = line index). */
+    int fPerspDragLine = -1;
+
+    /** Which handle of the line is being dragged (1 = handle1, 2 = handle2, 0 = none). */
+    int fPerspDragHandle = 0;
+
+    /** Hit-test radius for perspective handles in view points. */
+    static constexpr double kPerspHandleHitRadius = 8.0;
+
+    /** Track which line to place next when clicking empty space (cycles 0,1,2). */
+    int fPerspNextLineIndex = 0;
 
     //------------------------------------------------------------------------------------
     //  Blend Harmonization (Stage 11)
@@ -556,6 +607,43 @@ public:
         Draws: user lines with handles, dotted extensions, computed VP markers,
         horizon line, and grid lines (when locked). */
     void DrawPerspectiveOverlay(AIAnnotatorMessage* message);
+
+    /** Handle mouse down for the perspective tool.
+        Hit-tests handles; if hit, enters drag mode. If miss, creates new line. */
+    void PerspectiveToolMouseDown(AIToolMessage* message);
+
+    /** Handle mouse drag for the perspective tool.
+        Moves the dragged handle, recomputes VPs, syncs bridge state. */
+    void PerspectiveToolMouseDrag(AIToolMessage* message);
+
+    /** Handle mouse up for the perspective tool.
+        Commits position, invalidates annotator for redraw. */
+    void PerspectiveToolMouseUp(AIToolMessage* message);
+
+    //------------------------------------------------------------------------------------
+    //  Perspective operations (Stage 10b-d): Mirror, Duplicate, Paste
+    //------------------------------------------------------------------------------------
+
+    /** Mirror selected art across a perspective-aware axis.
+        @param axis    0=vertical, 1=horizontal, 2=custom angle
+        @param replace true = replace original, false = duplicate + mirror */
+    void MirrorInPerspective(int axis, bool replace);
+
+    /** Duplicate selected art along a perspective vanishing direction.
+        @param count   Number of duplicates (1-10)
+        @param spacing 0=equal in perspective, 1=equal on screen */
+    void DuplicateInPerspective(int count, int spacing);
+
+    /** Paste clipboard art onto a perspective plane.
+        @param plane 0=floor, 1=left wall, 2=right wall, 3=custom
+        @param scale Scale factor for pasted art */
+    void PasteInPerspective(int plane, float scale);
+
+    /** Save the current perspective grid to the document dictionary. */
+    void SavePerspectiveToDocument();
+
+    /** Load perspective grid from the document dictionary. */
+    void LoadPerspectiveFromDocument();
 
     //------------------------------------------------------------------------------------
     //  Surface Shading (Stage 12)

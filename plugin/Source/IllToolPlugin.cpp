@@ -14,6 +14,7 @@
 
 #include "IllustratorSDK.h"
 #include "IllToolPlugin.h"
+#include "AITool.h"
 #include "LearningEngine.h"
 #include <cstdio>
 #include <cmath>
@@ -23,6 +24,16 @@
 #include <cfloat>
 
 IllToolPlugin *gPlugin = NULL;
+
+// Forward declarations for free functions in IllToolDecompose.cpp
+void RunDecompose(float sensitivity);
+void AcceptDecompose();
+void AcceptCluster(int clusterIndex);
+void SplitCluster(int clusterIndex);
+void MergeDecomposeClusters(int clusterA, int clusterB);
+void CancelDecompose();
+void DrawDecomposeOverlay(AIAnnotatorMessage* message);
+bool IsDecomposeActive();
 
 //----------------------------------------------------------------------------------------
 //  Helper: current time in seconds (monotonic clock)
@@ -60,7 +71,7 @@ ASErr IllToolPlugin::SetGlobal(Plugin* plugin)
 //========================================================================================
 
 IllToolPlugin::IllToolPlugin(SPPluginRef pluginRef) :
-    Plugin(pluginRef), fToolHandle(NULL), fAboutPluginMenu(NULL),
+    Plugin(pluginRef), fToolHandle(NULL), fPerspectiveToolHandle(NULL), fAboutPluginMenu(NULL),
     fAnnotatorHandle(NULL), fNotifySelectionChanged(NULL),
     fAnnotator(NULL),
     fResourceManagerHandle(NULL),
@@ -270,6 +281,20 @@ ASErr IllToolPlugin::Message(char* caller, char* selector, void* message)
                     result = kNoErr;
                 }
             }
+            else if (strcmp(caller, kCallerAITool) == 0) {
+                // Handle tool messages not dispatched by the base Plugin class
+                AIToolMessage* toolMsg = (AIToolMessage*)message;
+                if (toolMsg->tool == fPerspectiveToolHandle) {
+                    if (strcmp(selector, kSelectorAIToolMouseDrag) == 0) {
+                        PerspectiveToolMouseDrag(toolMsg);
+                        result = kNoErr;
+                    }
+                    else if (strcmp(selector, kSelectorAIToolMouseUp) == 0) {
+                        PerspectiveToolMouseUp(toolMsg);
+                        result = kNoErr;
+                    }
+                }
+            }
             else if (strcmp(caller, kCallerAIAnnotation) == 0) {
                 if (strcmp(selector, kSelectorAIDrawAnnotation) == 0) {
                     result = this->DrawAnnotation((AIAnnotatorMessage*)message);
@@ -332,11 +357,13 @@ ASErr IllToolPlugin::GoMenuItem(AIMenuMessage* message)
         //----------------------------------------------------------------------
         else if (sAIPanel) {
             struct { AIMenuItemHandle menu; AIPanelRef panel; const char* name; } panels[] = {
-                { fSelectionMenuHandle, fSelectionPanel, "Selection" },
-                { fCleanupMenuHandle,   fCleanupPanel,   "Cleanup" },
-                { fGroupingMenuHandle,  fGroupingPanel,  "Grouping" },
-                { fMergeMenuHandle,     fMergePanel,     "Merge" },
-                { fShadingMenuHandle,   fShadingPanel,   "Shading" },
+                { fSelectionMenuHandle,    fSelectionPanel,    "Selection" },
+                { fCleanupMenuHandle,      fCleanupPanel,      "Cleanup" },
+                { fGroupingMenuHandle,     fGroupingPanel,     "Grouping" },
+                { fMergeMenuHandle,        fMergePanel,        "Merge" },
+                { fShadingMenuHandle,      fShadingPanel,      "Shading" },
+                { fBlendMenuHandle,        fBlendPanel,        "Blend" },
+                { fPerspectiveMenuHandle,  fPerspectivePanel,  "Perspective" },
                 // Application submenu panel toggles (same panels, different menu items)
                 { fMenuCleanupHandle,   fCleanupPanel,   "Cleanup (menu)" },
                 { fMenuGroupingHandle,  fGroupingPanel,  "Grouping (menu)" },
@@ -377,7 +404,7 @@ ASErr IllToolPlugin::UpdateMenuItem(AIMenuMessage* message)
         bool ourToolActive = false;
         if (sAITool) {
             sAITool->GetSelectedTool(&currentTool);
-            ourToolActive = (currentTool == fToolHandle);
+            ourToolActive = (currentTool == fToolHandle || currentTool == fPerspectiveToolHandle);
         }
         BridgeToolMode currentMode = BridgeGetToolMode();
 
@@ -393,11 +420,13 @@ ASErr IllToolPlugin::UpdateMenuItem(AIMenuMessage* message)
         // Panel toggle items -- checkmark when panel is shown
         else if (sAIPanel) {
             struct { AIMenuItemHandle menu; AIPanelRef panel; } items[] = {
-                { fMenuCleanupHandle,   fCleanupPanel },
-                { fMenuGroupingHandle,  fGroupingPanel },
-                { fMenuMergeHandle,     fMergePanel },
-                { fMenuSelectionHandle, fSelectionPanel },
-                { fShadingMenuHandle,   fShadingPanel },
+                { fMenuCleanupHandle,      fCleanupPanel },
+                { fMenuGroupingHandle,     fGroupingPanel },
+                { fMenuMergeHandle,        fMergePanel },
+                { fMenuSelectionHandle,    fSelectionPanel },
+                { fShadingMenuHandle,      fShadingPanel },
+                { fBlendMenuHandle,        fBlendPanel },
+                { fPerspectiveMenuHandle,  fPerspectivePanel },
             };
             for (auto& item : items) {
                 if (message->menuItem == item.menu && item.panel) {
@@ -518,6 +547,12 @@ ASErr IllToolPlugin::ToolMouseDown(AIToolMessage* message)
 {
     ASErr result = kNoErr;
     try {
+        // Perspective tool: dispatch to dedicated handler
+        if (message->tool == fPerspectiveToolHandle) {
+            PerspectiveToolMouseDown(message);
+            return kNoErr;
+        }
+
         // Blend pick mode: intercept clicks to store path A or B (P1 fix)
         int blendPickMode = BridgeGetBlendPickMode();
         if (blendPickMode == 1 || blendPickMode == 2) {
@@ -833,6 +868,77 @@ void IllToolPlugin::ProcessOperationQueue()
                 BridgeSetShadingMode(op.intParam);
                 fprintf(stderr, "[IllTool Timer] Shading set mode=%d\n", op.intParam);
                 break;
+
+            // Stage 10b-d: Perspective operations
+            case OpType::MirrorPerspective:
+                fprintf(stderr, "[IllTool Timer] Mirror in Perspective (axis=%d, replace=%s)\n",
+                        op.intParam, op.boolParam1 ? "true" : "false");
+                MirrorInPerspective(op.intParam, op.boolParam1);
+                InvalidateFullView();
+                break;
+
+            case OpType::DuplicatePerspective:
+                fprintf(stderr, "[IllTool Timer] Duplicate in Perspective (count=%d, spacing=%d)\n",
+                        op.intParam, (int)op.param1);
+                DuplicateInPerspective(op.intParam, (int)op.param1);
+                InvalidateFullView();
+                break;
+
+            case OpType::PastePerspective:
+                fprintf(stderr, "[IllTool Timer] Paste in Perspective (plane=%d, scale=%.2f)\n",
+                        op.intParam, op.param1);
+                PasteInPerspective(op.intParam, (float)op.param1);
+                InvalidateFullView();
+                break;
+
+            case OpType::PerspectiveSave:
+                fprintf(stderr, "[IllTool Timer] Save Perspective to Document\n");
+                SavePerspectiveToDocument();
+                break;
+
+            case OpType::PerspectiveLoad:
+                fprintf(stderr, "[IllTool Timer] Load Perspective from Document\n");
+                LoadPerspectiveFromDocument();
+                InvalidateFullView();
+                break;
+
+            // Stage 14: Decompose operations
+            case OpType::Decompose:
+                fprintf(stderr, "[IllTool Timer] Decompose (sensitivity=%.2f)\n", op.param1);
+                RunDecompose((float)op.param1);
+                InvalidateFullView();
+                break;
+
+            case OpType::DecomposeAccept:
+                fprintf(stderr, "[IllTool Timer] Decompose Accept\n");
+                AcceptDecompose();
+                InvalidateFullView();
+                break;
+
+            case OpType::DecomposeAcceptOne:
+                fprintf(stderr, "[IllTool Timer] Decompose Accept One (cluster=%d)\n", op.intParam);
+                AcceptCluster(op.intParam);
+                InvalidateFullView();
+                break;
+
+            case OpType::DecomposeSplit:
+                fprintf(stderr, "[IllTool Timer] Decompose Split (cluster=%d)\n", op.intParam);
+                SplitCluster(op.intParam);
+                InvalidateFullView();
+                break;
+
+            case OpType::DecomposeMergeGroups:
+                fprintf(stderr, "[IllTool Timer] Decompose Merge Groups (%d + %d)\n",
+                        op.intParam, (int)op.param1);
+                MergeDecomposeClusters(op.intParam, (int)op.param1);
+                InvalidateFullView();
+                break;
+
+            case OpType::DecomposeCancel:
+                fprintf(stderr, "[IllTool Timer] Decompose Cancel\n");
+                CancelDecompose();
+                InvalidateFullView();
+                break;
         }
     }
 
@@ -876,14 +982,21 @@ ASErr IllToolPlugin::TrackToolCursor(AIToolMessage* message)
             InvalidateFullView();
         }
 
-        // Update rubber band if drawing polygon
-        if (BridgeGetToolMode() == BridgeToolMode::Lasso && !fPolygonVertices.empty()) {
-            UpdatePolygonOverlay();
-        }
+        if (message->tool == fPerspectiveToolHandle) {
+            // Perspective tool: use crosshair cursor
+            if (sAIUser != NULL) {
+                result = sAIUser->SetSVGCursor(kIllToolIconResourceID, fResourceManagerHandle);
+            }
+        } else {
+            // Update rubber band if drawing polygon
+            if (BridgeGetToolMode() == BridgeToolMode::Lasso && !fPolygonVertices.empty()) {
+                UpdatePolygonOverlay();
+            }
 
-        // Set cursor
-        if (sAIUser != NULL) {
-            result = sAIUser->SetSVGCursor(kIllToolIconResourceID, fResourceManagerHandle);
+            // Set cursor
+            if (sAIUser != NULL) {
+                result = sAIUser->SetSVGCursor(kIllToolIconResourceID, fResourceManagerHandle);
+            }
         }
     }
     catch (ai::Error& ex) {
@@ -898,11 +1011,15 @@ ASErr IllToolPlugin::TrackToolCursor(AIToolMessage* message)
 /*
     SelectTool — activates the annotator when the user selects our tool.
 */
-ASErr IllToolPlugin::SelectTool(AIToolMessage* /*message*/)
+ASErr IllToolPlugin::SelectTool(AIToolMessage* message)
 {
     ASErr result = kNoErr;
     try {
-        fprintf(stderr, "[IllTool] Tool selected — activating annotator\n");
+        if (message->tool == fPerspectiveToolHandle) {
+            fprintf(stderr, "[IllTool] Perspective tool selected — activating annotator\n");
+        } else {
+            fprintf(stderr, "[IllTool] Tool selected — activating annotator\n");
+        }
         result = sAIAnnotator->SetAnnotatorActive(fAnnotatorHandle, true);
         aisdk::check_ai_error(result);
     }
@@ -919,16 +1036,22 @@ ASErr IllToolPlugin::SelectTool(AIToolMessage* /*message*/)
     DeselectTool — deactivates the annotator when the user switches away.
     Clears any in-progress polygon.
 */
-ASErr IllToolPlugin::DeselectTool(AIToolMessage* /*message*/)
+ASErr IllToolPlugin::DeselectTool(AIToolMessage* message)
 {
     ASErr result = kNoErr;
     try {
-        fprintf(stderr, "[IllTool] Tool deselected — deactivating annotator\n");
-
-        // Clear in-progress polygon
-        if (!fPolygonVertices.empty()) {
-            fPolygonVertices.clear();
-            // Clear only the polygon overlay, keep HTTP draw commands
+        if (message->tool == fPerspectiveToolHandle) {
+            fprintf(stderr, "[IllTool] Perspective tool deselected — deactivating annotator\n");
+            // Clear perspective drag state
+            fPerspDragLine = -1;
+            fPerspDragHandle = 0;
+        } else {
+            fprintf(stderr, "[IllTool] Tool deselected — deactivating annotator\n");
+            // Clear in-progress polygon
+            if (!fPolygonVertices.empty()) {
+                fPolygonVertices.clear();
+                // Clear only the polygon overlay, keep HTTP draw commands
+            }
         }
 
         result = sAIAnnotator->SetAnnotatorActive(fAnnotatorHandle, false);
@@ -968,6 +1091,28 @@ ASErr IllToolPlugin::AddTool(SPInterfaceMessage *message)
         aisdk::check_ai_error(result);
 
         fprintf(stderr, "[IllTool] Tool registered: %s\n", kIllToolTool);
+
+        // Register the Perspective tool in the same toolbox group
+        AIAddToolData perspData;
+        perspData.title = ai::UnicodeString::FromRoman("IllTool Perspective");
+        perspData.tooltip = ai::UnicodeString::FromRoman("IllTool Perspective — place and drag perspective lines");
+
+        AIToolType mainToolNum = kNoTool;
+        sAITool->GetToolNumberFromHandle(fToolHandle, &mainToolNum);
+        perspData.sameGroupAs = mainToolNum;    // join main tool's flyout group
+        perspData.sameToolsetAs = mainToolNum;  // same toolset as the main tool
+
+        perspData.normalIconResID = kIllToolIconResourceID;  // reuse icon for now
+        perspData.darkIconResID = kIllToolIconResourceID;
+        perspData.iconType = ai::IconType::kSVG;
+
+        ai::int32 perspOptions = kToolWantsToTrackCursorOption;
+
+        result = sAITool->AddTool(message->d.self, kIllToolPerspectiveTool, perspData,
+                                   perspOptions, &fPerspectiveToolHandle);
+        aisdk::check_ai_error(result);
+
+        fprintf(stderr, "[IllTool] Tool registered: %s\n", kIllToolPerspectiveTool);
     }
     catch (ai::Error& ex) {
         fprintf(stderr, "[IllTool] AddTool error: %d\n", (int)ex);
@@ -1145,7 +1290,34 @@ ASErr IllToolPlugin::AddAppMenu(SPInterfaceMessage* message)
             fprintf(stderr, "[IllTool] AddAppMenu: Selection Panel item failed: %d\n", (int)result);
         }
 
-        fprintf(stderr, "[IllTool] AddAppMenu: submenu registered with 6 items + separator\n");
+        // Shading Panel
+        itemData.itemText = ai::UnicodeString("Shading");
+        result = sAIMenu->AddMenuItem(message->d.self, "IllTool Menu Shading",
+                                       &itemData, kMenuItemWantsUpdateOption,
+                                       &fShadingMenuHandle);
+        if (result != kNoErr) {
+            fprintf(stderr, "[IllTool] AddAppMenu: Shading item failed: %d\n", (int)result);
+        }
+
+        // Blend Panel
+        itemData.itemText = ai::UnicodeString("Blend");
+        result = sAIMenu->AddMenuItem(message->d.self, "IllTool Menu Blend",
+                                       &itemData, kMenuItemWantsUpdateOption,
+                                       &fBlendMenuHandle);
+        if (result != kNoErr) {
+            fprintf(stderr, "[IllTool] AddAppMenu: Blend item failed: %d\n", (int)result);
+        }
+
+        // Perspective Panel
+        itemData.itemText = ai::UnicodeString("Perspective");
+        result = sAIMenu->AddMenuItem(message->d.self, "IllTool Menu Perspective",
+                                       &itemData, kMenuItemWantsUpdateOption,
+                                       &fPerspectiveMenuHandle);
+        if (result != kNoErr) {
+            fprintf(stderr, "[IllTool] AddAppMenu: Perspective item failed: %d\n", (int)result);
+        }
+
+        fprintf(stderr, "[IllTool] AddAppMenu: submenu registered with 9 items + separator\n");
         result = kNoErr;  // Individual item failures are non-fatal
     }
     catch (ai::Error& ex) {
@@ -1173,6 +1345,9 @@ ASErr IllToolPlugin::DrawAnnotation(AIAnnotatorMessage* message)
         }
         // Stage 10: draw perspective grid overlay
         DrawPerspectiveOverlay(message);
+
+        // Stage 14: draw decompose cluster overlay
+        DrawDecomposeOverlay(message);
     }
     catch (ai::Error& ex) {
         result = ex;

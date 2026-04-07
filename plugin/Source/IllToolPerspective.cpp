@@ -278,41 +278,282 @@ void IllToolPlugin::ClearPerspectiveGrid()
     InvalidateFullView();
 }
 
+void IllToolPlugin::SavePerspectiveToDocument()
+{
+    fPerspectiveGrid.SaveToDocument();
+}
+
+void IllToolPlugin::LoadPerspectiveFromDocument()
+{
+    fPerspectiveGrid.LoadFromDocument();
+}
+
 //========================================================================================
 //  Perspective grid annotator overlay
 //========================================================================================
 
-/** Helper: draw a small square handle marker at a view point. */
-static void DrawHandleSquare(AIAnnotatorDrawer* drawer, AIPoint center, int halfSize,
+/** Helper: draw a circle handle marker at a view point. */
+static void DrawHandleCircle(AIAnnotatorDrawer* drawer, AIPoint center, int radius,
                               const AIRGBColor& color)
 {
     sAIAnnotatorDrawer->SetColor(drawer, color);
     AIRect r;
-    r.left   = center.h - halfSize;
-    r.top    = center.v - halfSize;
-    r.right  = center.h + halfSize;
-    r.bottom = center.v + halfSize;
-    sAIAnnotatorDrawer->DrawRect(drawer, r, true);
+    r.left   = center.h - radius;
+    r.top    = center.v - radius;
+    r.right  = center.h + radius;
+    r.bottom = center.v + radius;
+    sAIAnnotatorDrawer->DrawEllipse(drawer, r, true);
+}
+
+/** Helper: create a dimmed version of a color (for extension lines). */
+static AIRGBColor DimColor(const AIRGBColor& c, double factor)
+{
+    AIRGBColor dim;
+    dim.red   = (ai::uint16)(c.red   * factor);
+    dim.green = (ai::uint16)(c.green * factor);
+    dim.blue  = (ai::uint16)(c.blue  * factor);
+    return dim;
+}
+
+//========================================================================================
+//  Document persistence — AIDictionarySuite on a hidden marker art object
+//
+//  Strategy: create a hidden kGroupArt with a marker dictionary entry.
+//  On save, find or create the marker group, write all grid state into its dict.
+//  On load, scan top-level art for the marker, read back.
+//========================================================================================
+
+static const char* kPerspGridMarker     = "IllToolPerspGrid";
+static const char* kPerspKeyHorizonY    = "IllToolPerspGrid_horizonY";
+static const char* kPerspKeyLocked      = "IllToolPerspGrid_locked";
+static const char* kPerspKeyVisible     = "IllToolPerspGrid_visible";
+static const char* kPerspKeyDensity     = "IllToolPerspGrid_density";
+// Per-line keys: _L0h1x, _L0h1y, _L0h2x, _L0h2y, _L0active (L0=left, L1=right, L2=vert)
+static const char* kPerspLinePrefix[3]  = {"_L0", "_L1", "_L2"};
+
+/** Find the hidden marker group in the document. Returns nullptr if not found. */
+static AIArtHandle FindPerspMarkerArt()
+{
+    if (!sAIArt || !sAIDictionary || !sAILayer) return nullptr;
+
+    // Iterate all layers, scan top-level children for the marker dictionary entry
+    ai::int32 layerCount = 0;
+    sAILayer->CountLayers(&layerCount);
+    for (ai::int32 li = 0; li < layerCount; li++) {
+        AILayerHandle layer = nullptr;
+        if (sAILayer->GetNthLayer(li, &layer) != kNoErr) continue;
+        AIArtHandle layerGroup = nullptr;
+        if (sAIArt->GetFirstArtOfLayer(layer, &layerGroup) != kNoErr || !layerGroup) continue;
+
+        AIArtHandle child = nullptr;
+        sAIArt->GetArtFirstChild(layerGroup, &child);
+        while (child) {
+            AIBoolean hasDict = sAIArt->HasDictionary(child);
+            if (hasDict) {
+                AIDictionaryRef dict = nullptr;
+                if (sAIArt->GetDictionary(child, &dict) == kNoErr && dict) {
+                    AIDictKey key = sAIDictionary->Key(kPerspGridMarker);
+                    AIBoolean isMarker = false;
+                    ASErr gErr = sAIDictionary->GetBooleanEntry(dict, key, &isMarker);
+                    sAIDictionary->Release(dict);
+                    if (gErr == kNoErr && isMarker) {
+                        return child;
+                    }
+                }
+            }
+            AIArtHandle next = nullptr;
+            sAIArt->GetArtSibling(child, &next);
+            child = next;
+        }
+    }
+    return nullptr;
+}
+
+/** Create a hidden marker group in the first layer. Returns the art handle or nullptr. */
+static AIArtHandle CreatePerspMarkerArt()
+{
+    if (!sAIArt || !sAIDictionary || !sAILayer) return nullptr;
+
+    // Get the first layer
+    ai::int32 layerCount = 0;
+    sAILayer->CountLayers(&layerCount);
+    if (layerCount == 0) return nullptr;
+
+    AILayerHandle layer = nullptr;
+    sAILayer->GetNthLayer(0, &layer);
+    if (!layer) return nullptr;
+
+    AIArtHandle layerGroup = nullptr;
+    if (sAIArt->GetFirstArtOfLayer(layer, &layerGroup) != kNoErr || !layerGroup) return nullptr;
+
+    // Create a group inside the layer
+    AIArtHandle markerArt = nullptr;
+    ASErr err = sAIArt->NewArt(kGroupArt, kPlaceInsideOnTop, layerGroup, &markerArt);
+    if (err != kNoErr || !markerArt) {
+        fprintf(stderr, "[IllTool Persp] CreatePerspMarkerArt: NewArt failed %d\n", (int)err);
+        return nullptr;
+    }
+
+    // Hide it and lock it so the user can't accidentally interact with it
+    sAIArt->SetArtUserAttr(markerArt, kArtHidden | kArtLocked, kArtHidden | kArtLocked);
+
+    // Set the marker flag
+    AIDictionaryRef dict = nullptr;
+    err = sAIArt->GetDictionary(markerArt, &dict);
+    if (err == kNoErr && dict) {
+        AIDictKey key = sAIDictionary->Key(kPerspGridMarker);
+        sAIDictionary->SetBooleanEntry(dict, key, true);
+        sAIDictionary->Release(dict);
+    }
+
+    fprintf(stderr, "[IllTool Persp] Created marker art %p\n", (void*)markerArt);
+    return markerArt;
 }
 
 void IllToolPlugin::PerspectiveGrid::SaveToDocument()
 {
-    if (!sAIDictionary) return;
-    // Store grid data on the document's dictionary via AIDictionarySuite
-    // Keys: IllToolPerspGrid_* for each line handle + horizon + density + locked
+    if (!sAIDictionary || !sAIArt) return;
+
     fprintf(stderr, "[IllTool] PerspectiveGrid::SaveToDocument — grid valid=%d lines=%d\n",
             valid, ActiveLineCount());
-    // Implementation uses sAIDocument->GetDocumentDictionary() if available,
-    // or stores as a named art item with dictionary entries.
-    // For now, the bridge state persists during the session.
-    // Full document persistence will use the same AIDictionarySuite pattern as blend groups.
+
+    // Find or create the hidden marker art
+    AIArtHandle marker = FindPerspMarkerArt();
+    if (!marker) marker = CreatePerspMarkerArt();
+    if (!marker) {
+        fprintf(stderr, "[IllTool Persp] SaveToDocument: could not create marker art\n");
+        return;
+    }
+
+    AIDictionaryRef dict = nullptr;
+    ASErr err = sAIArt->GetDictionary(marker, &dict);
+    if (err != kNoErr || !dict) {
+        fprintf(stderr, "[IllTool Persp] SaveToDocument: GetDictionary failed %d\n", (int)err);
+        return;
+    }
+
+    // Horizon, locked, visible, density
+    sAIDictionary->SetRealEntry(dict, sAIDictionary->Key(kPerspKeyHorizonY), (AIReal)horizonY);
+    sAIDictionary->SetBooleanEntry(dict, sAIDictionary->Key(kPerspKeyLocked), locked);
+    sAIDictionary->SetBooleanEntry(dict, sAIDictionary->Key(kPerspKeyVisible), visible);
+    sAIDictionary->SetIntegerEntry(dict, sAIDictionary->Key(kPerspKeyDensity), (ai::int32)gridDensity);
+
+    // Each line: active, h1x, h1y, h2x, h2y
+    const PerspectiveLine* lines[3] = {&leftVP, &rightVP, &verticalVP};
+    for (int i = 0; i < 3; i++) {
+        const PerspectiveLine& line = *lines[i];
+        const char* prefix = kPerspLinePrefix[i];
+        char keyBuf[64];
+
+        snprintf(keyBuf, sizeof(keyBuf), "%s_active", prefix);
+        sAIDictionary->SetBooleanEntry(dict, sAIDictionary->Key(keyBuf), line.active);
+
+        snprintf(keyBuf, sizeof(keyBuf), "%s_h1x", prefix);
+        sAIDictionary->SetRealEntry(dict, sAIDictionary->Key(keyBuf), line.handle1.h);
+
+        snprintf(keyBuf, sizeof(keyBuf), "%s_h1y", prefix);
+        sAIDictionary->SetRealEntry(dict, sAIDictionary->Key(keyBuf), line.handle1.v);
+
+        snprintf(keyBuf, sizeof(keyBuf), "%s_h2x", prefix);
+        sAIDictionary->SetRealEntry(dict, sAIDictionary->Key(keyBuf), line.handle2.h);
+
+        snprintf(keyBuf, sizeof(keyBuf), "%s_h2y", prefix);
+        sAIDictionary->SetRealEntry(dict, sAIDictionary->Key(keyBuf), line.handle2.v);
+    }
+
+    sAIDictionary->Release(dict);
+    fprintf(stderr, "[IllTool Persp] SaveToDocument: wrote %d lines, horizon=%.0f, locked=%d, visible=%d, density=%d\n",
+            ActiveLineCount(), horizonY, locked, visible, gridDensity);
 }
 
 void IllToolPlugin::PerspectiveGrid::LoadFromDocument()
 {
     fprintf(stderr, "[IllTool] PerspectiveGrid::LoadFromDocument — checking for saved grid\n");
-    // Mirror of SaveToDocument — reads back from document dictionary.
-    // Stub for now; full implementation in a follow-up pass.
+
+    if (!sAIDictionary || !sAIArt) return;
+
+    AIArtHandle marker = FindPerspMarkerArt();
+    if (!marker) {
+        fprintf(stderr, "[IllTool Persp] LoadFromDocument: no marker art found\n");
+        return;
+    }
+
+    AIDictionaryRef dict = nullptr;
+    ASErr err = sAIArt->GetDictionary(marker, &dict);
+    if (err != kNoErr || !dict) {
+        fprintf(stderr, "[IllTool Persp] LoadFromDocument: GetDictionary failed %d\n", (int)err);
+        return;
+    }
+
+    // Horizon, locked, visible, density
+    AIReal hY = 400;
+    sAIDictionary->GetRealEntry(dict, sAIDictionary->Key(kPerspKeyHorizonY), &hY);
+    horizonY = (double)hY;
+
+    AIBoolean bLocked = false, bVisible = true;
+    sAIDictionary->GetBooleanEntry(dict, sAIDictionary->Key(kPerspKeyLocked), &bLocked);
+    locked = bLocked;
+
+    if (sAIDictionary->GetBooleanEntry(dict, sAIDictionary->Key(kPerspKeyVisible), &bVisible) == kNoErr)
+        visible = bVisible;
+    else
+        visible = true;
+
+    ai::int32 dens = 5;
+    sAIDictionary->GetIntegerEntry(dict, sAIDictionary->Key(kPerspKeyDensity), &dens);
+    gridDensity = (int)dens;
+
+    // Each line
+    PerspectiveLine* lines[3] = {&leftVP, &rightVP, &verticalVP};
+    for (int i = 0; i < 3; i++) {
+        PerspectiveLine& line = *lines[i];
+        const char* prefix = kPerspLinePrefix[i];
+        char keyBuf[64];
+
+        AIBoolean bActive = false;
+        snprintf(keyBuf, sizeof(keyBuf), "%s_active", prefix);
+        sAIDictionary->GetBooleanEntry(dict, sAIDictionary->Key(keyBuf), &bActive);
+        line.active = bActive;
+
+        if (line.active) {
+            AIReal val = 0;
+            snprintf(keyBuf, sizeof(keyBuf), "%s_h1x", prefix);
+            sAIDictionary->GetRealEntry(dict, sAIDictionary->Key(keyBuf), &val);
+            line.handle1.h = val;
+
+            snprintf(keyBuf, sizeof(keyBuf), "%s_h1y", prefix);
+            sAIDictionary->GetRealEntry(dict, sAIDictionary->Key(keyBuf), &val);
+            line.handle1.v = val;
+
+            snprintf(keyBuf, sizeof(keyBuf), "%s_h2x", prefix);
+            sAIDictionary->GetRealEntry(dict, sAIDictionary->Key(keyBuf), &val);
+            line.handle2.h = val;
+
+            snprintf(keyBuf, sizeof(keyBuf), "%s_h2y", prefix);
+            sAIDictionary->GetRealEntry(dict, sAIDictionary->Key(keyBuf), &val);
+            line.handle2.v = val;
+        }
+    }
+
+    sAIDictionary->Release(dict);
+
+    // Recompute VPs from loaded data
+    Recompute();
+
+    // Sync loaded state back to bridge so panel reflects it
+    for (int i = 0; i < 3; i++) {
+        const PerspectiveLine& line = *lines[i];
+        if (line.active) {
+            BridgeSetPerspectiveLine(i, line.handle1.h, line.handle1.v,
+                                        line.handle2.h, line.handle2.v);
+        }
+    }
+    BridgeSetHorizonY(horizonY);
+    BridgeSetPerspectiveLocked(locked);
+    BridgeSetPerspectiveVisible(visible);
+
+    fprintf(stderr, "[IllTool Persp] LoadFromDocument: loaded %d lines, horizon=%.0f, locked=%d, visible=%d, density=%d\n",
+            ActiveLineCount(), horizonY, locked, visible, gridDensity);
 }
 
 void IllToolPlugin::DrawPerspectiveOverlay(AIAnnotatorMessage* message)
@@ -330,24 +571,21 @@ void IllToolPlugin::DrawPerspectiveOverlay(AIAnnotatorMessage* message)
 
     AIAnnotatorDrawer* drawer = message->drawer;
 
-    // Colors
-    AIRGBColor lineColor;       // solid line between handles: white
-    lineColor.red = lineColor.green = lineColor.blue = (ai::uint16)(0.9 * 65535);
+    // Per-line colors matching the panel legend
+    AIRGBColor vp1Color;        // VP1 (left): red
+    vp1Color.red   = (ai::uint16)(0.90 * 65535);
+    vp1Color.green = (ai::uint16)(0.30 * 65535);
+    vp1Color.blue  = (ai::uint16)(0.30 * 65535);
 
-    AIRGBColor extensionColor;  // dotted extension: dim cyan
-    extensionColor.red   = 0;
-    extensionColor.green = (ai::uint16)(0.6 * 65535);
-    extensionColor.blue  = (ai::uint16)(0.8 * 65535);
+    AIRGBColor vp2Color;        // VP2 (right): green
+    vp2Color.red   = (ai::uint16)(0.30 * 65535);
+    vp2Color.green = (ai::uint16)(0.80 * 65535);
+    vp2Color.blue  = (ai::uint16)(0.30 * 65535);
 
-    AIRGBColor vpColor;         // computed VP marker: bright yellow
-    vpColor.red   = (ai::uint16)(1.0 * 65535);
-    vpColor.green = (ai::uint16)(0.9 * 65535);
-    vpColor.blue  = 0;
-
-    AIRGBColor handleColor;     // handle squares: bright green
-    handleColor.red   = 0;
-    handleColor.green = (ai::uint16)(0.9 * 65535);
-    handleColor.blue  = (ai::uint16)(0.3 * 65535);
+    AIRGBColor vp3Color;        // VP3 (vertical): blue
+    vp3Color.red   = (ai::uint16)(0.35 * 65535);
+    vp3Color.green = (ai::uint16)(0.55 * 65535);
+    vp3Color.blue  = (ai::uint16)(0.95 * 65535);
 
     AIRGBColor horizonColor;    // horizon line: orange
     horizonColor.red   = (ai::uint16)(1.0 * 65535);
@@ -379,25 +617,25 @@ void IllToolPlugin::DrawPerspectiveOverlay(AIAnnotatorMessage* message)
     }
 
     // --- Draw each perspective line (solid between handles, dotted extensions) ---
-    auto drawPerspectiveLine = [&](const PerspectiveLine& line) {
+    auto drawPerspectiveLine = [&](const PerspectiveLine& line, const AIRGBColor& color) {
         if (!line.active) return;
 
         AIPoint vh1, vh2;
         if (sAIDocumentView->ArtworkPointToViewPoint(NULL, &line.handle1, &vh1) != kNoErr) return;
         if (sAIDocumentView->ArtworkPointToViewPoint(NULL, &line.handle2, &vh2) != kNoErr) return;
 
-        // Solid line between handles
-        sAIAnnotatorDrawer->SetColor(drawer, lineColor);
+        // Solid line between handles — per-line color
+        sAIAnnotatorDrawer->SetColor(drawer, color);
         sAIAnnotatorDrawer->SetOpacity(drawer, 0.8);
         sAIAnnotatorDrawer->SetLineWidth(drawer, 2.0);
         sAIAnnotatorDrawer->SetLineDashedEx(drawer, nullptr, 0);
         sAIAnnotatorDrawer->DrawLine(drawer, vh1, vh2);
 
-        // Handle squares
-        DrawHandleSquare(drawer, vh1, 4, handleColor);
-        DrawHandleSquare(drawer, vh2, 4, handleColor);
+        // Circle handles — same color as line
+        DrawHandleCircle(drawer, vh1, 5, color);
+        DrawHandleCircle(drawer, vh2, 5, color);
 
-        // Dotted extension lines (extend far in both directions)
+        // Dotted extension lines (extend far in both directions) — dimmed version of line color
         double dx = line.handle2.h - line.handle1.h;
         double dy = line.handle2.v - line.handle1.v;
         double len = std::sqrt(dx * dx + dy * dy);
@@ -412,7 +650,8 @@ void IllToolPlugin::DrawPerspectiveOverlay(AIAnnotatorMessage* message)
         AIRealPoint extB = {(AIReal)(line.handle2.h + nx * extendDist),
                             (AIReal)(line.handle2.v + ny * extendDist)};
 
-        sAIAnnotatorDrawer->SetColor(drawer, extensionColor);
+        AIRGBColor extColor = DimColor(color, 0.6);
+        sAIAnnotatorDrawer->SetColor(drawer, extColor);
         sAIAnnotatorDrawer->SetOpacity(drawer, 0.4);
         sAIAnnotatorDrawer->SetLineWidth(drawer, 1.0);
         AIFloat dashArray[] = {4.0f, 6.0f};
@@ -430,17 +669,17 @@ void IllToolPlugin::DrawPerspectiveOverlay(AIAnnotatorMessage* message)
         sAIAnnotatorDrawer->SetLineDashedEx(drawer, nullptr, 0);
     };
 
-    drawPerspectiveLine(fPerspectiveGrid.leftVP);
-    drawPerspectiveLine(fPerspectiveGrid.rightVP);
-    drawPerspectiveLine(fPerspectiveGrid.verticalVP);
+    drawPerspectiveLine(fPerspectiveGrid.leftVP, vp1Color);
+    drawPerspectiveLine(fPerspectiveGrid.rightVP, vp2Color);
+    drawPerspectiveLine(fPerspectiveGrid.verticalVP, vp3Color);
 
-    // --- Draw computed VP markers (crosses with circles) ---
-    auto drawVPMarker = [&](AIRealPoint artVP) {
+    // --- Draw computed VP markers (crosses with circles, per-line color) ---
+    auto drawVPMarker = [&](AIRealPoint artVP, const AIRGBColor& color) {
         AIPoint viewPt;
         if (sAIDocumentView->ArtworkPointToViewPoint(NULL, &artVP, &viewPt) != kNoErr) return;
 
         int crossSize = 8;
-        sAIAnnotatorDrawer->SetColor(drawer, vpColor);
+        sAIAnnotatorDrawer->SetColor(drawer, color);
         sAIAnnotatorDrawer->SetOpacity(drawer, 0.7);
         sAIAnnotatorDrawer->SetLineWidth(drawer, 2.0);
 
@@ -461,11 +700,11 @@ void IllToolPlugin::DrawPerspectiveOverlay(AIAnnotatorMessage* message)
     };
 
     if (fPerspectiveGrid.valid) {
-        drawVPMarker(fPerspectiveGrid.computedVP1);
-        drawVPMarker(fPerspectiveGrid.computedVP2);
+        drawVPMarker(fPerspectiveGrid.computedVP1, vp1Color);
+        drawVPMarker(fPerspectiveGrid.computedVP2, vp2Color);
     }
     if (fPerspectiveGrid.verticalVP.active && fPerspectiveGrid.valid) {
-        drawVPMarker(fPerspectiveGrid.computedVP3);
+        drawVPMarker(fPerspectiveGrid.computedVP3, vp3Color);
     }
 
     // --- Draw grid lines (only when locked) ---
@@ -546,4 +785,716 @@ void IllToolPlugin::DrawPerspectiveOverlay(AIAnnotatorMessage* message)
     sAIAnnotatorDrawer->SetOpacity(drawer, 1.0);
     sAIAnnotatorDrawer->SetLineWidth(drawer, 1.0);
     sAIAnnotatorDrawer->SetLineDashedEx(drawer, nullptr, 0);
+}
+
+//========================================================================================
+//  Homography math helpers (3x3 matrix operations)
+//========================================================================================
+
+/** Invert a 3x3 matrix. Returns false if singular. */
+static bool InvertMatrix3x3(const double M[9], double Minv[9])
+{
+    double det = M[0] * (M[4] * M[8] - M[5] * M[7])
+               - M[1] * (M[3] * M[8] - M[5] * M[6])
+               + M[2] * (M[3] * M[7] - M[4] * M[6]);
+    if (std::abs(det) < 1e-15) return false;
+
+    double invDet = 1.0 / det;
+    Minv[0] =  (M[4] * M[8] - M[5] * M[7]) * invDet;
+    Minv[1] = -(M[1] * M[8] - M[2] * M[7]) * invDet;
+    Minv[2] =  (M[1] * M[5] - M[2] * M[4]) * invDet;
+    Minv[3] = -(M[3] * M[8] - M[5] * M[6]) * invDet;
+    Minv[4] =  (M[0] * M[8] - M[2] * M[6]) * invDet;
+    Minv[5] = -(M[0] * M[5] - M[2] * M[3]) * invDet;
+    Minv[6] =  (M[3] * M[7] - M[4] * M[6]) * invDet;
+    Minv[7] = -(M[0] * M[7] - M[1] * M[6]) * invDet;
+    Minv[8] =  (M[0] * M[4] - M[1] * M[3]) * invDet;
+    return true;
+}
+
+/** Apply a 3x3 homography to a 2D point. Returns the projected result. */
+static AIRealPoint ApplyHomography(const double H[9], AIRealPoint pt)
+{
+    double x = pt.h, y = pt.v;
+    double w = H[6] * x + H[7] * y + H[8];
+    if (std::abs(w) < 1e-15) return pt;
+    AIRealPoint result;
+    result.h = (AIReal)((H[0] * x + H[1] * y + H[2]) / w);
+    result.v = (AIReal)((H[3] * x + H[4] * y + H[5]) / w);
+    return result;
+}
+
+/** Build a wall-plane homography (left wall or right wall).
+    Rotates the floor homography 90 degrees around the appropriate VP axis. */
+static bool ComputeWallHomography(const IllToolPlugin::PerspectiveGrid& grid, int plane, double matrix[9])
+{
+    if (!grid.ComputeFloorHomography(matrix)) return false;
+
+    // For wall planes, we modify the floor homography:
+    // Left wall (plane 1): use VP1 as the horizontal vanishing, vertical stays vertical
+    // Right wall (plane 2): use VP2 as the horizontal vanishing, vertical stays vertical
+    // This is achieved by swapping the Y-axis mapping to go vertical instead of toward the floor
+    double cx = (grid.computedVP1.h + grid.computedVP2.h) * 0.5;
+    double span = std::abs(grid.computedVP2.h - grid.computedVP1.h);
+    if (span < 1.0) span = 1.0;
+    double halfSpan = span * 0.25;
+
+    AIRealPoint vp = (plane == 1) ? grid.computedVP1 : grid.computedVP2;
+    double vpDirX = vp.h - cx;
+    double vpDirY = vp.v - grid.horizonY;
+    double vpDist = std::sqrt(vpDirX * vpDirX + vpDirY * vpDirY);
+    if (vpDist < 1.0) vpDist = 1.0;
+
+    // Wall quad: two points on horizon, two points below (forming a vertical wall face)
+    double wallWidth = halfSpan * 0.8;
+    double wallHeight = halfSpan * 1.0;
+
+    // Foreshorten the far edge toward the VP
+    double farScale = 0.7;  // foreshortening ratio
+
+    double p0x, p0y, p1x, p1y, p2x, p2y, p3x, p3y;
+    if (plane == 1) {
+        // Left wall: near edge on left, far edge converges toward VP1 (left)
+        p0x = cx;                   p0y = grid.horizonY;             // top-near
+        p1x = cx - wallWidth;       p1y = grid.horizonY;             // top-far (toward VP1)
+        p2x = cx - wallWidth * farScale; p2y = grid.horizonY + wallHeight * farScale; // bottom-far
+        p3x = cx;                   p3y = grid.horizonY + wallHeight; // bottom-near
+    } else {
+        // Right wall: near edge on right, far edge converges toward VP2 (right)
+        p0x = cx;                   p0y = grid.horizonY;
+        p1x = cx + wallWidth;       p1y = grid.horizonY;
+        p2x = cx + wallWidth * farScale; p2y = grid.horizonY + wallHeight * farScale;
+        p3x = cx;                   p3y = grid.horizonY + wallHeight;
+    }
+
+    // Build homography from unit square [0,1]x[0,1] -> quad
+    double dx1 = p1x - p2x, dy1 = p1y - p2y;
+    double dx2 = p3x - p2x, dy2 = p3y - p2y;
+    double dx3 = p0x - p1x + p2x - p3x;
+    double dy3 = p0y - p1y + p2y - p3y;
+
+    double denom = dx1 * dy2 - dx2 * dy1;
+    if (std::abs(denom) < 1e-12) return false;
+
+    double g = (dx3 * dy2 - dx2 * dy3) / denom;
+    double h = (dx1 * dy3 - dx3 * dy1) / denom;
+
+    matrix[0] = p1x - p0x + g * p1x;
+    matrix[1] = p3x - p0x + h * p3x;
+    matrix[2] = p0x;
+    matrix[3] = p1y - p0y + g * p1y;
+    matrix[4] = p3y - p0y + h * p3y;
+    matrix[5] = p0y;
+    matrix[6] = g;
+    matrix[7] = h;
+    matrix[8] = 1.0;
+
+    return true;
+}
+
+/** Get selected path art handles using isolation-aware matching. Caller must dispose *matches. */
+static bool GetSelectedPaths(AIArtHandle** &matches, ai::int32 &numMatches)
+{
+    AIMatchingArtSpec spec;
+    spec.type = kPathArt;
+    spec.whichAttr = kArtSelected;
+    spec.attr = kArtSelected;
+    ASErr err = GetMatchingArtIsolationAware(&spec, 1, &matches, &numMatches);
+    if (err != kNoErr || numMatches == 0) {
+        matches = nullptr;
+        numMatches = 0;
+        return false;
+    }
+    return true;
+}
+
+//========================================================================================
+//  Task #3: Mirror in Perspective
+//========================================================================================
+
+void IllToolPlugin::MirrorInPerspective(int axis, bool replace)
+{
+    if (!fPerspectiveGrid.valid) {
+        fprintf(stderr, "[IllTool Persp] MirrorInPerspective: grid not valid\n");
+        return;
+    }
+    if (!sAIPath || !sAIArt || !sAIPathStyle) {
+        fprintf(stderr, "[IllTool Persp] MirrorInPerspective: missing suites\n");
+        return;
+    }
+
+    // Build homography for the floor plane
+    double H[9], Hinv[9];
+    if (!fPerspectiveGrid.ComputeFloorHomography(H)) {
+        fprintf(stderr, "[IllTool Persp] MirrorInPerspective: homography failed\n");
+        return;
+    }
+    if (!InvertMatrix3x3(H, Hinv)) {
+        fprintf(stderr, "[IllTool Persp] MirrorInPerspective: matrix inversion failed\n");
+        return;
+    }
+
+    // Get selected paths
+    AIArtHandle** matches = nullptr;
+    ai::int32 numMatches = 0;
+    if (!GetSelectedPaths(matches, numMatches)) {
+        fprintf(stderr, "[IllTool Persp] MirrorInPerspective: no selected paths\n");
+        return;
+    }
+
+    bool axisVertical = (axis == 0);  // 0 = vertical axis (mirror left/right), 1 = horizontal
+
+    fUndoStack.PushFrame();
+    int mirroredCount = 0;
+
+    for (ai::int32 i = 0; i < numMatches; i++) {
+        AIArtHandle art = (*matches)[i];
+
+        // Skip locked/hidden
+        ai::int32 attrs = 0;
+        sAIArt->GetArtUserAttr(art, kArtLocked | kArtHidden, &attrs);
+        if (attrs & (kArtLocked | kArtHidden)) continue;
+
+        // Read segments
+        ai::int16 segCount = 0;
+        if (sAIPath->GetPathSegmentCount(art, &segCount) != kNoErr || segCount < 1) continue;
+
+        std::vector<AIPathSegment> segs(segCount);
+        if (sAIPath->GetPathSegments(art, 0, segCount, segs.data()) != kNoErr) continue;
+
+        // Transform each segment through H -> mirror -> Hinv
+        std::vector<AIPathSegment> mirroredSegs(segCount);
+        for (int s = 0; s < segCount; s++) {
+            const AIPathSegment& orig = segs[s];
+            AIPathSegment& mir = mirroredSegs[s];
+
+            // Project anchor to perspective space
+            AIRealPoint pAnchor = ApplyHomography(Hinv, orig.p);
+            // Mirror in perspective space
+            if (axisVertical) {
+                pAnchor.h = -pAnchor.h;  // reflect across vertical axis (negate X)
+            } else {
+                pAnchor.v = -pAnchor.v;  // reflect across horizontal axis (negate Y)
+            }
+            // Project back to artwork space
+            mir.p = ApplyHomography(H, pAnchor);
+
+            // Transform in-handle (relative direction from anchor)
+            AIRealPoint inPt = {orig.in.h, orig.in.v};
+            AIRealPoint inPersp = ApplyHomography(Hinv, inPt);
+            if (axisVertical) inPersp.h = -inPersp.h;
+            else              inPersp.v = -inPersp.v;
+            AIRealPoint inBack = ApplyHomography(H, inPersp);
+            mir.in = inBack;
+
+            // Transform out-handle
+            AIRealPoint outPt = {orig.out.h, orig.out.v};
+            AIRealPoint outPersp = ApplyHomography(Hinv, outPt);
+            if (axisVertical) outPersp.h = -outPersp.h;
+            else              outPersp.v = -outPersp.v;
+            AIRealPoint outBack = ApplyHomography(H, outPersp);
+            mir.out = outBack;
+
+            mir.corner = orig.corner;
+        }
+
+        // When mirroring, reverse segment order so winding stays consistent
+        std::vector<AIPathSegment> reversed(segCount);
+        for (int s = 0; s < segCount; s++) {
+            int ri = segCount - 1 - s;
+            reversed[s].p   = mirroredSegs[ri].p;
+            // Swap in/out handles when reversing direction
+            reversed[s].in  = mirroredSegs[ri].out;
+            reversed[s].out = mirroredSegs[ri].in;
+            reversed[s].corner = mirroredSegs[ri].corner;
+        }
+
+        if (replace) {
+            // Replace original with mirrored version
+            fUndoStack.SnapshotPath(art);
+            sAIPath->SetPathSegments(art, 0, segCount, reversed.data());
+        } else {
+            // Create a duplicate with the mirrored segments
+            AIArtHandle newArt = nullptr;
+            ASErr dupErr = sAIArt->DuplicateArt(art, kPlaceAbove, art, &newArt);
+            if (dupErr == kNoErr && newArt) {
+                sAIPath->SetPathSegments(newArt, 0, segCount, reversed.data());
+                // Copy path style from original
+                AIPathStyle style;
+                AIBoolean hasAdvFill = false;
+                if (sAIPathStyle->GetPathStyle(art, &style, &hasAdvFill) == kNoErr) {
+                    sAIPathStyle->SetPathStyle(newArt, &style);
+                }
+                mirroredCount++;
+            }
+        }
+    }
+
+    // Clean up
+    if (matches) sAIMdMemory->MdMemoryDisposeHandle((AIMdMemoryHandle)matches);
+
+    fprintf(stderr, "[IllTool Persp] MirrorInPerspective: %s %d paths, axis=%s\n",
+            replace ? "replaced" : "created", replace ? numMatches : mirroredCount,
+            axisVertical ? "vertical" : "horizontal");
+
+    InvalidateFullView();
+}
+
+//========================================================================================
+//  Task #4: Duplicate in Perspective
+//========================================================================================
+
+void IllToolPlugin::DuplicateInPerspective(int count, int spacing)
+{
+    if (!fPerspectiveGrid.valid) {
+        fprintf(stderr, "[IllTool Persp] DuplicateInPerspective: grid not valid\n");
+        return;
+    }
+    if (!sAIPath || !sAIArt || !sAIPathStyle) {
+        fprintf(stderr, "[IllTool Persp] DuplicateInPerspective: missing suites\n");
+        return;
+    }
+    if (count < 1) count = 1;
+    if (count > 50) count = 50;
+
+    // Build homography
+    double H[9], Hinv[9];
+    if (!fPerspectiveGrid.ComputeFloorHomography(H)) {
+        fprintf(stderr, "[IllTool Persp] DuplicateInPerspective: homography failed\n");
+        return;
+    }
+    if (!InvertMatrix3x3(H, Hinv)) {
+        fprintf(stderr, "[IllTool Persp] DuplicateInPerspective: matrix inversion failed\n");
+        return;
+    }
+
+    // Get selected paths
+    AIArtHandle** matches = nullptr;
+    ai::int32 numMatches = 0;
+    if (!GetSelectedPaths(matches, numMatches)) {
+        fprintf(stderr, "[IllTool Persp] DuplicateInPerspective: no selected paths\n");
+        return;
+    }
+
+    // Default direction: toward VP2 (right vanishing point) in perspective space.
+    // The direction is encoded in the spacing parameter's high bits:
+    // Low 2 bits = spacing mode (0=equal in perspective, 1=equal on screen)
+    // Bits 2-3 = direction (0=toward VP1, 1=toward VP2, 2=into screen, 3=away from horizon)
+    int spacingMode = spacing & 0x03;
+    int direction   = (spacing >> 2) & 0x03;
+
+    double dirX = 0, dirY = 0;
+    double baseOffset = 0.15;  // proportion of perspective space per step
+
+    switch (direction) {
+        case 0:  dirX = -baseOffset; dirY = 0; break;           // toward left VP
+        case 1:  dirX =  baseOffset; dirY = 0; break;           // toward right VP
+        case 2:  dirX = 0;           dirY = -baseOffset; break;  // into screen (toward horizon)
+        case 3:  dirX = 0;           dirY =  baseOffset; break;  // away from horizon
+        default: dirX = baseOffset;  dirY = 0; break;
+    }
+
+    int totalCreated = 0;
+
+    for (ai::int32 mi = 0; mi < numMatches; mi++) {
+        AIArtHandle art = (*matches)[mi];
+
+        ai::int32 attrs = 0;
+        sAIArt->GetArtUserAttr(art, kArtLocked | kArtHidden, &attrs);
+        if (attrs & (kArtLocked | kArtHidden)) continue;
+
+        ai::int16 segCount = 0;
+        if (sAIPath->GetPathSegmentCount(art, &segCount) != kNoErr || segCount < 1) continue;
+
+        std::vector<AIPathSegment> segs(segCount);
+        if (sAIPath->GetPathSegments(art, 0, segCount, segs.data()) != kNoErr) continue;
+
+        // Get path style for copying
+        AIPathStyle style;
+        AIBoolean hasAdvFill = false;
+        bool hasStyle = (sAIPathStyle->GetPathStyle(art, &style, &hasAdvFill) == kNoErr);
+
+        // Compute centroid of original in perspective space for depth scaling
+        AIRealPoint centroid = {0, 0};
+        for (int s = 0; s < segCount; s++) {
+            centroid.h += segs[s].p.h;
+            centroid.v += segs[s].p.v;
+        }
+        centroid.h /= segCount;
+        centroid.v /= segCount;
+        AIRealPoint centroidPersp = ApplyHomography(Hinv, centroid);
+
+        for (int ci = 1; ci <= count; ci++) {
+            double stepScale = (double)ci;
+
+            // For "equal in perspective" (mode 0): constant offset in perspective space
+            // For "equal on screen" (mode 1): increasing offset to compensate foreshortening
+            double perspOffX, perspOffY;
+            if (spacingMode == 0) {
+                perspOffX = dirX * stepScale;
+                perspOffY = dirY * stepScale;
+            } else {
+                // Equal on screen: scale offset by depth ratio to counteract foreshortening
+                // Objects farther from viewer need larger perspective-space offsets
+                double depthFactor = 1.0 + stepScale * 0.15;
+                perspOffX = dirX * stepScale * depthFactor;
+                perspOffY = dirY * stepScale * depthFactor;
+            }
+
+            // Compute foreshortening scale factor based on distance to VP
+            // Objects moving toward the VP should scale down
+            AIRealPoint newCentroidPersp = {
+                (AIReal)(centroidPersp.h + perspOffX),
+                (AIReal)(centroidPersp.v + perspOffY)
+            };
+            AIRealPoint newCentroidArt = ApplyHomography(H, newCentroidPersp);
+            AIRealPoint origCentroidArt = ApplyHomography(H, centroidPersp);
+
+            // Depth ratio: compare W components for foreshortening
+            double wOrig = Hinv[6] * origCentroidArt.h + Hinv[7] * origCentroidArt.v + Hinv[8];
+            double wNew  = Hinv[6] * newCentroidArt.h  + Hinv[7] * newCentroidArt.v  + Hinv[8];
+            double scaleFactor = (std::abs(wOrig) > 1e-12 && std::abs(wNew) > 1e-12) ?
+                                 wNew / wOrig : 1.0;
+            // Clamp scale factor to reasonable range
+            if (scaleFactor < 0.1) scaleFactor = 0.1;
+            if (scaleFactor > 5.0) scaleFactor = 5.0;
+
+            // Transform each segment
+            std::vector<AIPathSegment> dupSegs(segCount);
+            for (int s = 0; s < segCount; s++) {
+                const AIPathSegment& orig = segs[s];
+                AIPathSegment& dup = dupSegs[s];
+
+                // Anchor: project to perspective space, offset, project back
+                AIRealPoint pPersp = ApplyHomography(Hinv, orig.p);
+                pPersp.h = (AIReal)(pPersp.h + perspOffX);
+                pPersp.v = (AIReal)(pPersp.v + perspOffY);
+                dup.p = ApplyHomography(H, pPersp);
+
+                // In-handle: project, offset (keeping handle-anchor delta scaled)
+                AIRealPoint inPersp = ApplyHomography(Hinv, orig.in);
+                AIRealPoint anchorPersp = ApplyHomography(Hinv, orig.p);
+                double inDx = inPersp.h - anchorPersp.h;
+                double inDy = inPersp.v - anchorPersp.v;
+                AIRealPoint inOffPersp = {
+                    (AIReal)(anchorPersp.h + perspOffX + inDx * scaleFactor),
+                    (AIReal)(anchorPersp.v + perspOffY + inDy * scaleFactor)
+                };
+                dup.in = ApplyHomography(H, inOffPersp);
+
+                // Out-handle: same approach
+                AIRealPoint outPersp = ApplyHomography(Hinv, orig.out);
+                double outDx = outPersp.h - anchorPersp.h;
+                double outDy = outPersp.v - anchorPersp.v;
+                AIRealPoint outOffPersp = {
+                    (AIReal)(anchorPersp.h + perspOffX + outDx * scaleFactor),
+                    (AIReal)(anchorPersp.v + perspOffY + outDy * scaleFactor)
+                };
+                dup.out = ApplyHomography(H, outOffPersp);
+
+                dup.corner = orig.corner;
+            }
+
+            // Create duplicate art
+            AIArtHandle newArt = nullptr;
+            ASErr dupErr = sAIArt->DuplicateArt(art, kPlaceAbove, art, &newArt);
+            if (dupErr == kNoErr && newArt) {
+                sAIPath->SetPathSegments(newArt, 0, segCount, dupSegs.data());
+                if (hasStyle) {
+                    sAIPathStyle->SetPathStyle(newArt, &style);
+                }
+                totalCreated++;
+            }
+        }
+    }
+
+    if (matches) sAIMdMemory->MdMemoryDisposeHandle((AIMdMemoryHandle)matches);
+
+    fprintf(stderr, "[IllTool Persp] DuplicateInPerspective: created %d copies (count=%d, dir=%d, spacing=%d)\n",
+            totalCreated, count, direction, spacingMode);
+
+    InvalidateFullView();
+}
+
+//========================================================================================
+//  Task #5: Paste in Perspective
+//========================================================================================
+
+void IllToolPlugin::PasteInPerspective(int plane, float scale)
+{
+    if (!fPerspectiveGrid.valid) {
+        fprintf(stderr, "[IllTool Persp] PasteInPerspective: grid not valid\n");
+        return;
+    }
+    if (!sAIPath || !sAIArt || !sAIPathStyle) {
+        fprintf(stderr, "[IllTool Persp] PasteInPerspective: missing suites\n");
+        return;
+    }
+    if (scale < 0.01) scale = 0.01;
+    if (scale > 10.0) scale = 10.0;
+
+    // Build plane-specific homography
+    // plane: 0 = floor, 1 = left wall, 2 = right wall
+    double H[9], Hinv[9];
+    bool gotH = false;
+
+    if (plane == 0) {
+        gotH = fPerspectiveGrid.ComputeFloorHomography(H);
+    } else {
+        gotH = ComputeWallHomography(fPerspectiveGrid, plane, H);
+    }
+
+    if (!gotH) {
+        fprintf(stderr, "[IllTool Persp] PasteInPerspective: homography failed for plane %d\n", plane);
+        return;
+    }
+    if (!InvertMatrix3x3(H, Hinv)) {
+        fprintf(stderr, "[IllTool Persp] PasteInPerspective: matrix inversion failed\n");
+        return;
+    }
+
+    // Get selected paths as the "paste source" (user selects source, triggers paste)
+    // This is the pattern: user copies art, pastes it, selects it, then triggers
+    // "paste in perspective" which transforms the current selection onto the plane.
+    AIArtHandle** matches = nullptr;
+    ai::int32 numMatches = 0;
+    if (!GetSelectedPaths(matches, numMatches)) {
+        fprintf(stderr, "[IllTool Persp] PasteInPerspective: no selected paths\n");
+        return;
+    }
+
+    fUndoStack.PushFrame();
+    int transformedCount = 0;
+
+    // Compute the centroid of all selected art (for scaling around center)
+    AIRealPoint globalCentroid = {0, 0};
+    int totalPoints = 0;
+    for (ai::int32 i = 0; i < numMatches; i++) {
+        ai::int32 attrs = 0;
+        sAIArt->GetArtUserAttr((*matches)[i], kArtLocked | kArtHidden, &attrs);
+        if (attrs & (kArtLocked | kArtHidden)) continue;
+
+        ai::int16 segCount = 0;
+        if (sAIPath->GetPathSegmentCount((*matches)[i], &segCount) != kNoErr) continue;
+
+        std::vector<AIPathSegment> segs(segCount);
+        if (sAIPath->GetPathSegments((*matches)[i], 0, segCount, segs.data()) != kNoErr) continue;
+
+        for (int s = 0; s < segCount; s++) {
+            globalCentroid.h += segs[s].p.h;
+            globalCentroid.v += segs[s].p.v;
+            totalPoints++;
+        }
+    }
+    if (totalPoints > 0) {
+        globalCentroid.h /= totalPoints;
+        globalCentroid.v /= totalPoints;
+    }
+
+    for (ai::int32 i = 0; i < numMatches; i++) {
+        AIArtHandle art = (*matches)[i];
+
+        ai::int32 attrs = 0;
+        sAIArt->GetArtUserAttr(art, kArtLocked | kArtHidden, &attrs);
+        if (attrs & (kArtLocked | kArtHidden)) continue;
+
+        ai::int16 segCount = 0;
+        if (sAIPath->GetPathSegmentCount(art, &segCount) != kNoErr || segCount < 1) continue;
+
+        std::vector<AIPathSegment> segs(segCount);
+        if (sAIPath->GetPathSegments(art, 0, segCount, segs.data()) != kNoErr) continue;
+
+        fUndoStack.SnapshotPath(art);
+
+        // Transform each segment:
+        // 1. Center around origin (subtract centroid)
+        // 2. Apply user scale factor
+        // 3. Project through homography onto the perspective plane
+        std::vector<AIPathSegment> projSegs(segCount);
+        for (int s = 0; s < segCount; s++) {
+            const AIPathSegment& orig = segs[s];
+            AIPathSegment& proj = projSegs[s];
+
+            // Center, scale, then project through H to place on perspective plane
+            AIRealPoint centered = {
+                (AIReal)((orig.p.h - globalCentroid.h) * scale),
+                (AIReal)((orig.p.v - globalCentroid.v) * scale)
+            };
+            // Map through homography: centered coordinates become perspective-space UV,
+            // homography maps them to artwork space on the chosen plane
+            // Offset to place at center of the plane (0.5, 0.5 in normalized coords)
+            // We normalize the centered coords to a range that maps sensibly
+            // through the homography
+            double normRange = 200.0;  // art coords → normalized
+            AIRealPoint uv = {
+                (AIReal)(0.5 + centered.h / normRange),
+                (AIReal)(0.5 + centered.v / normRange)
+            };
+            proj.p = ApplyHomography(H, uv);
+
+            // In-handle
+            AIRealPoint inCentered = {
+                (AIReal)((orig.in.h - globalCentroid.h) * scale),
+                (AIReal)((orig.in.v - globalCentroid.v) * scale)
+            };
+            AIRealPoint inUV = {
+                (AIReal)(0.5 + inCentered.h / normRange),
+                (AIReal)(0.5 + inCentered.v / normRange)
+            };
+            proj.in = ApplyHomography(H, inUV);
+
+            // Out-handle
+            AIRealPoint outCentered = {
+                (AIReal)((orig.out.h - globalCentroid.h) * scale),
+                (AIReal)((orig.out.v - globalCentroid.v) * scale)
+            };
+            AIRealPoint outUV = {
+                (AIReal)(0.5 + outCentered.h / normRange),
+                (AIReal)(0.5 + outCentered.v / normRange)
+            };
+            proj.out = ApplyHomography(H, outUV);
+
+            proj.corner = orig.corner;
+        }
+
+        sAIPath->SetPathSegments(art, 0, segCount, projSegs.data());
+        transformedCount++;
+    }
+
+    if (matches) sAIMdMemory->MdMemoryDisposeHandle((AIMdMemoryHandle)matches);
+
+    fprintf(stderr, "[IllTool Persp] PasteInPerspective: transformed %d paths onto plane %d (scale=%.2f)\n",
+            transformedCount, plane, scale);
+
+    InvalidateFullView();
+}
+
+//========================================================================================
+//  Perspective Tool interaction handlers
+//========================================================================================
+
+/** Helper: compute distance between two points. */
+static double PerspDist(AIRealPoint a, AIRealPoint b) {
+    double dx = a.h - b.h;
+    double dy = a.v - b.v;
+    return std::sqrt(dx * dx + dy * dy);
+}
+
+void IllToolPlugin::PerspectiveToolMouseDown(AIToolMessage* message)
+{
+    AIRealPoint click = message->cursor;
+    fprintf(stderr, "[IllTool Persp Tool] MouseDown at (%.1f, %.1f)\n", click.h, click.v);
+
+    // If grid is locked, don't allow manipulation
+    if (fPerspectiveGrid.locked) {
+        fprintf(stderr, "[IllTool Persp Tool] Grid is locked — ignoring click\n");
+        return;
+    }
+
+    // Hit-test existing handles
+    PerspectiveLine* lines[3] = {
+        &fPerspectiveGrid.leftVP,
+        &fPerspectiveGrid.rightVP,
+        &fPerspectiveGrid.verticalVP
+    };
+
+    // Convert artwork coords to view coords for hit-test radius
+    // (handle positions are in artwork coords, click is in artwork coords,
+    //  so we can compare directly — the hit radius is in artwork-space points)
+    for (int i = 0; i < 3; i++) {
+        if (!lines[i]->active) continue;
+
+        double d1 = PerspDist(click, lines[i]->handle1);
+        double d2 = PerspDist(click, lines[i]->handle2);
+
+        if (d1 <= kPerspHandleHitRadius) {
+            fPerspDragLine = i;
+            fPerspDragHandle = 1;
+            fprintf(stderr, "[IllTool Persp Tool] Hit handle1 of line %d (dist=%.1f)\n", i, d1);
+            return;
+        }
+        if (d2 <= kPerspHandleHitRadius) {
+            fPerspDragLine = i;
+            fPerspDragHandle = 2;
+            fprintf(stderr, "[IllTool Persp Tool] Hit handle2 of line %d (dist=%.1f)\n", i, d2);
+            return;
+        }
+    }
+
+    // No handle hit — create a new perspective line at click point
+    int lineIdx = fPerspNextLineIndex;
+    if (lineIdx > 2) {
+        fprintf(stderr, "[IllTool Persp Tool] All 3 lines already placed\n");
+        return;
+    }
+
+    // Place both handles at the click point; user will drag handle2 outward
+    lines[lineIdx]->handle1 = click;
+    lines[lineIdx]->handle2 = { (AIReal)(click.h + 100.0), click.v };
+    lines[lineIdx]->active = true;
+
+    // Sync to bridge
+    BridgeSetPerspectiveLine(lineIdx,
+        lines[lineIdx]->handle1.h, lines[lineIdx]->handle1.v,
+        lines[lineIdx]->handle2.h, lines[lineIdx]->handle2.v);
+
+    // Enter drag on handle2 of the new line
+    fPerspDragLine = lineIdx;
+    fPerspDragHandle = 2;
+
+    fPerspNextLineIndex = lineIdx + 1;
+    fprintf(stderr, "[IllTool Persp Tool] Created new line %d, dragging handle2\n", lineIdx);
+
+    // Recompute and invalidate
+    fPerspectiveGrid.Recompute();
+    InvalidateFullView();
+}
+
+void IllToolPlugin::PerspectiveToolMouseDrag(AIToolMessage* message)
+{
+    if (fPerspDragLine < 0 || fPerspDragLine > 2 || fPerspDragHandle == 0) return;
+
+    AIRealPoint pos = message->cursor;
+
+    PerspectiveLine* lines[3] = {
+        &fPerspectiveGrid.leftVP,
+        &fPerspectiveGrid.rightVP,
+        &fPerspectiveGrid.verticalVP
+    };
+
+    PerspectiveLine* line = lines[fPerspDragLine];
+
+    if (fPerspDragHandle == 1) {
+        line->handle1 = pos;
+    } else {
+        line->handle2 = pos;
+    }
+
+    // Sync to bridge
+    BridgeSetPerspectiveLine(fPerspDragLine,
+        line->handle1.h, line->handle1.v,
+        line->handle2.h, line->handle2.v);
+
+    // Recompute VPs and invalidate
+    fPerspectiveGrid.Recompute();
+    InvalidateFullView();
+}
+
+void IllToolPlugin::PerspectiveToolMouseUp(AIToolMessage* message)
+{
+    if (fPerspDragLine < 0) return;
+
+    fprintf(stderr, "[IllTool Persp Tool] MouseUp — committed line %d handle %d at (%.1f, %.1f)\n",
+            fPerspDragLine, fPerspDragHandle, message->cursor.h, message->cursor.v);
+
+    // Final position update
+    PerspectiveToolMouseDrag(message);
+
+    // Clear drag state
+    fPerspDragLine = -1;
+    fPerspDragHandle = 0;
+
+    // Final recompute and redraw
+    fPerspectiveGrid.Recompute();
+    InvalidateFullView();
 }

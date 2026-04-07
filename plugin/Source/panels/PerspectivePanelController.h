@@ -3,7 +3,8 @@
 //  IllTool — Perspective Panel Controller
 //
 //  Programmatic Cocoa panel for perspective grid management.
-//  Controls: VP buttons, grid density slider, tab segments for
+//  Controls: unified Set Perspective button, lock/show toggles,
+//  per-line color legend, grid density slider, tab segments for
 //  Grid / Mirror / Duplicate / Paste modes.
 //
 //  NOTE: This file must be added to the Xcode project's pbxproj.
