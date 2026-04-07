@@ -66,7 +66,20 @@ enum class OpType : int {
     // Stage 12: Surface Shading
     ShadingApplyBlend,   // apply blend shading to selected path
     ShadingApplyMesh,    // apply mesh gradient shading to selected path
-    ShadingSetMode       // intParam = 0 (blend) or 1 (mesh)
+    ShadingSetMode,      // intParam = 0 (blend) or 1 (mesh)
+    // Stage 10b-d: Perspective operations
+    MirrorPerspective,   // intParam = axis (0=vert,1=horiz,2=custom), boolParam1 = replace
+    DuplicatePerspective,// intParam = count, param1 = spacing (0=perspective,1=screen)
+    PastePerspective,    // intParam = plane (0-3), param1 = scale
+    PerspectiveSave,     // save grid to document dictionary
+    PerspectiveLoad,     // load grid from document dictionary
+    // Stage 14: Decompose
+    Decompose,           // param1 = sensitivity (0.0-1.0)
+    DecomposeAccept,     // accept all clusters → create named groups
+    DecomposeAcceptOne,  // intParam = cluster index
+    DecomposeSplit,      // intParam = cluster index to split
+    DecomposeMergeGroups,// intParam = clusterA, param1 = (double)clusterB
+    DecomposeCancel      // cancel decompose overlay
 };
 
 /** A queued operation with parameters. Pushed by panels/HTTP, popped by timer. */
@@ -362,5 +375,66 @@ int  BridgeGetShadingBlendSteps();
 /** Set/get mesh grid size for shading mode B (2-6). Thread-safe. */
 void BridgeSetShadingMeshGrid(int size);
 int  BridgeGetShadingMeshGrid();
+
+//----------------------------------------------------------------------------------------
+//  Perspective mirror/duplicate/paste state (Stage 10b-d)
+//----------------------------------------------------------------------------------------
+
+/** Set/get mirror axis (0=vertical, 1=horizontal, 2=custom). Thread-safe. */
+void BridgeSetMirrorAxis(int axis);
+int  BridgeGetMirrorAxis();
+
+/** Set/get mirror replace mode (true = replace original). Thread-safe. */
+void BridgeSetMirrorReplace(bool replace);
+bool BridgeGetMirrorReplace();
+
+/** Set/get duplicate count (1-10). Thread-safe. */
+void BridgeSetDuplicateCount(int count);
+int  BridgeGetDuplicateCount();
+
+/** Set/get duplicate spacing mode (0=equal in perspective, 1=equal on screen). Thread-safe. */
+void BridgeSetDuplicateSpacing(int spacing);
+int  BridgeGetDuplicateSpacing();
+
+/** Set/get paste plane (0=floor, 1=left wall, 2=right wall, 3=custom). Thread-safe. */
+void BridgeSetPastePlane(int plane);
+int  BridgeGetPastePlane();
+
+/** Set/get paste scale factor. Thread-safe. */
+void BridgeSetPasteScale(float scale);
+float BridgeGetPasteScale();
+
+/** Request mirror in perspective. Thread-safe. */
+void BridgeRequestMirrorPerspective(int axis, bool replace);
+
+/** Request duplicate in perspective. Thread-safe. */
+void BridgeRequestDuplicatePerspective(int count, int spacing);
+
+/** Request paste in perspective. Thread-safe. */
+void BridgeRequestPastePerspective(int plane, float scale);
+
+/** Request save/load perspective to/from document. Thread-safe. */
+void BridgeRequestPerspectiveSave();
+void BridgeRequestPerspectiveLoad();
+
+//----------------------------------------------------------------------------------------
+//  Decompose state (Stage 14)
+//----------------------------------------------------------------------------------------
+
+/** Set/get decompose sensitivity (0.0-1.0). Thread-safe. */
+void BridgeSetDecomposeSensitivity(float sensitivity);
+float BridgeGetDecomposeSensitivity();
+
+/** Set the decompose readout text (written from SDK context, read by panel timer). Thread-safe. */
+void BridgeSetDecomposeReadout(const std::string& text);
+std::string BridgeGetDecomposeReadout();
+
+/** Request decompose operations. Thread-safe. */
+void BridgeRequestDecompose(float sensitivity);
+void BridgeRequestDecomposeAccept();
+void BridgeRequestDecomposeAcceptOne(int clusterIndex);
+void BridgeRequestDecomposeSplit(int clusterIndex);
+void BridgeRequestDecomposeMergeGroups(int clusterA, int clusterB);
+void BridgeRequestDecomposeCancel();
 
 #endif // __HTTPBRIDGE_H__

@@ -24,6 +24,7 @@
 #include <thread>
 #include <mutex>
 #include <atomic>
+#include <future>
 #include <vector>
 #include <deque>
 #include <string>
@@ -396,6 +397,103 @@ int  BridgeGetShadingBlendSteps()          { return gShadingBlendSteps.load(); }
 
 void BridgeSetShadingMeshGrid(int size) { gShadingMeshGrid.store(size); }
 int  BridgeGetShadingMeshGrid()         { return gShadingMeshGrid.load(); }
+
+//----------------------------------------------------------------------------------------
+//  Decompose state (Stage 14)
+//----------------------------------------------------------------------------------------
+
+static std::mutex  gDecomposeReadoutMutex;
+static std::string gDecomposeReadoutText = "---";
+static std::atomic<float> gDecomposeSensitivity{0.5f};
+
+void BridgeSetDecomposeReadout(const std::string& text) {
+    std::lock_guard<std::mutex> lock(gDecomposeReadoutMutex);
+    gDecomposeReadoutText = text;
+}
+
+std::string BridgeGetDecomposeReadout() {
+    std::lock_guard<std::mutex> lock(gDecomposeReadoutMutex);
+    return gDecomposeReadoutText;
+}
+
+void BridgeSetDecomposeSensitivity(float value) { gDecomposeSensitivity.store(value); }
+float BridgeGetDecomposeSensitivity()           { return gDecomposeSensitivity.load(); }
+
+//----------------------------------------------------------------------------------------
+//  Perspective mirror/duplicate/paste state (Stage 10b-d)
+//----------------------------------------------------------------------------------------
+
+static std::atomic<int>   gMirrorAxis{0};        // 0=vertical, 1=horizontal, 2=custom
+static std::atomic<bool>  gMirrorReplace{false};
+static std::atomic<int>   gDuplicateCount{3};
+static std::atomic<int>   gDuplicateSpacing{0};   // 0=equal in perspective, 1=equal on screen
+static std::atomic<int>   gPastePlane{0};          // 0=floor, 1=left wall, 2=right wall, 3=custom
+static std::atomic<float> gPasteScale{1.0f};
+
+void BridgeSetMirrorAxis(int axis)        { gMirrorAxis.store(axis); }
+int  BridgeGetMirrorAxis()                { return gMirrorAxis.load(); }
+void BridgeSetMirrorReplace(bool replace) { gMirrorReplace.store(replace); }
+bool BridgeGetMirrorReplace()             { return gMirrorReplace.load(); }
+void BridgeSetDuplicateCount(int count)   { gDuplicateCount.store(count); }
+int  BridgeGetDuplicateCount()            { return gDuplicateCount.load(); }
+void BridgeSetDuplicateSpacing(int spacing) { gDuplicateSpacing.store(spacing); }
+int  BridgeGetDuplicateSpacing()          { return gDuplicateSpacing.load(); }
+void BridgeSetPastePlane(int plane)       { gPastePlane.store(plane); }
+int  BridgeGetPastePlane()                { return gPastePlane.load(); }
+void BridgeSetPasteScale(float scale)     { gPasteScale.store(scale); }
+float BridgeGetPasteScale()               { return gPasteScale.load(); }
+
+void BridgeRequestMirrorPerspective(int axis, bool replace) {
+    PluginOp op{OpType::MirrorPerspective};
+    op.intParam = axis;
+    op.boolParam1 = replace;
+    BridgeEnqueueOp(op);
+}
+
+void BridgeRequestDuplicatePerspective(int count, int spacing) {
+    PluginOp op{OpType::DuplicatePerspective};
+    op.intParam = count;
+    op.param1 = (double)spacing;
+    BridgeEnqueueOp(op);
+}
+
+void BridgeRequestPastePerspective(int plane, float scale) {
+    PluginOp op{OpType::PastePerspective};
+    op.intParam = plane;
+    op.param1 = (double)scale;
+    BridgeEnqueueOp(op);
+}
+
+void BridgeRequestPerspectiveSave() { BridgeEnqueueOp({OpType::PerspectiveSave}); }
+void BridgeRequestPerspectiveLoad() { BridgeEnqueueOp({OpType::PerspectiveLoad}); }
+
+//----------------------------------------------------------------------------------------
+//  Decompose request wrappers (Stage 14) — state lives above with readout
+//----------------------------------------------------------------------------------------
+
+void BridgeRequestDecompose(float sensitivity) {
+    PluginOp op{OpType::Decompose};
+    op.param1 = (double)sensitivity;
+    BridgeEnqueueOp(op);
+}
+void BridgeRequestDecomposeAccept()     { BridgeEnqueueOp({OpType::DecomposeAccept}); }
+void BridgeRequestDecomposeAcceptOne(int clusterIndex) {
+    PluginOp op{OpType::DecomposeAcceptOne};
+    op.intParam = clusterIndex;
+    BridgeEnqueueOp(op);
+}
+void BridgeRequestDecomposeSplit(int clusterIndex) {
+    PluginOp op{OpType::DecomposeSplit};
+    op.intParam = clusterIndex;
+    BridgeEnqueueOp(op);
+}
+void BridgeRequestDecomposeMergeGroups(int clusterA, int clusterB) {
+    PluginOp op{OpType::DecomposeMergeGroups};
+    op.intParam = clusterA;
+    op.param1 = (double)clusterB;
+    BridgeEnqueueOp(op);
+}
+void BridgeRequestDecomposeCancel()    { BridgeEnqueueOp({OpType::DecomposeCancel}); }
 
 //----------------------------------------------------------------------------------------
 //  SSE event emitter
@@ -1638,6 +1736,184 @@ bool StartHttpBridge(int port)
     });
 
     //------------------------------------------------------------------------------------
+    //  Stage 10b-d: Perspective mirror/duplicate/paste endpoints
+    //------------------------------------------------------------------------------------
+
+    gServer->Post("/api/perspective/mirror", [](const httplib::Request& req, httplib::Response& res) {
+        AddCorsHeaders(res);
+        try {
+            auto body = json::parse(req.body);
+            int axis = body.value("axis", 0);
+            bool replace = body.value("replace", false);
+            BridgeSetMirrorAxis(axis);
+            BridgeSetMirrorReplace(replace);
+            BridgeRequestMirrorPerspective(axis, replace);
+            json resp;
+            resp["ok"] = true;
+            res.set_content(resp.dump(), "application/json");
+            fprintf(stderr, "[IllTool HTTP] POST /api/perspective/mirror axis=%d replace=%s\n",
+                    axis, replace ? "true" : "false");
+        }
+        catch (const json::exception& e) {
+            json resp;
+            resp["ok"] = false;
+            resp["error"] = e.what();
+            res.status = 400;
+            res.set_content(resp.dump(), "application/json");
+        }
+    });
+
+    gServer->Post("/api/perspective/duplicate", [](const httplib::Request& req, httplib::Response& res) {
+        AddCorsHeaders(res);
+        try {
+            auto body = json::parse(req.body);
+            int count = body.value("count", 3);
+            int spacing = body.value("spacing", 0);
+            BridgeSetDuplicateCount(count);
+            BridgeSetDuplicateSpacing(spacing);
+            BridgeRequestDuplicatePerspective(count, spacing);
+            json resp;
+            resp["ok"] = true;
+            res.set_content(resp.dump(), "application/json");
+            fprintf(stderr, "[IllTool HTTP] POST /api/perspective/duplicate count=%d spacing=%d\n",
+                    count, spacing);
+        }
+        catch (const json::exception& e) {
+            json resp;
+            resp["ok"] = false;
+            resp["error"] = e.what();
+            res.status = 400;
+            res.set_content(resp.dump(), "application/json");
+        }
+    });
+
+    gServer->Post("/api/perspective/paste", [](const httplib::Request& req, httplib::Response& res) {
+        AddCorsHeaders(res);
+        try {
+            auto body = json::parse(req.body);
+            int plane = body.value("plane", 0);
+            float scale = body.value("scale", 1.0f);
+            BridgeSetPastePlane(plane);
+            BridgeSetPasteScale(scale);
+            BridgeRequestPastePerspective(plane, scale);
+            json resp;
+            resp["ok"] = true;
+            res.set_content(resp.dump(), "application/json");
+            fprintf(stderr, "[IllTool HTTP] POST /api/perspective/paste plane=%d scale=%.2f\n",
+                    plane, scale);
+        }
+        catch (const json::exception& e) {
+            json resp;
+            resp["ok"] = false;
+            resp["error"] = e.what();
+            res.status = 400;
+            res.set_content(resp.dump(), "application/json");
+        }
+    });
+
+    gServer->Post("/api/perspective/save", [](const httplib::Request& /*req*/, httplib::Response& res) {
+        AddCorsHeaders(res);
+        BridgeRequestPerspectiveSave();
+        json resp;
+        resp["ok"] = true;
+        res.set_content(resp.dump(), "application/json");
+        fprintf(stderr, "[IllTool HTTP] POST /api/perspective/save\n");
+    });
+
+    gServer->Post("/api/perspective/load", [](const httplib::Request& /*req*/, httplib::Response& res) {
+        AddCorsHeaders(res);
+        BridgeRequestPerspectiveLoad();
+        json resp;
+        resp["ok"] = true;
+        res.set_content(resp.dump(), "application/json");
+        fprintf(stderr, "[IllTool HTTP] POST /api/perspective/load\n");
+    });
+
+    //------------------------------------------------------------------------------------
+    //  Stage 14: Decompose endpoints
+    //------------------------------------------------------------------------------------
+
+    gServer->Post("/api/decompose/analyze", [](const httplib::Request& req, httplib::Response& res) {
+        AddCorsHeaders(res);
+        try {
+            auto body = json::parse(req.body);
+            float sensitivity = body.value("sensitivity", 0.5f);
+            BridgeSetDecomposeSensitivity(sensitivity);
+            BridgeRequestDecompose(sensitivity);
+            json resp;
+            resp["ok"] = true;
+            res.set_content(resp.dump(), "application/json");
+            fprintf(stderr, "[IllTool HTTP] POST /api/decompose/analyze sensitivity=%.2f\n", sensitivity);
+        }
+        catch (const json::exception& e) {
+            json resp;
+            resp["ok"] = false;
+            resp["error"] = e.what();
+            res.status = 400;
+            res.set_content(resp.dump(), "application/json");
+        }
+    });
+
+    gServer->Post("/api/decompose/accept", [](const httplib::Request& /*req*/, httplib::Response& res) {
+        AddCorsHeaders(res);
+        BridgeRequestDecomposeAccept();
+        json resp;
+        resp["ok"] = true;
+        res.set_content(resp.dump(), "application/json");
+        fprintf(stderr, "[IllTool HTTP] POST /api/decompose/accept\n");
+    });
+
+    gServer->Post("/api/decompose/split", [](const httplib::Request& req, httplib::Response& res) {
+        AddCorsHeaders(res);
+        try {
+            auto body = json::parse(req.body);
+            int clusterIndex = body.value("clusterIndex", 0);
+            BridgeRequestDecomposeSplit(clusterIndex);
+            json resp;
+            resp["ok"] = true;
+            res.set_content(resp.dump(), "application/json");
+            fprintf(stderr, "[IllTool HTTP] POST /api/decompose/split index=%d\n", clusterIndex);
+        }
+        catch (const json::exception& e) {
+            json resp;
+            resp["ok"] = false;
+            resp["error"] = e.what();
+            res.status = 400;
+            res.set_content(resp.dump(), "application/json");
+        }
+    });
+
+    gServer->Post("/api/decompose/merge", [](const httplib::Request& req, httplib::Response& res) {
+        AddCorsHeaders(res);
+        try {
+            auto body = json::parse(req.body);
+            int clusterA = body.value("clusterA", 0);
+            int clusterB = body.value("clusterB", 1);
+            BridgeRequestDecomposeMergeGroups(clusterA, clusterB);
+            json resp;
+            resp["ok"] = true;
+            res.set_content(resp.dump(), "application/json");
+            fprintf(stderr, "[IllTool HTTP] POST /api/decompose/merge A=%d B=%d\n", clusterA, clusterB);
+        }
+        catch (const json::exception& e) {
+            json resp;
+            resp["ok"] = false;
+            resp["error"] = e.what();
+            res.status = 400;
+            res.set_content(resp.dump(), "application/json");
+        }
+    });
+
+    gServer->Post("/api/decompose/cancel", [](const httplib::Request& /*req*/, httplib::Response& res) {
+        AddCorsHeaders(res);
+        BridgeRequestDecomposeCancel();
+        json resp;
+        resp["ok"] = true;
+        res.set_content(resp.dump(), "application/json");
+        fprintf(stderr, "[IllTool HTTP] POST /api/decompose/cancel\n");
+    });
+
+    //------------------------------------------------------------------------------------
     //  Launch server on detached thread
     //------------------------------------------------------------------------------------
     gRunning.store(true);
@@ -1670,9 +1946,16 @@ void StopHttpBridge()
 
     if (gServer) {
         gServer->stop();
-        // P0: join the server thread to ensure it has fully exited before freeing
+        // Join with timeout — don't block Illustrator quit indefinitely
         if (gServerThread.joinable()) {
-            gServerThread.join();
+            // Use a detached watchdog: wait up to 2 seconds, then give up
+            auto future = std::async(std::launch::async, [] {
+                if (gServerThread.joinable()) gServerThread.join();
+            });
+            if (future.wait_for(std::chrono::seconds(2)) == std::future_status::timeout) {
+                fprintf(stderr, "[IllTool] HTTP bridge thread join timed out — detaching\n");
+                gServerThread.detach();
+            }
         }
         delete gServer;
         gServer = nullptr;

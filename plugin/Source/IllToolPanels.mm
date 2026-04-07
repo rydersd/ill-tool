@@ -197,18 +197,9 @@ static ASErr CreateOnePanel(
     fprintf(stderr, "[IllTool] Panel '%s' created (%.0f x %.0f)\n",
             panelID, hostFrame.size.width, hostFrame.size.height);
 
-    // Create Window menu item for show/hide
-    error = sAIMenu->AddMenuItemZString(
-        pluginRef,
-        menuLabel,                          // internal name for menu item
-        kOtherPalettesMenuGroup,            // Window > Extensions group
-        ZREF(menuLabel),                    // display string
-        kMenuItemNoOptions,
-        &outMenuHandle);
-
-    if (error) {
-        fprintf(stderr, "[IllTool] AddMenuItemZString failed for '%s': %d\n", menuLabel, (int)error);
-    }
+    // Menu items are registered via the IllTool submenu (not here) to avoid duplicates
+    // outMenuHandle is set by the submenu registration in StartupPlugin
+    (void)outMenuHandle;
 
     return kNoErr;
 }
