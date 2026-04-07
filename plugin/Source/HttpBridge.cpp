@@ -25,11 +25,52 @@
 #include <mutex>
 #include <atomic>
 #include <vector>
+#include <deque>
 #include <string>
 #include <cstdio>
 #include <sstream>
 
 using json = nlohmann::json;
+
+//========================================================================================
+//  H1: Operation Queue
+//========================================================================================
+
+static std::mutex gOpMutex;
+static std::deque<PluginOp> gOpQueue;
+
+void BridgeEnqueueOp(PluginOp op) {
+    std::lock_guard<std::mutex> lock(gOpMutex);
+    gOpQueue.push_back(std::move(op));
+}
+
+bool BridgeDequeueOp(PluginOp& out) {
+    std::lock_guard<std::mutex> lock(gOpMutex);
+    if (gOpQueue.empty()) return false;
+    out = std::move(gOpQueue.front());
+    gOpQueue.pop_front();
+    return true;
+}
+
+//========================================================================================
+//  H2: Result Queue
+//========================================================================================
+
+static std::mutex gResultMutex;
+static std::deque<PluginResult> gResultQueue;
+
+void BridgePostResult(PluginResult result) {
+    std::lock_guard<std::mutex> lock(gResultMutex);
+    gResultQueue.push_back(std::move(result));
+}
+
+bool BridgePollResult(PluginResult& out) {
+    std::lock_guard<std::mutex> lock(gResultMutex);
+    if (gResultQueue.empty()) return false;
+    out = std::move(gResultQueue.front());
+    gResultQueue.pop_front();
+    return true;
+}
 
 //----------------------------------------------------------------------------------------
 //  Globals
@@ -47,18 +88,9 @@ struct SSEClient {
 };
 static std::vector<SSEClient>   gSSEClients;
 
-// Tool mode
+// Tool mode (continuous state — NOT an operation)
 static std::mutex               gModeMutex;
 static BridgeToolMode           gToolMode = BridgeToolMode::Lasso;
-
-// Lasso close/clear request flags (set from HTTP or panel, consumed by TrackToolCursor)
-static std::atomic<bool>        gLassoCloseRequested{false};
-static std::atomic<bool>        gLassoClearRequested{false};
-
-// Working mode apply/cancel request flags
-static std::atomic<bool>        gWorkingApplyRequested{false};
-static std::atomic<bool>        gWorkingApplyDeleteOriginals{true};
-static std::atomic<bool>        gWorkingCancelRequested{false};
 
 //----------------------------------------------------------------------------------------
 //  CORS helper — adds headers to every response
@@ -88,217 +120,100 @@ BridgeToolMode BridgeGetToolMode()
 }
 
 //----------------------------------------------------------------------------------------
-//  Lasso close/clear request accessors
+//  Operation request wrappers (H1: enqueue into operation queue)
+//  The BridgeRequest* API is preserved for callers (panels, HTTP endpoints).
+//  BridgeIs*Requested and BridgeClear* are deprecated no-ops — the queue handles lifecycle.
+//  BridgeGet* param accessors return defaults — params now live in PluginOp.
 //----------------------------------------------------------------------------------------
 
-void BridgeRequestLassoClose()
-{
-    gLassoCloseRequested.store(true);
+// Lasso
+void BridgeRequestLassoClose()          { BridgeEnqueueOp({OpType::LassoClose}); }
+bool BridgeIsLassoCloseRequested()      { return false; }
+void BridgeClearLassoCloseRequest()     {}
+
+void BridgeRequestLassoClear()          { BridgeEnqueueOp({OpType::LassoClear}); }
+bool BridgeIsLassoClearRequested()      { return false; }
+void BridgeClearLassoClearRequest()     {}
+
+// Working mode
+void BridgeRequestWorkingApply(bool deleteOriginals) {
+    BridgeEnqueueOp({OpType::WorkingApply, 0, 0, 0, deleteOriginals});
 }
+bool BridgeIsWorkingApplyRequested()        { return false; }
+bool BridgeGetWorkingApplyDeleteOriginals() { return false; }  // deprecated — param in PluginOp
+void BridgeClearWorkingApplyRequest()       {}
 
-bool BridgeIsLassoCloseRequested()
-{
-    return gLassoCloseRequested.load();
-}
+void BridgeRequestWorkingCancel()       { BridgeEnqueueOp({OpType::WorkingCancel}); }
+bool BridgeIsWorkingCancelRequested()   { return false; }
+void BridgeClearWorkingCancelRequest()  {}
 
-void BridgeClearLassoCloseRequest()
-{
-    gLassoCloseRequested.store(false);
-}
+// Average selection
+void BridgeRequestAverageSelection()       { BridgeEnqueueOp({OpType::AverageSelection}); }
+bool BridgeIsAverageSelectionRequested()   { return false; }
+void BridgeClearAverageSelectionRequest()  {}
 
-void BridgeRequestLassoClear()
-{
-    gLassoClearRequested.store(true);
-}
+// Shape classification
+void BridgeRequestClassify()          { BridgeEnqueueOp({OpType::Classify}); }
+bool BridgeIsClassifyRequested()      { return false; }
+void BridgeClearClassifyRequest()     {}
 
-bool BridgeIsLassoClearRequested()
-{
-    return gLassoClearRequested.load();
-}
-
-void BridgeClearLassoClearRequest()
-{
-    gLassoClearRequested.store(false);
-}
-
-//----------------------------------------------------------------------------------------
-//  Working mode apply/cancel request accessors
-//----------------------------------------------------------------------------------------
-
-void BridgeRequestWorkingApply(bool deleteOriginals)
-{
-    gWorkingApplyDeleteOriginals.store(deleteOriginals);
-    gWorkingApplyRequested.store(true);
-}
-
-bool BridgeIsWorkingApplyRequested()
-{
-    return gWorkingApplyRequested.load();
-}
-
-bool BridgeGetWorkingApplyDeleteOriginals()
-{
-    return gWorkingApplyDeleteOriginals.load();
-}
-
-void BridgeClearWorkingApplyRequest()
-{
-    gWorkingApplyRequested.store(false);
-}
-
-void BridgeRequestWorkingCancel()
-{
-    gWorkingCancelRequested.store(true);
-}
-
-bool BridgeIsWorkingCancelRequested()
-{
-    return gWorkingCancelRequested.load();
-}
-
-void BridgeClearWorkingCancelRequest()
-{
-    gWorkingCancelRequested.store(false);
-}
-
-//----------------------------------------------------------------------------------------
-//  Average selection request
-//----------------------------------------------------------------------------------------
-
-static std::atomic<bool> gAverageSelectionRequested{false};
-
-void BridgeRequestAverageSelection()  { gAverageSelectionRequested.store(true); }
-bool BridgeIsAverageSelectionRequested() { return gAverageSelectionRequested.load(); }
-void BridgeClearAverageSelectionRequest() { gAverageSelectionRequested.store(false); }
-
-//----------------------------------------------------------------------------------------
-//  Shape classification request
-//----------------------------------------------------------------------------------------
-
-static std::atomic<bool> gClassifyRequested{false};
-
-void BridgeRequestClassify()          { gClassifyRequested.store(true); }
-bool BridgeIsClassifyRequested()      { return gClassifyRequested.load(); }
-void BridgeClearClassifyRequest()     { gClassifyRequested.store(false); }
-
-//----------------------------------------------------------------------------------------
-//  Shape reclassification request
-//----------------------------------------------------------------------------------------
-
-static std::atomic<bool>          gReclassifyRequested{false};
-static std::atomic<int>           gReclassifyShapeType{0};
-
+// Shape reclassification
 void BridgeRequestReclassify(BridgeShapeType shapeType) {
-    gReclassifyShapeType.store(static_cast<int>(shapeType));
-    gReclassifyRequested.store(true);
+    BridgeEnqueueOp({OpType::Reclassify, 0, 0, static_cast<int>(shapeType)});
 }
+bool BridgeIsReclassifyRequested()              { return false; }
+BridgeShapeType BridgeGetReclassifyShapeType()  { return BridgeShapeType::Line; }  // deprecated
+void BridgeClearReclassifyRequest()             {}
 
-bool BridgeIsReclassifyRequested()    { return gReclassifyRequested.load(); }
-
-BridgeShapeType BridgeGetReclassifyShapeType() {
-    return static_cast<BridgeShapeType>(gReclassifyShapeType.load());
-}
-
-void BridgeClearReclassifyRequest()   { gReclassifyRequested.store(false); }
-
-//----------------------------------------------------------------------------------------
-//  Simplification request
-//----------------------------------------------------------------------------------------
-
-static std::atomic<bool>   gSimplifyRequested{false};
-static std::atomic<double> gSimplifySliderValue{50.0};
-
+// Simplification
 void BridgeRequestSimplify(double sliderValue) {
-    gSimplifySliderValue.store(sliderValue);
-    gSimplifyRequested.store(true);
+    BridgeEnqueueOp({OpType::Simplify, sliderValue});
 }
+bool   BridgeIsSimplifyRequested()      { return false; }
+double BridgeGetSimplifySliderValue()   { return 0; }  // deprecated
+void   BridgeClearSimplifyRequest()     {}
 
-bool BridgeIsSimplifyRequested()      { return gSimplifyRequested.load(); }
-double BridgeGetSimplifySliderValue() { return gSimplifySliderValue.load(); }
-void BridgeClearSimplifyRequest()     { gSimplifyRequested.store(false); }
-
-//----------------------------------------------------------------------------------------
-//  Grouping operations (Stage 5)
-//----------------------------------------------------------------------------------------
-
-static std::atomic<bool>  gCopyToGroupRequested{false};
-static std::mutex         gCopyToGroupMutex;
-static std::string        gCopyToGroupName;
-
+// Grouping: Copy to Group
 void BridgeRequestCopyToGroup(const std::string& groupName) {
-    {
-        std::lock_guard<std::mutex> lock(gCopyToGroupMutex);
-        gCopyToGroupName = groupName;
-    }
-    gCopyToGroupRequested.store(true);
+    PluginOp op{OpType::CopyToGroup};
+    op.strParam = groupName;
+    BridgeEnqueueOp(std::move(op));
 }
+bool        BridgeIsCopyToGroupRequested() { return false; }
+std::string BridgeGetCopyToGroupName()     { return ""; }  // deprecated
+void        BridgeClearCopyToGroupRequest(){}
 
-bool BridgeIsCopyToGroupRequested() { return gCopyToGroupRequested.load(); }
+// Grouping: Detach
+void BridgeRequestDetach()      { BridgeEnqueueOp({OpType::Detach}); }
+bool BridgeIsDetachRequested()  { return false; }
+void BridgeClearDetachRequest() {}
 
-std::string BridgeGetCopyToGroupName() {
-    std::lock_guard<std::mutex> lock(gCopyToGroupMutex);
-    return gCopyToGroupName;
-}
+// Grouping: Split
+void BridgeRequestSplit()       { BridgeEnqueueOp({OpType::Split}); }
+bool BridgeIsSplitRequested()   { return false; }
+void BridgeClearSplitRequest()  {}
 
-void BridgeClearCopyToGroupRequest() { gCopyToGroupRequested.store(false); }
-
-static std::atomic<bool> gDetachRequested{false};
-
-void BridgeRequestDetach()      { gDetachRequested.store(true); }
-bool BridgeIsDetachRequested()  { return gDetachRequested.load(); }
-void BridgeClearDetachRequest() { gDetachRequested.store(false); }
-
-static std::atomic<bool> gSplitRequested{false};
-
-void BridgeRequestSplit()       { gSplitRequested.store(true); }
-bool BridgeIsSplitRequested()   { return gSplitRequested.load(); }
-void BridgeClearSplitRequest()  { gSplitRequested.store(false); }
-
-//----------------------------------------------------------------------------------------
-//  Merge operations (Stage 6)
-//----------------------------------------------------------------------------------------
-
-static std::atomic<bool>   gScanEndpointsRequested{false};
-static std::mutex          gScanToleranceMutex;
-static double              gScanTolerance = 5.0;
-
+// Merge: Scan Endpoints
 void BridgeRequestScanEndpoints(double tolerance) {
-    {
-        std::lock_guard<std::mutex> lock(gScanToleranceMutex);
-        gScanTolerance = tolerance;
-    }
-    gScanEndpointsRequested.store(true);
+    BridgeEnqueueOp({OpType::ScanEndpoints, tolerance});
 }
+bool   BridgeIsScanEndpointsRequested()  { return false; }
+double BridgeGetScanTolerance()          { return 0; }  // deprecated
+void   BridgeClearScanEndpointsRequest() {}
 
-bool BridgeIsScanEndpointsRequested() { return gScanEndpointsRequested.load(); }
-
-double BridgeGetScanTolerance() {
-    std::lock_guard<std::mutex> lock(gScanToleranceMutex);
-    return gScanTolerance;
-}
-
-void BridgeClearScanEndpointsRequest() { gScanEndpointsRequested.store(false); }
-
-static std::atomic<bool> gMergeEndpointsRequested{false};
-static std::atomic<bool> gMergeChainMerge{false};
-static std::atomic<bool> gMergePreserveHandles{false};
-
+// Merge: Merge Endpoints
 void BridgeRequestMergeEndpoints(bool chainMerge, bool preserveHandles) {
-    gMergeChainMerge.store(chainMerge);
-    gMergePreserveHandles.store(preserveHandles);
-    gMergeEndpointsRequested.store(true);
+    BridgeEnqueueOp({OpType::MergeEndpoints, 0, 0, 0, chainMerge, preserveHandles});
 }
+bool BridgeIsMergeEndpointsRequested() { return false; }
+bool BridgeGetMergeChainMerge()        { return false; }  // deprecated
+bool BridgeGetMergePreserveHandles()   { return false; }  // deprecated
+void BridgeClearMergeEndpointsRequest(){}
 
-bool BridgeIsMergeEndpointsRequested() { return gMergeEndpointsRequested.load(); }
-bool BridgeGetMergeChainMerge()        { return gMergeChainMerge.load(); }
-bool BridgeGetMergePreserveHandles()   { return gMergePreserveHandles.load(); }
-void BridgeClearMergeEndpointsRequest(){ gMergeEndpointsRequested.store(false); }
-
-static std::atomic<bool> gUndoMergeRequested{false};
-
-void BridgeRequestUndoMerge()      { gUndoMergeRequested.store(true); }
-bool BridgeIsUndoMergeRequested()  { return gUndoMergeRequested.load(); }
-void BridgeClearUndoMergeRequest() { gUndoMergeRequested.store(false); }
+// Merge: Undo Merge
+void BridgeRequestUndoMerge()      { BridgeEnqueueOp({OpType::UndoMerge}); }
+bool BridgeIsUndoMergeRequested()  { return false; }
+void BridgeClearUndoMergeRequest() {}
 
 // Merge readout text — written from SDK context, read by panel timer
 static std::mutex  gMergeReadoutMutex;
@@ -342,25 +257,20 @@ void BridgeSetAddToSelection(bool enabled) { gAddToSelection.store(enabled); }
 bool BridgeGetAddToSelection()             { return gAddToSelection.load(); }
 
 //----------------------------------------------------------------------------------------
-//  Select Small request (Gap 3 — select paths with arc length below threshold)
+//  Select Small (H1: queue-based)
 //----------------------------------------------------------------------------------------
-
-static std::atomic<bool>   gSelectSmallRequested{false};
-static std::atomic<double> gSelectSmallThreshold{10.0};
 
 void BridgeRequestSelectSmall(double threshold) {
-    gSelectSmallThreshold.store(threshold);
-    gSelectSmallRequested.store(true);
+    BridgeEnqueueOp({OpType::SelectSmall, threshold});
 }
-bool   BridgeIsSelectSmallRequested()  { return gSelectSmallRequested.load(); }
-double BridgeGetSelectSmallThreshold() { return gSelectSmallThreshold.load(); }
-void   BridgeClearSelectSmallRequest() { gSelectSmallRequested.store(false); }
+bool   BridgeIsSelectSmallRequested()  { return false; }  // deprecated
+double BridgeGetSelectSmallThreshold() { return 0; }      // deprecated
+void   BridgeClearSelectSmallRequest() {}                  // deprecated
 
 //----------------------------------------------------------------------------------------
-//  Shape undo request (Gap 6 — undo ReclassifyAs / SimplifySelection)
+//  Surface hint (continuous state — NOT an operation, kept as-is)
 //----------------------------------------------------------------------------------------
 
-// Surface hint (thread-safe storage for ClassifySelection results)
 static std::atomic<int>    gSurfaceType{-1};
 static std::atomic<double> gSurfaceConfidence{0.0};
 static std::atomic<double> gSurfaceGradientAngle{0.0};
@@ -374,11 +284,13 @@ int    BridgeGetSurfaceType()       { return gSurfaceType.load(); }
 double BridgeGetSurfaceConfidence() { return gSurfaceConfidence.load(); }
 double BridgeGetGradientAngle()     { return gSurfaceGradientAngle.load(); }
 
-static std::atomic<bool> gUndoShapeRequested{false};
+//----------------------------------------------------------------------------------------
+//  Shape undo (H1: queue-based)
+//----------------------------------------------------------------------------------------
 
-void BridgeRequestUndoShape()       { gUndoShapeRequested.store(true); }
-bool BridgeIsUndoShapeRequested()   { return gUndoShapeRequested.load(); }
-void BridgeClearUndoShapeRequest()  { gUndoShapeRequested.store(false); }
+void BridgeRequestUndoShape()       { BridgeEnqueueOp({OpType::UndoShape}); }
+bool BridgeIsUndoShapeRequested()   { return false; }  // deprecated
+void BridgeClearUndoShapeRequest()  {}                  // deprecated
 
 //----------------------------------------------------------------------------------------
 //  SSE event emitter

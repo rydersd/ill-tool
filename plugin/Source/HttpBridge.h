@@ -33,6 +33,75 @@ void StopHttpBridge();
 void BridgeEmitEvent(const char* type, const std::string& id, double x, double y);
 
 //----------------------------------------------------------------------------------------
+//  Operation Queue (H1) — replaces per-operation atomic flags
+//----------------------------------------------------------------------------------------
+
+/** All operations that can be queued for SDK-context execution. */
+enum class OpType : int {
+    LassoClose = 0,
+    LassoClear,
+    WorkingApply,
+    WorkingCancel,
+    AverageSelection,
+    Classify,
+    Reclassify,
+    Simplify,
+    CopyToGroup,
+    Detach,
+    Split,
+    ScanEndpoints,
+    MergeEndpoints,
+    UndoMerge,
+    SelectSmall,
+    UndoShape
+};
+
+/** A queued operation with parameters. Pushed by panels/HTTP, popped by timer. */
+struct PluginOp {
+    OpType type;
+    double param1 = 0;          // tolerance, threshold, slider value
+    double param2 = 0;          // secondary param
+    int    intParam = 0;        // shape type, grid size
+    bool   boolParam1 = false;  // deleteOriginals, chainMerge
+    bool   boolParam2 = false;  // preserveHandles
+    std::string strParam;       // group name
+};
+
+/** Enqueue an operation. Thread-safe (mutex-protected). Called from any thread. */
+void BridgeEnqueueOp(PluginOp op);
+
+/** Dequeue the next operation. Returns false if queue is empty.
+    Called from ProcessOperationQueue (timer/SDK context only). */
+bool BridgeDequeueOp(PluginOp& out);
+
+//----------------------------------------------------------------------------------------
+//  Result Queue (H2) — replaces per-feature readout variables
+//----------------------------------------------------------------------------------------
+
+/** Result types matching operations that produce output. */
+enum class PluginResultType : int {
+    ShapeDetected = 0,    // text = shape name, doubleValue = confidence
+    MergeReadout,         // text = "N pairs, M paths"
+    SurfaceHint,          // intValue = surface type, doubleValue = confidence, param2 = angle
+    SelectionCount,       // intValue = count
+};
+
+/** A result posted by an operation for panel consumption. */
+struct PluginResult {
+    PluginResultType type;
+    std::string text;
+    int    intValue = 0;
+    double doubleValue = 0;
+    double param2 = 0;
+};
+
+/** Post a result from SDK context. Thread-safe. */
+void BridgePostResult(PluginResult result);
+
+/** Poll for the next result. Returns false if empty. Thread-safe. */
+bool BridgePollResult(PluginResult& out);
+
+//----------------------------------------------------------------------------------------
 //  Tool mode (lasso vs smart)
 //----------------------------------------------------------------------------------------
 

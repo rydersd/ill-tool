@@ -588,9 +588,9 @@ ASErr IllToolPlugin::ToolMouseDown(AIToolMessage* message)
 
 /*
     ProcessOperationQueue — called from AITimerSuite at ~10Hz in SDK message context.
-    Checks all atomic flags set by HTTP bridge and panel buttons, then executes
-    the corresponding SDK operations.  This is the ONLY safe place for SDK API calls
-    triggered by non-SDK threads (Cocoa buttons, HTTP handlers).
+    Dequeues operations from the H1 operation queue and executes them.
+    This is the ONLY safe place for SDK API calls triggered by non-SDK threads
+    (Cocoa buttons, HTTP handlers).
 */
 void IllToolPlugin::ProcessOperationQueue()
 {
@@ -600,151 +600,119 @@ void IllToolPlugin::ProcessOperationQueue()
         InvalidateFullView();
     }
 
-    // Check for lasso close request (Enter key or HTTP /lasso/close)
-    if (BridgeIsLassoCloseRequested()) {
-        BridgeClearLassoCloseRequest();
-        if (fPolygonVertices.size() >= 3) {
-            fprintf(stderr, "[IllTool Timer] Lasso close — closing polygon with %zu vertices\n",
-                    fPolygonVertices.size());
-            ExecutePolygonSelection();
-            fPolygonVertices.clear();
-            UpdatePolygonOverlay();
-            InvalidateFullView();
+    // H1: Dequeue and process all pending operations
+    PluginOp op;
+    while (BridgeDequeueOp(op)) {
+        switch (op.type) {
+            case OpType::LassoClose:
+                if (fPolygonVertices.size() >= 3) {
+                    fprintf(stderr, "[IllTool Timer] Lasso close — closing polygon with %zu vertices\n",
+                            fPolygonVertices.size());
+                    ExecutePolygonSelection();
+                    fPolygonVertices.clear();
+                    UpdatePolygonOverlay();
+                    InvalidateFullView();
+                }
+                break;
+
+            case OpType::LassoClear:
+                if (!fPolygonVertices.empty()) {
+                    fprintf(stderr, "[IllTool Timer] Lasso clear — discarding %zu vertices\n",
+                            fPolygonVertices.size());
+                    fPolygonVertices.clear();
+                    UpdatePolygonOverlay();
+                    InvalidateFullView();
+                }
+                break;
+
+            case OpType::WorkingApply:
+                fprintf(stderr, "[IllTool Timer] Working Apply (deleteOriginals=%s)\n",
+                        op.boolParam1 ? "true" : "false");
+                ApplyWorkingMode(op.boolParam1);
+                InvalidateFullView();
+                break;
+
+            case OpType::WorkingCancel:
+                fprintf(stderr, "[IllTool Timer] Working Cancel\n");
+                CancelWorkingMode();
+                InvalidateFullView();
+                break;
+
+            case OpType::AverageSelection:
+                fprintf(stderr, "[IllTool Timer] Average Selection\n");
+                AverageSelection();
+                InvalidateFullView();
+                break;
+
+            case OpType::Classify:
+                fprintf(stderr, "[IllTool Timer] Classify Selection\n");
+                ClassifySelection();
+                break;
+
+            case OpType::Reclassify:
+                fprintf(stderr, "[IllTool Timer] Reclassify as type %d\n", op.intParam);
+                ReclassifyAs(static_cast<BridgeShapeType>(op.intParam));
+                InvalidateFullView();
+                break;
+
+            case OpType::Simplify: {
+                double tolerance = op.param1 * 0.5;  // slider 0-100 → tolerance 0-50pt
+                fprintf(stderr, "[IllTool Timer] Simplify (slider=%.0f, tolerance=%.1f)\n",
+                        op.param1, tolerance);
+                SimplifySelection(tolerance);
+                InvalidateFullView();
+                break;
+            }
+
+            case OpType::CopyToGroup:
+                fprintf(stderr, "[IllTool Timer] Copy to Group '%s'\n", op.strParam.c_str());
+                CopyToGroup(op.strParam);
+                InvalidateFullView();
+                break;
+
+            case OpType::Detach:
+                fprintf(stderr, "[IllTool Timer] Detach from Group\n");
+                DetachFromGroup();
+                InvalidateFullView();
+                break;
+
+            case OpType::Split:
+                fprintf(stderr, "[IllTool Timer] Split to New Group\n");
+                SplitToNewGroup();
+                InvalidateFullView();
+                break;
+
+            case OpType::ScanEndpoints:
+                fprintf(stderr, "[IllTool Timer] Scan Endpoints (tolerance=%.1f)\n", op.param1);
+                ScanEndpoints(op.param1);
+                InvalidateFullView();
+                break;
+
+            case OpType::MergeEndpoints:
+                fprintf(stderr, "[IllTool Timer] Merge Endpoints (chain=%s, preserve=%s)\n",
+                        op.boolParam1 ? "true" : "false", op.boolParam2 ? "true" : "false");
+                MergeEndpoints(op.boolParam1, op.boolParam2);
+                InvalidateFullView();
+                break;
+
+            case OpType::UndoMerge:
+                fprintf(stderr, "[IllTool Timer] Undo Merge\n");
+                UndoMerge();
+                InvalidateFullView();
+                break;
+
+            case OpType::SelectSmall:
+                fprintf(stderr, "[IllTool Timer] Select Small (threshold=%.1f)\n", op.param1);
+                SelectSmall(op.param1);
+                InvalidateFullView();
+                break;
+
+            case OpType::UndoShape:
+                fprintf(stderr, "[IllTool Timer] Undo Shape\n");
+                UndoShapeOperation();
+                InvalidateFullView();
+                break;
         }
-    }
-
-    // Check for lasso clear request (Escape key or HTTP /lasso/clear)
-    if (BridgeIsLassoClearRequested()) {
-        BridgeClearLassoClearRequest();
-        if (!fPolygonVertices.empty()) {
-            fprintf(stderr, "[IllTool Timer] Lasso clear — discarding %zu vertices\n",
-                    fPolygonVertices.size());
-            fPolygonVertices.clear();
-            UpdatePolygonOverlay();
-            InvalidateFullView();
-        }
-    }
-
-    // Check for working mode apply request (panel Apply button or HTTP /working/apply)
-    if (BridgeIsWorkingApplyRequested()) {
-        bool delOrig = BridgeGetWorkingApplyDeleteOriginals();
-        BridgeClearWorkingApplyRequest();
-        fprintf(stderr, "[IllTool Timer] Working Apply (deleteOriginals=%s)\n",
-                delOrig ? "true" : "false");
-        ApplyWorkingMode(delOrig);
-        InvalidateFullView();
-    }
-
-    // Check for working mode cancel request (panel Cancel button or HTTP /working/cancel)
-    if (BridgeIsWorkingCancelRequested()) {
-        BridgeClearWorkingCancelRequest();
-        fprintf(stderr, "[IllTool Timer] Working Cancel\n");
-        CancelWorkingMode();
-        InvalidateFullView();
-    }
-
-    // Check for average selection request (panel button)
-    if (BridgeIsAverageSelectionRequested()) {
-        BridgeClearAverageSelectionRequest();
-        fprintf(stderr, "[IllTool Timer] Average Selection — executing in SDK context\n");
-        AverageSelection();
-        InvalidateFullView();
-    }
-
-    // Check for shape classification request
-    if (BridgeIsClassifyRequested()) {
-        BridgeClearClassifyRequest();
-        fprintf(stderr, "[IllTool Timer] Classify Selection — executing in SDK context\n");
-        ClassifySelection();
-    }
-
-    // Check for shape reclassification request (force-fit to shape type)
-    if (BridgeIsReclassifyRequested()) {
-        BridgeShapeType shapeType = BridgeGetReclassifyShapeType();
-        BridgeClearReclassifyRequest();
-        fprintf(stderr, "[IllTool Timer] Reclassify as type %d — executing in SDK context\n",
-                (int)shapeType);
-        ReclassifyAs(shapeType);
-        InvalidateFullView();
-    }
-
-    // Check for simplification request (slider)
-    if (BridgeIsSimplifyRequested()) {
-        double sliderValue = BridgeGetSimplifySliderValue();
-        BridgeClearSimplifyRequest();
-        double tolerance = sliderValue * 0.5;  // slider 0-100 → tolerance 0-50pt
-        fprintf(stderr, "[IllTool Timer] Simplify (slider=%.0f, tolerance=%.1f) — executing in SDK context\n",
-                sliderValue, tolerance);
-        SimplifySelection(tolerance);
-        InvalidateFullView();
-    }
-
-    // Stage 5: Grouping operations
-    if (BridgeIsCopyToGroupRequested()) {
-        std::string name = BridgeGetCopyToGroupName();
-        BridgeClearCopyToGroupRequest();
-        fprintf(stderr, "[IllTool Timer] Copy to Group '%s' — executing in SDK context\n", name.c_str());
-        CopyToGroup(name);
-        InvalidateFullView();
-    }
-
-    if (BridgeIsDetachRequested()) {
-        BridgeClearDetachRequest();
-        fprintf(stderr, "[IllTool Timer] Detach from Group — executing in SDK context\n");
-        DetachFromGroup();
-        InvalidateFullView();
-    }
-
-    if (BridgeIsSplitRequested()) {
-        BridgeClearSplitRequest();
-        fprintf(stderr, "[IllTool Timer] Split to New Group — executing in SDK context\n");
-        SplitToNewGroup();
-        InvalidateFullView();
-    }
-
-    // Stage 6: Merge operations
-    if (BridgeIsScanEndpointsRequested()) {
-        double tolerance = BridgeGetScanTolerance();
-        BridgeClearScanEndpointsRequest();
-        fprintf(stderr, "[IllTool Timer] Scan Endpoints (tolerance=%.1f) — executing in SDK context\n",
-                tolerance);
-        ScanEndpoints(tolerance);
-        InvalidateFullView();
-    }
-
-    if (BridgeIsMergeEndpointsRequested()) {
-        bool chain = BridgeGetMergeChainMerge();
-        bool preserve = BridgeGetMergePreserveHandles();
-        BridgeClearMergeEndpointsRequest();
-        fprintf(stderr, "[IllTool Timer] Merge Endpoints (chain=%s, preserve=%s) — executing in SDK context\n",
-                chain ? "true" : "false", preserve ? "true" : "false");
-        MergeEndpoints(chain, preserve);
-        InvalidateFullView();
-    }
-
-    if (BridgeIsUndoMergeRequested()) {
-        BridgeClearUndoMergeRequest();
-        fprintf(stderr, "[IllTool Timer] Undo Merge — executing in SDK context\n");
-        UndoMerge();
-        InvalidateFullView();
-    }
-
-    // Gap 3: Select Small — select paths with arc length below threshold
-    if (BridgeIsSelectSmallRequested()) {
-        double threshold = BridgeGetSelectSmallThreshold();
-        BridgeClearSelectSmallRequest();
-        fprintf(stderr, "[IllTool Timer] Select Small (threshold=%.1f) — executing in SDK context\n",
-                threshold);
-        SelectSmall(threshold);
-        InvalidateFullView();
-    }
-
-    // Gap 6: Undo shape operation (ReclassifyAs / SimplifySelection)
-    if (BridgeIsUndoShapeRequested()) {
-        BridgeClearUndoShapeRequest();
-        fprintf(stderr, "[IllTool Timer] Undo Shape — executing in SDK context\n");
-        UndoShapeOperation();
-        InvalidateFullView();
     }
 
     // Stage 8: Enforce locked isolation mode (timer-based safety net).
