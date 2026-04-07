@@ -536,7 +536,7 @@ bool StartHttpBridge(int port)
     //------------------------------------------------------------------------------------
     gServer->Post("/cleanup/average", [](const httplib::Request& /*req*/, httplib::Response& res) {
         AddCorsHeaders(res);
-        PluginAverageSelection();
+        BridgeRequestAverageSelection();
         json resp;
         resp["ok"] = true;
         res.set_content(resp.dump(), "application/json");
