@@ -181,6 +181,7 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
     root.layer.backgroundColor = ITBGColor().CGColor;
     root.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     self.rootViewInternal = root;
+    [root release];  // P2: balance alloc — strong property retains
 
     CGFloat y = totalHeight - kPadding;
 
@@ -218,10 +219,18 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
             NSForegroundColorAttributeName: ITDimColor(),
             NSParagraphStyleAttributeName: para
         };
-        [attrStr appendAttributedString:[[NSAttributedString alloc] initWithString:icons[i] attributes:iconAttrs]];
-        [attrStr appendAttributedString:[[NSAttributedString alloc] initWithString:@"\n" attributes:iconAttrs]];
-        [attrStr appendAttributedString:[[NSAttributedString alloc] initWithString:labels[i] attributes:labelAttrs]];
+        NSAttributedString *iconPart = [[NSAttributedString alloc] initWithString:icons[i] attributes:iconAttrs];
+        [attrStr appendAttributedString:iconPart];
+        [iconPart release];
+        NSAttributedString *nlPart = [[NSAttributedString alloc] initWithString:@"\n" attributes:iconAttrs];
+        [attrStr appendAttributedString:nlPart];
+        [nlPart release];
+        NSAttributedString *labelPart = [[NSAttributedString alloc] initWithString:labels[i] attributes:labelAttrs];
+        [attrStr appendAttributedString:labelPart];
+        [labelPart release];
         btn.attributedTitle = attrStr;
+        [attrStr release];
+        [para release];
 
         [root addSubview:btn];
         btnX += btnW + 2;
@@ -243,6 +252,7 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
     NSBox *sep1 = [[NSBox alloc] initWithFrame:NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, 1)];
     sep1.boxType = NSBoxSeparator;
     [root addSubview:sep1];
+    [sep1 release];
     y -= (1 + kPadding);
 
     // --- Curve Tension slider ---
@@ -305,6 +315,7 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
     layerField.editable = YES;
     [root addSubview:layerField];
     self.layerNameField = layerField;
+    [layerField release];
     y -= (kRowHeight + kPadding);
 
     // --- Average Selection button ---
@@ -327,6 +338,7 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
             NSFontAttributeName: ITLabelFont()
         }];
     delOrigCB.attributedTitle = cbTitle;
+    [cbTitle release];
     delOrigCB.frame = NSMakeRect(kPadding, y - kRowHeight, kPanelWidth - 2*kPadding, kRowHeight);
     [root addSubview:delOrigCB];
     self.deleteOriginalsCheckbox = delOrigCB;
@@ -347,6 +359,7 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
     NSBox *sep2 = [[NSBox alloc] initWithFrame:NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, 1)];
     sep2.boxType = NSBoxSeparator;
     [root addSubview:sep2];
+    [sep2 release];
     y -= (1 + kPadding);
 
     // --- Select Small row ---
@@ -364,6 +377,7 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
     threshField.stringValue = @"2";
     [root addSubview:threshField];
     self.selectSmallField = threshField;
+    [threshField release];
 
     NSTextField *ptLabel = MakeLabel(@"pt", ITLabelFont(), ITDimColor());
     ptLabel.frame = NSMakeRect(kPadding + 158, y - kRowHeight + 3, 20, 14);

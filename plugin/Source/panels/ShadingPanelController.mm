@@ -74,6 +74,11 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
 
 @implementation LightDirectionView
 
+- (void)dealloc {
+    self.onAngleChanged = nil;
+    [super dealloc];
+}
+
 - (instancetype)initWithFrame:(NSRect)frame
 {
     self = [super initWithFrame:frame];
@@ -313,6 +318,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     root.layer.backgroundColor = ITBGColor().CGColor;
     root.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     self.rootViewInternal = root;
+    [root release];  // P2: balance alloc — strong property retains
 
     CGFloat y = totalHeight - kPadding;
 
@@ -339,6 +345,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     NSBox *sep1 = [[NSBox alloc] initWithFrame:NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, 1)];
     sep1.boxType = NSBoxSeparator;
     [root addSubview:sep1];
+    [sep1 release];
     y -= (1 + kPadding);
 
     //==================================================================================
@@ -354,6 +361,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     hlWell.color = [NSColor colorWithRed:1.0 green:0.95 blue:0.8 alpha:1.0];  // warm highlight
     [root addSubview:hlWell];
     self.highlightColorWell = hlWell;
+    [hlWell release];
 
     y -= (34 + 4);
 
@@ -366,6 +374,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     shWell.color = [NSColor colorWithRed:0.15 green:0.1 blue:0.25 alpha:1.0];  // cool shadow
     [root addSubview:shWell];
     self.shadowColorWell = shWell;
+    [shWell release];
 
     y -= (34 + kPadding);
 
@@ -373,6 +382,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     NSBox *sep2 = [[NSBox alloc] initWithFrame:NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, 1)];
     sep2.boxType = NSBoxSeparator;
     [root addSubview:sep2];
+    [sep2 release];
     y -= (1 + kPadding);
 
     //==================================================================================
@@ -390,6 +400,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
         initWithFrame:NSMakeRect(circleX, y - circleSize, circleSize, circleSize)];
     [root addSubview:lightView];
     self.lightDirView = lightView;
+    [lightView release];
 
     // Angle readout below the circle
     NSTextField *angleLbl = MakeLabel(@"135\u00B0", ITMonoFont(), ITAccentColor());
@@ -398,9 +409,10 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     [root addSubview:angleLbl];
     self.angleLabel = angleLbl;
 
-    // Wire angle callback
+    // Wire angle callback (P2: __block avoids MRC retain cycle in block capture)
+    __block ShadingPanelController *blockSelf = self;
     lightView.onAngleChanged = ^(double angleDeg) {
-        self.angleLabel.stringValue = [NSString stringWithFormat:@"%.0f\u00B0", angleDeg];
+        blockSelf.angleLabel.stringValue = [NSString stringWithFormat:@"%.0f\u00B0", angleDeg];
     };
 
     y -= (circleSize + 16 + kPadding);
@@ -409,6 +421,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     NSBox *sep3 = [[NSBox alloc] initWithFrame:NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, 1)];
     sep3.boxType = NSBoxSeparator;
     [root addSubview:sep3];
+    [sep3 release];
     y -= (1 + kPadding);
 
     //==================================================================================
@@ -443,6 +456,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     NSBox *sep4 = [[NSBox alloc] initWithFrame:NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, 1)];
     sep4.boxType = NSBoxSeparator;
     [root addSubview:sep4];
+    [sep4 release];
     y -= (1 + kPadding);
 
     //==================================================================================
@@ -457,6 +471,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
         blendView.wantsLayer = YES;
         [root addSubview:blendView];
         self.blendControlsView = blendView;
+        [blendView release];
 
         NSTextField *stepLbl = MakeLabel(@"Steps", ITLabelFont(), ITTextColor());
         stepLbl.frame = NSMakeRect(kPadding, 60 - 14, 60, 14);
@@ -484,6 +499,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
         meshView.hidden = YES;  // hidden by default (blend mode active)
         [root addSubview:meshView];
         self.meshControlsView = meshView;
+        [meshView release];
 
         NSTextField *gridLbl = MakeLabel(@"Grid", ITLabelFont(), ITTextColor());
         gridLbl.frame = NSMakeRect(kPadding, 60 - 14, 60, 14);
@@ -510,6 +526,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     NSBox *sep5 = [[NSBox alloc] initWithFrame:NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, 1)];
     sep5.boxType = NSBoxSeparator;
     [root addSubview:sep5];
+    [sep5 release];
     y -= (1 + kPadding);
 
     //==================================================================================
@@ -533,6 +550,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
                        value:[NSFont boldSystemFontOfSize:12]
                        range:NSMakeRange(0, 13)];
     applyBtn.attributedTitle = applyTitle;
+    [applyTitle release];
 
     [root addSubview:applyBtn];
     self.applyButton = applyBtn;

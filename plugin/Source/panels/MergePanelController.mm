@@ -63,6 +63,7 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     [attrTitle addAttribute:NSFontAttributeName value:ITLabelFont()
                       range:NSMakeRange(0, title.length)];
     cb.attributedTitle = attrTitle;
+    [attrTitle release];
     return cb;
 }
 
@@ -134,6 +135,7 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     root.layer.backgroundColor = ITBGColor().CGColor;
     root.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     self.rootViewInternal = root;
+    [root release];  // P2: balance alloc — strong property retains
 
     CGFloat y = totalHeight - kPadding;
 
@@ -179,6 +181,7 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     NSBox *sep = [[NSBox alloc] initWithFrame:NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, 1)];
     sep.boxType = NSBoxSeparator;
     [root addSubview:sep];
+    [sep release];
     y -= (1 + kPadding);
 
     // --- Chain Merge checkbox ---

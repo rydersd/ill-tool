@@ -202,6 +202,9 @@ private:
     /** Scanned endpoint pairs from the last ScanEndpoints call. */
     std::vector<EndpointPair> fMergePairs;
 
+    /** Last tolerance used for ScanEndpoints (for chain-merge re-scan). */
+    double fLastScanTolerance = 5.0;
+
     /** Snapshot of original paths before merge, for undo. */
     struct MergeSnapshot {
         struct PathData {

@@ -29,6 +29,7 @@ static double PointDistance(const AIRealPoint& a, const AIRealPoint& b)
 void IllToolPlugin::ScanEndpoints(double tolerance)
 {
     try {
+        fLastScanTolerance = tolerance;  // Store for chain-merge re-scan
         fprintf(stderr, "[IllTool] ScanEndpoints: begin (tolerance=%.1f)\n", tolerance);
         fMergePairs.clear();
 
@@ -213,7 +214,7 @@ void IllToolPlugin::MergeEndpoints(bool chainMerge, bool preserveHandles)
 
             // Chain merge: re-scan
             if (chainMerge && iteration < maxIterations - 1) {
-                double tol = BridgeGetScanTolerance();
+                double tol = fLastScanTolerance;
                 fMergePairs.clear();
 
                 AIMatchingArtSpec reSpec(kPathArt, 0, 0);

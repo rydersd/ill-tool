@@ -103,6 +103,12 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
 
 @implementation EasingCurveView
 
+- (void)dealloc {
+    [_controlPoints release];
+    self.onPointsChanged = nil;
+    [super dealloc];
+}
+
 - (instancetype)initWithFrame:(NSRect)frame
 {
     self = [super initWithFrame:frame];
@@ -463,6 +469,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     root.layer.backgroundColor = ITBGColor().CGColor;
     root.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     self.rootViewInternal = root;
+    [root release];  // P2: balance alloc — strong property retains
 
     CGFloat y = totalHeight - kPadding;
 
@@ -499,6 +506,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     NSBox *sep1 = [[NSBox alloc] initWithFrame:NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, 1)];
     sep1.boxType = NSBoxSeparator;
     [root addSubview:sep1];
+    [sep1 release];
     y -= (1 + kPadding);
 
     //==================================================================================
@@ -529,6 +537,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     NSBox *sep2 = [[NSBox alloc] initWithFrame:NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, 1)];
     sep2.boxType = NSBoxSeparator;
     [root addSubview:sep2];
+    [sep2 release];
     y -= (1 + kPadding);
 
     //==================================================================================
@@ -558,6 +567,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     NSBox *sep3 = [[NSBox alloc] initWithFrame:NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, 1)];
     sep3.boxType = NSBoxSeparator;
     [root addSubview:sep3];
+    [sep3 release];
     y -= (1 + kPadding);
 
     //==================================================================================
@@ -569,12 +579,14 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
         initWithFrame:NSMakeRect(kPadding, y - curveSize, curveSize, curveSize)];
     [root addSubview:curveView];
     self.curveEditor = curveView;
+    [curveView release];
 
-    // MRC: no __weak; panel is a singleton, no retain cycle risk
+    // P2: __block avoids MRC retain cycle in block capture
+    __block BlendPanelController *blockSelf = self;
     curveView.onPointsChanged = ^(NSArray<NSValue *> *points) {
         // Mark as custom preset when user edits the curve
-        if (self.curveEditor.activePreset < 0) {
-            [self highlightEasingButton:-1];
+        if (blockSelf.curveEditor.activePreset < 0) {
+            [blockSelf highlightEasingButton:-1];
         }
     };
 
@@ -597,6 +609,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     NSBox *sep4 = [[NSBox alloc] initWithFrame:NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, 1)];
     sep4.boxType = NSBoxSeparator;
     [root addSubview:sep4];
+    [sep4 release];
     y -= (1 + kPadding);
 
     //==================================================================================
@@ -621,6 +634,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
                        value:[NSFont boldSystemFontOfSize:12]
                        range:NSMakeRange(0, 5)];
     blendBtn.attributedTitle = blendTitle;
+    [blendTitle release];
     [root addSubview:blendBtn];
     self.blendButton = blendBtn;
 }
@@ -646,6 +660,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
                               value:ITLabelFont()
                               range:NSMakeRange(0, btn.title.length)];
             btn.attributedTitle = attrTitle;
+            [attrTitle release];
         } else {
             btn.layer.backgroundColor = [NSColor clearColor].CGColor;
             NSMutableAttributedString *attrTitle = [[NSMutableAttributedString alloc]
@@ -657,6 +672,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
                               value:ITLabelFont()
                               range:NSMakeRange(0, btn.title.length)];
             btn.attributedTitle = attrTitle;
+            [attrTitle release];
         }
     }
 }
@@ -683,6 +699,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
                           value:ITLabelFont()
                           range:NSMakeRange(0, 6)];
         self.pickAButton.attributedTitle = attrTitle;
+        [attrTitle release];
     } else {
         self.pickAButton.layer.backgroundColor = [NSColor clearColor].CGColor;
     }
@@ -700,6 +717,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
                           value:ITLabelFont()
                           range:NSMakeRange(0, 6)];
         self.pickBButton.attributedTitle = attrTitle;
+        [attrTitle release];
     } else {
         self.pickBButton.layer.backgroundColor = [NSColor clearColor].CGColor;
     }

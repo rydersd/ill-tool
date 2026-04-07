@@ -3,7 +3,7 @@
 //  IllTool Plugin — HTTP Bridge implementation
 //
 //  Uses cpp-httplib (header-only) for the HTTP server.
-//  Runs on a detached std::thread; communicates with the main thread
+//  Runs on a joinable std::thread; communicates with the main thread
 //  through the DrawCommands buffer (mutex-protected).
 //
 //========================================================================================
@@ -122,56 +122,35 @@ BridgeToolMode BridgeGetToolMode()
 //----------------------------------------------------------------------------------------
 //  Operation request wrappers (H1: enqueue into operation queue)
 //  The BridgeRequest* API is preserved for callers (panels, HTTP endpoints).
-//  BridgeIs*Requested and BridgeClear* are deprecated no-ops — the queue handles lifecycle.
-//  BridgeGet* param accessors return defaults — params now live in PluginOp.
+//  Deprecated BridgeIs*Requested, BridgeClear*, and BridgeGet* param accessors
+//  have been removed — the H1 queue handles the full lifecycle.
 //----------------------------------------------------------------------------------------
 
 // Lasso
 void BridgeRequestLassoClose()          { BridgeEnqueueOp({OpType::LassoClose}); }
-bool BridgeIsLassoCloseRequested()      { return false; }
-void BridgeClearLassoCloseRequest()     {}
-
 void BridgeRequestLassoClear()          { BridgeEnqueueOp({OpType::LassoClear}); }
-bool BridgeIsLassoClearRequested()      { return false; }
-void BridgeClearLassoClearRequest()     {}
 
 // Working mode
 void BridgeRequestWorkingApply(bool deleteOriginals) {
     BridgeEnqueueOp({OpType::WorkingApply, 0, 0, 0, deleteOriginals});
 }
-bool BridgeIsWorkingApplyRequested()        { return false; }
-bool BridgeGetWorkingApplyDeleteOriginals() { return false; }  // deprecated — param in PluginOp
-void BridgeClearWorkingApplyRequest()       {}
-
 void BridgeRequestWorkingCancel()       { BridgeEnqueueOp({OpType::WorkingCancel}); }
-bool BridgeIsWorkingCancelRequested()   { return false; }
-void BridgeClearWorkingCancelRequest()  {}
 
 // Average selection
 void BridgeRequestAverageSelection()       { BridgeEnqueueOp({OpType::AverageSelection}); }
-bool BridgeIsAverageSelectionRequested()   { return false; }
-void BridgeClearAverageSelectionRequest()  {}
 
 // Shape classification
 void BridgeRequestClassify()          { BridgeEnqueueOp({OpType::Classify}); }
-bool BridgeIsClassifyRequested()      { return false; }
-void BridgeClearClassifyRequest()     {}
 
 // Shape reclassification
 void BridgeRequestReclassify(BridgeShapeType shapeType) {
     BridgeEnqueueOp({OpType::Reclassify, 0, 0, static_cast<int>(shapeType)});
 }
-bool BridgeIsReclassifyRequested()              { return false; }
-BridgeShapeType BridgeGetReclassifyShapeType()  { return BridgeShapeType::Line; }  // deprecated
-void BridgeClearReclassifyRequest()             {}
 
 // Simplification
 void BridgeRequestSimplify(double sliderValue) {
     BridgeEnqueueOp({OpType::Simplify, sliderValue});
 }
-bool   BridgeIsSimplifyRequested()      { return false; }
-double BridgeGetSimplifySliderValue()   { return 0; }  // deprecated
-void   BridgeClearSimplifyRequest()     {}
 
 // Grouping: Copy to Group
 void BridgeRequestCopyToGroup(const std::string& groupName) {
@@ -179,41 +158,25 @@ void BridgeRequestCopyToGroup(const std::string& groupName) {
     op.strParam = groupName;
     BridgeEnqueueOp(std::move(op));
 }
-bool        BridgeIsCopyToGroupRequested() { return false; }
-std::string BridgeGetCopyToGroupName()     { return ""; }  // deprecated
-void        BridgeClearCopyToGroupRequest(){}
 
 // Grouping: Detach
 void BridgeRequestDetach()      { BridgeEnqueueOp({OpType::Detach}); }
-bool BridgeIsDetachRequested()  { return false; }
-void BridgeClearDetachRequest() {}
 
 // Grouping: Split
 void BridgeRequestSplit()       { BridgeEnqueueOp({OpType::Split}); }
-bool BridgeIsSplitRequested()   { return false; }
-void BridgeClearSplitRequest()  {}
 
 // Merge: Scan Endpoints
 void BridgeRequestScanEndpoints(double tolerance) {
     BridgeEnqueueOp({OpType::ScanEndpoints, tolerance});
 }
-bool   BridgeIsScanEndpointsRequested()  { return false; }
-double BridgeGetScanTolerance()          { return 0; }  // deprecated
-void   BridgeClearScanEndpointsRequest() {}
 
 // Merge: Merge Endpoints
 void BridgeRequestMergeEndpoints(bool chainMerge, bool preserveHandles) {
     BridgeEnqueueOp({OpType::MergeEndpoints, 0, 0, 0, chainMerge, preserveHandles});
 }
-bool BridgeIsMergeEndpointsRequested() { return false; }
-bool BridgeGetMergeChainMerge()        { return false; }  // deprecated
-bool BridgeGetMergePreserveHandles()   { return false; }  // deprecated
-void BridgeClearMergeEndpointsRequest(){}
 
 // Merge: Undo Merge
 void BridgeRequestUndoMerge()      { BridgeEnqueueOp({OpType::UndoMerge}); }
-bool BridgeIsUndoMergeRequested()  { return false; }
-void BridgeClearUndoMergeRequest() {}
 
 // Merge readout text — written from SDK context, read by panel timer
 static std::mutex  gMergeReadoutMutex;
@@ -263,9 +226,6 @@ bool BridgeGetAddToSelection()             { return gAddToSelection.load(); }
 void BridgeRequestSelectSmall(double threshold) {
     BridgeEnqueueOp({OpType::SelectSmall, threshold});
 }
-bool   BridgeIsSelectSmallRequested()  { return false; }  // deprecated
-double BridgeGetSelectSmallThreshold() { return 0; }      // deprecated
-void   BridgeClearSelectSmallRequest() {}                  // deprecated
 
 //----------------------------------------------------------------------------------------
 //  Surface hint (continuous state — NOT an operation, kept as-is)
@@ -289,8 +249,6 @@ double BridgeGetGradientAngle()     { return gSurfaceGradientAngle.load(); }
 //----------------------------------------------------------------------------------------
 
 void BridgeRequestUndoShape()       { BridgeEnqueueOp({OpType::UndoShape}); }
-bool BridgeIsUndoShapeRequested()   { return false; }  // deprecated
-void BridgeClearUndoShapeRequest()  {}                  // deprecated
 
 //----------------------------------------------------------------------------------------
 //  Perspective grid line state (Stage 10) — continuous state, mutex-protected

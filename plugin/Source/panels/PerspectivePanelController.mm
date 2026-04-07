@@ -179,6 +179,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     root.layer.backgroundColor = ITBGColor().CGColor;
     root.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     self.rootViewInternal = root;
+    [root release];  // P2: balance alloc — strong property retains
 
     CGFloat y = totalHeight - kPadding;
 
@@ -204,6 +205,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     NSBox *sep = [[NSBox alloc] initWithFrame:NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, 1)];
     sep.boxType = NSBoxSeparator;
     [root addSubview:sep];
+    [sep release];
     y -= (1 + kPadding);
 
     CGFloat contentH = y;
@@ -212,19 +214,23 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     // --- Grid Tab ---
     self.gridTabView = [self buildGridTab:contentFrame];
     [root addSubview:self.gridTabView];
+    [self.gridTabView release];  // P2: balance alloc in buildGridTab — strong property retains
 
     // --- Placeholder tabs ---
     self.mirrorTabView = [self buildPlaceholderTab:contentFrame label:@"Mirror in Perspective\n\nRequires locked perspective grid.\nComing in Stage 10b."];
     self.mirrorTabView.hidden = YES;
     [root addSubview:self.mirrorTabView];
+    [self.mirrorTabView release];
 
     self.duplicateTabView = [self buildPlaceholderTab:contentFrame label:@"Duplicate in Perspective\n\nRequires locked perspective grid.\nComing in Stage 10c."];
     self.duplicateTabView.hidden = YES;
     [root addSubview:self.duplicateTabView];
+    [self.duplicateTabView release];
 
     self.pasteTabView = [self buildPlaceholderTab:contentFrame label:@"Paste in Perspective\n\nRequires locked perspective grid.\nComing in Stage 10d."];
     self.pasteTabView.hidden = YES;
     [root addSubview:self.pasteTabView];
+    [self.pasteTabView release];
 }
 
 //----------------------------------------------------------------------------------------
@@ -318,6 +324,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     NSBox *sep2 = [[NSBox alloc] initWithFrame:NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, 1)];
     sep2.boxType = NSBoxSeparator;
     [container addSubview:sep2];
+    [sep2 release];
     y -= (1 + kPadding);
 
     // --- Lock / Clear row ---

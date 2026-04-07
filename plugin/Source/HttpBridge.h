@@ -4,7 +4,7 @@
 //
 //  Lightweight HTTP server on 127.0.0.1:8787 for receiving draw commands
 //  and emitting events (SSE) from the Illustrator plugin.
-//  Runs on a detached background thread; all shared state is mutex-protected.
+//  Runs on a joinable background thread; all shared state is mutex-protected.
 //
 //========================================================================================
 
@@ -127,65 +127,30 @@ void BridgeSetToolMode(BridgeToolMode mode);
 BridgeToolMode BridgeGetToolMode();
 
 //----------------------------------------------------------------------------------------
-//  Lasso close request (Enter key / HTTP endpoint)
+//  Lasso close/clear requests (Enter/Escape key / HTTP endpoint)
 //----------------------------------------------------------------------------------------
 
-/** Signal the plugin to close the current polygon lasso.
-    Called from the HTTP handler or from the panel's key monitor.
-    Thread-safe (atomic flag). */
+/** Signal the plugin to close the current polygon lasso. Thread-safe. */
 void BridgeRequestLassoClose();
-
-/** Check whether a lasso-close request is pending. Thread-safe. */
-bool BridgeIsLassoCloseRequested();
-
-/** Clear the lasso-close request flag after handling it. Thread-safe. */
-void BridgeClearLassoCloseRequest();
-
-//----------------------------------------------------------------------------------------
-//  Lasso clear request (Escape key)
-//----------------------------------------------------------------------------------------
 
 /** Signal the plugin to clear (cancel) the current polygon lasso. Thread-safe. */
 void BridgeRequestLassoClear();
-
-/** Check whether a lasso-clear request is pending. Thread-safe. */
-bool BridgeIsLassoClearRequested();
-
-/** Clear the lasso-clear request flag after handling it. Thread-safe. */
-void BridgeClearLassoClearRequest();
 
 //----------------------------------------------------------------------------------------
 //  Working mode apply/cancel requests (HTTP endpoints)
 //----------------------------------------------------------------------------------------
 
-/** Signal the plugin to apply working mode. Thread-safe (atomic flags). */
+/** Signal the plugin to apply working mode. Thread-safe. */
 void BridgeRequestWorkingApply(bool deleteOriginals);
-
-/** Check whether a working-apply request is pending. Thread-safe. */
-bool BridgeIsWorkingApplyRequested();
-
-/** Get the deleteOriginals flag for the pending apply request. */
-bool BridgeGetWorkingApplyDeleteOriginals();
-
-/** Clear the working-apply request flag after handling it. Thread-safe. */
-void BridgeClearWorkingApplyRequest();
 
 /** Signal the plugin to cancel working mode. Thread-safe. */
 void BridgeRequestWorkingCancel();
 
-/** Check whether a working-cancel request is pending. Thread-safe. */
-bool BridgeIsWorkingCancelRequested();
-
-/** Clear the working-cancel request flag after handling it. Thread-safe. */
-void BridgeClearWorkingCancelRequest();
-
 //----------------------------------------------------------------------------------------
-//  Average selection request (button → queued for SDK context)
+//  Average selection request (button -> queued for SDK context)
 //----------------------------------------------------------------------------------------
 
 void BridgeRequestAverageSelection();
-bool BridgeIsAverageSelectionRequested();
-void BridgeClearAverageSelectionRequest();
 
 //----------------------------------------------------------------------------------------
 //  Shape classification request (auto-detect shape of selection)
@@ -193,12 +158,6 @@ void BridgeClearAverageSelectionRequest();
 
 /** Signal the plugin to classify the currently selected path. Thread-safe. */
 void BridgeRequestClassify();
-
-/** Check whether a classify request is pending. Thread-safe. */
-bool BridgeIsClassifyRequested();
-
-/** Clear the classify request flag after handling it. Thread-safe. */
-void BridgeClearClassifyRequest();
 
 //----------------------------------------------------------------------------------------
 //  Shape reclassification request (force-fit selection to specific shape type)
@@ -218,15 +177,6 @@ enum class BridgeShapeType : int {
 /** Signal the plugin to reclassify (force-fit) the selection to a shape type. Thread-safe. */
 void BridgeRequestReclassify(BridgeShapeType shapeType);
 
-/** Check whether a reclassify request is pending. Thread-safe. */
-bool BridgeIsReclassifyRequested();
-
-/** Get the requested shape type for the pending reclassify request. */
-BridgeShapeType BridgeGetReclassifyShapeType();
-
-/** Clear the reclassify request flag after handling it. Thread-safe. */
-void BridgeClearReclassifyRequest();
-
 //----------------------------------------------------------------------------------------
 //  Simplification request (Douglas-Peucker, slider value 0-100)
 //----------------------------------------------------------------------------------------
@@ -234,59 +184,31 @@ void BridgeClearReclassifyRequest();
 /** Signal the plugin to simplify the selection with given tolerance (0-100 slider). Thread-safe. */
 void BridgeRequestSimplify(double sliderValue);
 
-/** Check whether a simplify request is pending. Thread-safe. */
-bool BridgeIsSimplifyRequested();
-
-/** Get the slider value (0-100) for the pending simplify request. */
-double BridgeGetSimplifySliderValue();
-
-/** Clear the simplify request flag after handling it. Thread-safe. */
-void BridgeClearSimplifyRequest();
-
 //----------------------------------------------------------------------------------------
 //  Grouping operations (Stage 5)
 //----------------------------------------------------------------------------------------
 
-/** Request Copy to Group — duplicates selected paths into a named group.
-    Group name is stored in a mutex-protected string. Thread-safe. */
+/** Request Copy to Group -- duplicates selected paths into a named group. Thread-safe. */
 void BridgeRequestCopyToGroup(const std::string& groupName);
-bool BridgeIsCopyToGroupRequested();
-std::string BridgeGetCopyToGroupName();
-void BridgeClearCopyToGroupRequest();
 
-/** Request Detach — move selected paths out of their parent group. Thread-safe. */
+/** Request Detach -- move selected paths out of their parent group. Thread-safe. */
 void BridgeRequestDetach();
-bool BridgeIsDetachRequested();
-void BridgeClearDetachRequest();
 
-/** Request Split — move selected paths into a new group. Thread-safe. */
+/** Request Split -- move selected paths into a new group. Thread-safe. */
 void BridgeRequestSplit();
-bool BridgeIsSplitRequested();
-void BridgeClearSplitRequest();
 
 //----------------------------------------------------------------------------------------
 //  Merge operations (Stage 6)
 //----------------------------------------------------------------------------------------
 
-/** Request Scan Endpoints — find open path endpoint pairs within tolerance.
-    Tolerance stored via mutex-protected double. Thread-safe. */
+/** Request Scan Endpoints -- find open path endpoint pairs within tolerance. Thread-safe. */
 void BridgeRequestScanEndpoints(double tolerance);
-bool BridgeIsScanEndpointsRequested();
-double BridgeGetScanTolerance();
-void BridgeClearScanEndpointsRequest();
 
-/** Request Merge Endpoints — join scanned pairs.
-    Chain merge and preserve handles flags stored as atomics. Thread-safe. */
+/** Request Merge Endpoints -- join scanned pairs. Thread-safe. */
 void BridgeRequestMergeEndpoints(bool chainMerge, bool preserveHandles);
-bool BridgeIsMergeEndpointsRequested();
-bool BridgeGetMergeChainMerge();
-bool BridgeGetMergePreserveHandles();
-void BridgeClearMergeEndpointsRequest();
 
-/** Request Undo Merge — restore originals from snapshot. Thread-safe. */
+/** Request Undo Merge -- restore originals from snapshot. Thread-safe. */
 void BridgeRequestUndoMerge();
-bool BridgeIsUndoMergeRequested();
-void BridgeClearUndoMergeRequest();
 
 /** Set the merge readout text (called from SDK context, read by panel timer). Thread-safe. */
 void BridgeSetMergeReadout(const std::string& text);
@@ -329,18 +251,12 @@ bool BridgeGetAddToSelection();
 /** Signal the plugin to select all paths with arc length below threshold. Thread-safe. */
 void BridgeRequestSelectSmall(double threshold);
 
-/** Check whether a select-small request is pending. Thread-safe. */
-bool BridgeIsSelectSmallRequested();
-
-/** Get the threshold for the pending select-small request. */
-double BridgeGetSelectSmallThreshold();
-
-/** Clear the select-small request flag after handling it. Thread-safe. */
-void BridgeClearSelectSmallRequest();
-
 //----------------------------------------------------------------------------------------
 //  Shape undo request (restore paths modified by ReclassifyAs or SimplifySelection)
 //----------------------------------------------------------------------------------------
+
+/** Signal the plugin to undo the last shape operation. Thread-safe. */
+void BridgeRequestUndoShape();
 
 /** Store surface hint result from ClassifySelection. Thread-safe. */
 void BridgeSetSurfaceHint(int surfaceType, double confidence, double gradientAngle);
@@ -353,15 +269,6 @@ double BridgeGetSurfaceConfidence();
 
 /** Get the last stored gradient angle. Thread-safe. */
 double BridgeGetGradientAngle();
-
-/** Signal the plugin to undo the last shape operation. Thread-safe. */
-void BridgeRequestUndoShape();
-
-/** Check whether a shape-undo request is pending. Thread-safe. */
-bool BridgeIsUndoShapeRequested();
-
-/** Clear the shape-undo request flag after handling it. Thread-safe. */
-void BridgeClearUndoShapeRequest();
 
 //----------------------------------------------------------------------------------------
 //  Perspective grid line state (Stage 10)

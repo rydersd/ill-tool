@@ -99,6 +99,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     root.layer.backgroundColor = ITBGColor().CGColor;
     root.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     self.rootViewInternal = root;
+    [root release];  // P2: balance alloc — strong property retains
 
     CGFloat y = totalHeight - kPadding;
 
@@ -123,6 +124,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     nameField.editable = YES;
     [root addSubview:nameField];
     self.groupNameField = nameField;
+    [nameField release];
     y -= (kRowHeight + kPadding);
 
     // --- Copy to Group button ---
@@ -135,6 +137,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     NSBox *sep1 = [[NSBox alloc] initWithFrame:NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, 1)];
     sep1.boxType = NSBoxSeparator;
     [root addSubview:sep1];
+    [sep1 release];
     y -= (1 + kPadding);
 
     // --- Simplification slider ---
@@ -182,6 +185,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     NSBox *sep2 = [[NSBox alloc] initWithFrame:NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, 1)];
     sep2.boxType = NSBoxSeparator;
     [root addSubview:sep2];
+    [sep2 release];
     y -= (1 + kPadding);
 
     // --- In-group controls (hidden by default) ---
