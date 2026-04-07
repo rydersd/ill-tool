@@ -23,6 +23,8 @@
 #include "AIMask.h"   // AIBlendStyleSuite — GetOpacity/SetOpacity
 #include "AILayer.h"  // AILayerSuite — layer creation and lookup
 #include "AITimer.h"  // AITimerSuite — SDK-context timer dispatch
+#include "AIPathStyle.h" // AIPathStyleSuite — read/write fill+stroke styles
+#include "AIDictionary.h" // AIDictionarySuite — per-art metadata storage
 
 extern  "C" AIUnicodeStringSuite*       sAIUnicodeString;
 extern  "C" SPBlocksSuite*              sSPBlocks;
@@ -45,5 +47,7 @@ extern  "C" AIIsolationModeSuite*       sAIIsolationMode;
 extern  "C" AIBlendStyleSuite*          sAIBlendStyle;
 extern  "C" AILayerSuite*               sAILayer;
 extern  "C" AITimerSuite*               sAITimer;
+extern  "C" AIPathStyleSuite*           sAIPathStyle;
+extern  "C" AIDictionarySuite*          sAIDictionary;
 
 #endif // __ILLTOOLSUITES_H__

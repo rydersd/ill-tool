@@ -472,6 +472,57 @@ public:
 
     PerspectiveGrid fPerspectiveGrid;
 
+    //------------------------------------------------------------------------------------
+    //  Blend Harmonization (Stage 11)
+    //------------------------------------------------------------------------------------
+
+    /** Persistent state for a single blend operation. Tracks the group, source paths,
+        parameters, and intermediate art handles for non-destructive re-editing. */
+    struct BlendState {
+        AIArtHandle groupArt = nullptr;     ///< The containing "Blend Group N" group
+        AIArtHandle pathA = nullptr;        ///< Source path A (inside group)
+        AIArtHandle pathB = nullptr;        ///< Source path B (inside group)
+        int steps = 5;                      ///< Number of intermediate paths
+        int easingPreset = 0;               ///< 0=linear, 1=easeIn, 2=easeOut, 3=easeInOut, 4=custom
+        std::vector<std::pair<double,double>> customEasingPoints;  ///< Custom easing CPs (for preset 4)
+        std::vector<AIArtHandle> intermediates;  ///< Created intermediate paths (for re-blend deletion)
+    };
+
+    /** The blend path pair — set by Pick A / Pick B tool mode. */
+    AIArtHandle fBlendPathA = nullptr;
+    AIArtHandle fBlendPathB = nullptr;
+
+    /** Active blend states — one per blend group in the document.
+        Used for re-editing: select group, change params, re-blend. */
+    std::vector<BlendState> fBlendStates;
+
+    /** Running counter for blend group naming ("Blend Group 1", "Blend Group 2", ...). */
+    int fBlendGroupCounter = 0;
+
+    /** Execute blend: harmonize pathA and pathB, create N intermediate paths.
+        Groups everything into a named blend group and stores state for re-editing.
+        @param pathA        First path art handle.
+        @param pathB        Second path art handle.
+        @param steps        Number of intermediate paths (1-20).
+        @param easingPreset 0=linear, 1=easeIn, 2=easeOut, 3=easeInOut.
+        @return Number of paths created, or 0 on failure. */
+    int ExecuteBlend(AIArtHandle pathA, AIArtHandle pathB, int steps, int easingPreset);
+
+    /** Re-blend an existing blend group with new parameters.
+        Deletes old intermediates, creates new ones, updates stored state.
+        @param groupArt     The blend group art handle.
+        @param steps        New step count.
+        @param easingPreset New easing preset.
+        @return Number of new paths created, or 0 on failure. */
+    int ReblendGroup(AIArtHandle groupArt, int steps, int easingPreset);
+
+    /** Find BlendState for a given group art handle. Returns nullptr if not found. */
+    BlendState* FindBlendState(AIArtHandle groupArt);
+
+    /** Check if an art handle is (or is inside) a blend group.
+        If so, returns the blend group handle. Otherwise returns nullptr. */
+    AIArtHandle FindBlendGroupForArt(AIArtHandle art);
+
     /** Sync perspective grid state from bridge state variables.
         Called from ProcessOperationQueue before drawing. */
     void SyncPerspectiveFromBridge();

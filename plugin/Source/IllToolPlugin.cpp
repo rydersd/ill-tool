@@ -734,6 +734,41 @@ void IllToolPlugin::ProcessOperationQueue()
                 fprintf(stderr, "[IllTool Timer] Set Grid Density: %d\n", fPerspectiveGrid.gridDensity);
                 InvalidateFullView();
                 break;
+
+            // Stage 11: Blend Harmonization
+            case OpType::BlendPickA:
+                fprintf(stderr, "[IllTool Timer] Blend Pick A mode\n");
+                BridgeSetBlendPickMode(1);
+                break;
+
+            case OpType::BlendPickB:
+                fprintf(stderr, "[IllTool Timer] Blend Pick B mode\n");
+                BridgeSetBlendPickMode(2);
+                break;
+
+            case OpType::BlendExecute:
+                if (fBlendPathA && fBlendPathB) {
+                    int steps = BridgeGetBlendSteps();
+                    int easing = BridgeGetBlendEasing();
+                    fprintf(stderr, "[IllTool Timer] Blend Execute (steps=%d, easing=%d)\n", steps, easing);
+                    int created = ExecuteBlend(fBlendPathA, fBlendPathB, steps, easing);
+                    fprintf(stderr, "[IllTool Timer] Blend created %d paths\n", created);
+                    InvalidateFullView();
+                } else {
+                    fprintf(stderr, "[IllTool Timer] Blend Execute: paths not set (A=%p B=%p)\n",
+                            (void*)fBlendPathA, (void*)fBlendPathB);
+                }
+                break;
+
+            case OpType::BlendSetSteps:
+                BridgeSetBlendSteps(op.intParam);
+                fprintf(stderr, "[IllTool Timer] Blend set steps=%d\n", op.intParam);
+                break;
+
+            case OpType::BlendSetEasing:
+                BridgeSetBlendEasing(op.intParam);
+                fprintf(stderr, "[IllTool Timer] Blend set easing=%d\n", op.intParam);
+                break;
         }
     }
 

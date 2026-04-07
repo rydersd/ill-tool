@@ -56,7 +56,13 @@ enum class OpType : int {
     UndoShape,
     ClearPerspective,
     LockPerspective,     // boolParam1 = lock/unlock
-    SetGridDensity       // intParam = density (2-20)
+    SetGridDensity,      // intParam = density (2-20)
+    // Stage 11: Blend Harmonization
+    BlendPickA,          // enter pick-A mode (next click stores path A)
+    BlendPickB,          // enter pick-B mode (next click stores path B)
+    BlendExecute,        // run blend with current settings
+    BlendSetSteps,       // intParam = step count (1-20)
+    BlendSetEasing       // intParam = preset (0=linear,1=easeIn,2=easeOut,3=easeInOut,4=custom)
 };
 
 /** A queued operation with parameters. Pushed by panels/HTTP, popped by timer. */
@@ -383,5 +389,27 @@ double BridgeGetHorizonY();
 /** Set/get perspective lock state. Thread-safe. */
 void BridgeSetPerspectiveLocked(bool locked);
 bool BridgeGetPerspectiveLocked();
+
+//----------------------------------------------------------------------------------------
+//  Blend state (Stage 11)
+//----------------------------------------------------------------------------------------
+
+/** Set/get blend step count. Thread-safe. */
+void BridgeSetBlendSteps(int steps);
+int  BridgeGetBlendSteps();
+
+/** Set/get blend easing preset (0-3 = presets, 4 = custom). Thread-safe. */
+void BridgeSetBlendEasing(int preset);
+int  BridgeGetBlendEasing();
+
+/** Set/get blend pick mode (0=none, 1=pickA, 2=pickB). Thread-safe. */
+void BridgeSetBlendPickMode(int mode);
+int  BridgeGetBlendPickMode();
+
+/** Set/get whether blend paths A and B are set. Thread-safe. */
+bool BridgeHasBlendPathA();
+bool BridgeHasBlendPathB();
+void BridgeSetBlendPathASet(bool set);
+void BridgeSetBlendPathBSet(bool set);
 
 #endif // __HTTPBRIDGE_H__

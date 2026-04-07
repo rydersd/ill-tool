@@ -342,6 +342,27 @@ bool BridgeGetPerspectiveLocked() {
 }
 
 //----------------------------------------------------------------------------------------
+//  Blend state (Stage 11)
+//----------------------------------------------------------------------------------------
+
+static std::atomic<int>  gBlendSteps{5};
+static std::atomic<int>  gBlendEasing{0};
+static std::atomic<int>  gBlendPickMode{0};   // 0=none, 1=pickA, 2=pickB
+static std::atomic<bool> gBlendHasPathA{false};
+static std::atomic<bool> gBlendHasPathB{false};
+
+void BridgeSetBlendSteps(int steps)    { gBlendSteps.store(steps); }
+int  BridgeGetBlendSteps()             { return gBlendSteps.load(); }
+void BridgeSetBlendEasing(int preset)  { gBlendEasing.store(preset); }
+int  BridgeGetBlendEasing()            { return gBlendEasing.load(); }
+void BridgeSetBlendPickMode(int mode)  { gBlendPickMode.store(mode); }
+int  BridgeGetBlendPickMode()          { return gBlendPickMode.load(); }
+bool BridgeHasBlendPathA()             { return gBlendHasPathA.load(); }
+bool BridgeHasBlendPathB()             { return gBlendHasPathB.load(); }
+void BridgeSetBlendPathASet(bool set)  { gBlendHasPathA.store(set); }
+void BridgeSetBlendPathBSet(bool set)  { gBlendHasPathB.store(set); }
+
+//----------------------------------------------------------------------------------------
 //  SSE event emitter
 //----------------------------------------------------------------------------------------
 
