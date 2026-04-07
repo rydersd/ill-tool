@@ -29,6 +29,7 @@
 #include "AITimer.h"
 
 #include <vector>
+#include <atomic>
 
 /** Creates a new IllToolPlugin.
     @param pluginRef IN unique reference to this plugin.
@@ -253,7 +254,7 @@ public:
 public:
     /** Cached selection count — updated from Notify (where SDK calls work).
         Public so PluginGetSelectedAnchorCount() can read it. */
-    int                     fLastKnownSelectionCount = 0;
+    std::atomic<int>        fLastKnownSelectionCount{0};
 
     /** Returns the working group art handle (non-null when in working mode). */
     AIArtHandle GetWorkingGroup() const { return fWorkingGroup; }
@@ -348,6 +349,8 @@ public:
     void SelectSmall(double threshold);
 
     /** Last detected shape name — read by the Cleanup panel to update the "Detected:" label. */
+    /** Only written by SDK thread, read by Cocoa thread.
+        Pointer-sized writes are atomic on ARM64. String literals have static lifetime. */
     const char* fLastDetectedShape = "---";
 
     // Surface hint now stored in thread-safe bridge atomics (BridgeSet/GetSurfaceHint)

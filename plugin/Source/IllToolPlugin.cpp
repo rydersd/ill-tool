@@ -69,17 +69,17 @@ IllToolPlugin::IllToolPlugin(SPPluginRef pluginRef) :
     fIsolationChangedNotifier(NULL),
     fSelectionPanel(NULL), fCleanupPanel(NULL),
     fGroupingPanel(NULL), fMergePanel(NULL),
-    fShadingPanel(NULL),
+    fShadingPanel(NULL), fBlendPanel(NULL), fPerspectivePanel(NULL),
     fSelectionMenuHandle(NULL), fCleanupMenuHandle(NULL),
     fGroupingMenuHandle(NULL), fMergeMenuHandle(NULL),
-    fShadingMenuHandle(NULL),
+    fShadingMenuHandle(NULL), fBlendMenuHandle(NULL), fPerspectiveMenuHandle(NULL),
     fAppMenuRootHandle(NULL),
     fMenuLassoHandle(NULL), fMenuSmartHandle(NULL),
     fMenuCleanupHandle(NULL), fMenuGroupingHandle(NULL),
     fMenuMergeHandle(NULL), fMenuSelectionHandle(NULL),
     fSelectionController(NULL), fCleanupController(NULL),
     fGroupingController(NULL), fMergeController(NULL),
-    fShadingController(NULL),
+    fShadingController(NULL), fBlendController(NULL), fPerspectiveController(NULL),
     fLastClickTime(0.0)
 {
     fLastCursorPos.h = 0;
@@ -543,6 +543,8 @@ ASErr IllToolPlugin::ToolMouseDown(AIToolMessage* message)
                         fprintf(stderr, "[IllTool Blend] Click did not hit a path\n");
                     }
                     if (hitRef) sAIHitTest->Release(hitRef);
+                } else if (hitRef) {
+                    sAIHitTest->Release(hitRef);
                 }
             }
             BridgeSetBlendPickMode(0);  // exit pick mode after click
@@ -784,6 +786,18 @@ void IllToolPlugin::ProcessOperationQueue()
 
             case OpType::BlendExecute:
                 if (fBlendPathA && fBlendPathB) {
+                    // Validate handles before use (P1 fix — paths could be stale)
+                    short typeA = 0, typeB = 0;
+                    if (sAIArt->GetArtType(fBlendPathA, &typeA) != kNoErr || typeA != kPathArt) {
+                        fprintf(stderr, "[IllTool Timer] Blend Execute: path A is stale\n");
+                        fBlendPathA = nullptr; BridgeSetBlendPathASet(false);
+                        break;
+                    }
+                    if (sAIArt->GetArtType(fBlendPathB, &typeB) != kNoErr || typeB != kPathArt) {
+                        fprintf(stderr, "[IllTool Timer] Blend Execute: path B is stale\n");
+                        fBlendPathB = nullptr; BridgeSetBlendPathBSet(false);
+                        break;
+                    }
                     int steps = BridgeGetBlendSteps();
                     int easing = BridgeGetBlendEasing();
                     fprintf(stderr, "[IllTool Timer] Blend Execute (steps=%d, easing=%d)\n", steps, easing);

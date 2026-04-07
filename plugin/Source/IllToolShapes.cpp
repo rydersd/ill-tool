@@ -92,6 +92,7 @@ void IllToolPlugin::ClassifySelection()
         ai::int32 numMatches = 0;
         ASErr result = GetMatchingArtIsolationAware(&spec, 1, &matches, &numMatches);
         if (result != kNoErr || numMatches == 0) {
+            if (matches) sAIMdMemory->MdMemoryDisposeHandle((AIMdMemoryHandle)matches);
             fLastDetectedShape = "---"; return;
         }
         AIArtHandle targetPath = FindSelectedPath(matches, numMatches);
@@ -280,7 +281,10 @@ void IllToolPlugin::ReclassifyAs(BridgeShapeType shapeType)
         AIArtHandle** matches = nullptr;
         ai::int32 numMatches = 0;
         ASErr result = GetMatchingArtIsolationAware(&spec, 1, &matches, &numMatches);
-        if (result != kNoErr || numMatches == 0) { fprintf(stderr, "[IllTool Timer] ReclassifyAs: no path art\n"); return; }
+        if (result != kNoErr || numMatches == 0) {
+            if (matches) sAIMdMemory->MdMemoryDisposeHandle((AIMdMemoryHandle)matches);
+            fprintf(stderr, "[IllTool Timer] ReclassifyAs: no path art\n"); return;
+        }
         AIArtHandle targetPath = FindSelectedPath(matches, numMatches);
         if (matches) sAIMdMemory->MdMemoryDisposeHandle((AIMdMemoryHandle)matches);
         if (!targetPath) { fprintf(stderr, "[IllTool Timer] ReclassifyAs: no selected path\n"); return; }
@@ -455,7 +459,10 @@ void IllToolPlugin::SimplifySelection(double tolerance)
         AIArtHandle** matches = nullptr;
         ai::int32 numMatches = 0;
         ASErr result = GetMatchingArtIsolationAware(&spec, 1, &matches, &numMatches);
-        if (result != kNoErr || numMatches == 0) { fprintf(stderr, "[IllTool Timer] SimplifySelection: no path art\n"); return; }
+        if (result != kNoErr || numMatches == 0) {
+            if (matches) sAIMdMemory->MdMemoryDisposeHandle((AIMdMemoryHandle)matches);
+            fprintf(stderr, "[IllTool Timer] SimplifySelection: no path art\n"); return;
+        }
 
         int totalSimplified = 0, totalBefore = 0, totalAfter = 0;
         for (ai::int32 i = 0; i < numMatches; i++) {

@@ -34,23 +34,16 @@ static const CGFloat kRowHeight   = 22.0;
 static const CGFloat kSliderH     = 18.0;
 
 //----------------------------------------------------------------------------------------
-//  Bridge stubs for blend easing points (mutex-protected static storage)
-//  The wiring agent will finalize these into HttpBridge.cpp
+//  Bridge forwarding for blend easing points
+//  Forwards to the real BridgeSetCustomEasingPoints in HttpBridge.cpp
 //----------------------------------------------------------------------------------------
 
-static std::mutex sBlendEasingMutex;
-static std::vector<std::pair<double,double>> sBlendEasingPoints = { {0.25, 0.1}, {0.75, 0.9} };
-
-void BridgeSetBlendEasingPoints(const std::vector<std::pair<double,double>>& points)
+static void BridgeSetBlendEasingPoints(const std::vector<std::pair<double,double>>& points)
 {
-    std::lock_guard<std::mutex> lock(sBlendEasingMutex);
-    sBlendEasingPoints = points;
-}
-
-std::vector<std::pair<double,double>> BridgeGetBlendEasingPoints()
-{
-    std::lock_guard<std::mutex> lock(sBlendEasingMutex);
-    return sBlendEasingPoints;
+    // Forward to the real bridge function in HttpBridge.cpp
+    std::vector<double> flat;
+    for (auto& p : points) { flat.push_back(p.first); flat.push_back(p.second); }
+    BridgeSetCustomEasingPoints((int)points.size(), flat.data());
 }
 
 //----------------------------------------------------------------------------------------
@@ -117,7 +110,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
         _dragIndex = -1;
         _activePreset = 0;
         // Default: linear (control points on the diagonal)
-        _controlPoints = [NSMutableArray arrayWithObjects:
+        self.controlPoints = [NSMutableArray arrayWithObjects:
             [NSValue valueWithPoint:NSMakePoint(0.25, 0.25)],
             [NSValue valueWithPoint:NSMakePoint(0.75, 0.75)],
             nil];
@@ -447,8 +440,9 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
 - (void)pollBlendState:(NSTimer *)timer
 {
     @autoreleasepool {
-        // Poll result queue for blend-relevant results
-        // (The wiring agent will add BlendPathStatus result type)
+        BOOL hasA = BridgeHasBlendPathA();
+        BOOL hasB = BridgeHasBlendPathB();
+        [self updatePathStatus:hasA pathB:hasB];
     }
 }
 
@@ -782,7 +776,13 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
 - (void)onSavePreset:(id)sender
 {
     fprintf(stderr, "[IllTool Panel] Blend Save Preset\n");
-    std::vector<std::pair<double,double>> pts = BridgeGetBlendEasingPoints();
+    // Read current easing points from the real bridge
+    double xyBuf[40]; // max 20 control points
+    int count = BridgeGetCustomEasingPoints(xyBuf, 20);
+    std::vector<std::pair<double,double>> pts;
+    for (int i = 0; i < count; i++) {
+        pts.push_back({xyBuf[i*2], xyBuf[i*2+1]});
+    }
     std::lock_guard<std::mutex> lock(sPresetMutex);
     sPresets.push_back(pts);
     fprintf(stderr, "[IllTool Panel] Saved preset #%lu\n", (unsigned long)sPresets.size());

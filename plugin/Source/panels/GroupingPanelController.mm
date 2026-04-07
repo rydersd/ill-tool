@@ -269,4 +269,16 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     self.splitButton.hidden = !inGroup;
 }
 
+- (void)dealloc
+{
+    self.rootViewInternal = nil;
+    self.groupNameField = nil;
+    self.simplificationSlider = nil;
+    self.simplificationValueLabel = nil;
+    self.pointsCountLabel = nil;
+    self.detachButton = nil;
+    self.splitButton = nil;
+    [super dealloc];
+}
+
 @end

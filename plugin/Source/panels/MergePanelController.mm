@@ -105,6 +105,7 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
 {
     [self.readoutTimer invalidate];
     self.readoutTimer = nil;
+    [super dealloc];
 }
 
 - (void)pollReadout:(NSTimer *)timer

@@ -256,6 +256,12 @@ void IllToolPlugin::SyncPerspectiveFromBridge()
         anyChanged = true;
     }
 
+    bool bridgeVisible = BridgeGetPerspectiveVisible();
+    if (fPerspectiveGrid.visible != bridgeVisible) {
+        fPerspectiveGrid.visible = bridgeVisible;
+        anyChanged = true;
+    }
+
     if (anyChanged) {
         fPerspectiveGrid.Recompute();
         InvalidateFullView();
