@@ -205,9 +205,59 @@ public:
         @return Suggested groupings. */
     std::vector<ContourGroup> SuggestGroups(const std::vector<Contour>& contours);
 
+    //------------------------------------------------------------------------------------
+    //  Surface type inference
+    //------------------------------------------------------------------------------------
+
+    /** Surface type classification matching Python SURFACE_TYPE_NAMES. */
+    enum class SurfaceType : int {
+        Unknown     = -1,
+        Flat        = 0,
+        Convex      = 1,
+        Concave     = 2,
+        Saddle      = 3,
+        Cylindrical = 4
+    };
+
+    /** Result of surface type inference for a rectangular region. */
+    struct SurfaceHint {
+        SurfaceType type = SurfaceType::Unknown;
+        double      confidence = 0.0;        // 0.0 - 1.0
+        double      gradientAngle = 0.0;     // Dominant gradient direction (radians)
+    };
+
+    /** Mapping between Illustrator artwork coordinates and raster pixel coordinates. */
+    struct ArtToPixelMapping {
+        double artLeft = 0, artTop = 0, artRight = 0, artBottom = 0;
+        int    pixelWidth = 0, pixelHeight = 0;
+        bool   valid = false;
+
+        /** Convert a rect in artwork coords to pixel rect. */
+        void ArtRectToPixelRect(double aLeft, double aTop, double aRight, double aBottom,
+                                int& pX, int& pY, int& pW, int& pH) const;
+    };
+
+    /** Infer the dominant surface type within a rectangular region of the loaded image.
+        Uses gradient direction histogram analysis.
+        @param x  Left edge of the region in pixel coordinates.
+        @param y  Top edge of the region in pixel coordinates.
+        @param w  Width of the region in pixels.
+        @param h  Height of the region in pixels.
+        @return SurfaceHint with type, confidence, and dominant gradient angle. */
+    SurfaceHint InferSurfaceType(int x, int y, int w, int h);
+
+    /** Set the artwork-to-pixel coordinate mapping.
+        Called after loading an image and determining where it's placed on the artboard. */
+    void SetArtToPixelMapping(double artLeft, double artTop, double artRight, double artBottom);
+
+    /** Get the current mapping. */
+    const ArtToPixelMapping& GetMapping() const { return artMapping; }
+
 private:
     VisionEngine();
     ~VisionEngine();
+
+    ArtToPixelMapping artMapping;
 
     // Non-copyable
     VisionEngine(const VisionEngine&) = delete;

@@ -1271,3 +1271,223 @@ int PluginVisionGetHeight()
 {
     return VisionEngine::Instance().Height();
 }
+
+//========================================================================================
+//  Surface type inference (Gap 1)
+//========================================================================================
+
+void VisionEngine::ArtToPixelMapping::ArtRectToPixelRect(
+    double aLeft, double aTop, double aRight, double aBottom,
+    int& pX, int& pY, int& pW, int& pH) const
+{
+    if (!valid || pixelWidth == 0 || pixelHeight == 0) {
+        pX = pY = pW = pH = 0;
+        return;
+    }
+    double artW = artRight - artLeft;
+    double artH = artTop - artBottom;  // Illustrator Y-up: top > bottom
+    if (artW < 1e-6 || artH < 1e-6) { pX = pY = pW = pH = 0; return; }
+
+    double scaleX = pixelWidth / artW;
+    double scaleY = pixelHeight / artH;
+
+    // Artwork coords: origin bottom-left, Y-up. Pixel coords: origin top-left, Y-down.
+    pX = (int)((aLeft - artLeft) * scaleX);
+    pY = (int)((artTop - aTop) * scaleY);   // flip Y
+    pW = (int)((aRight - aLeft) * scaleX);
+    pH = (int)((aTop - aBottom) * scaleY);
+
+    // Clamp to image bounds
+    if (pX < 0) { pW += pX; pX = 0; }
+    if (pY < 0) { pH += pY; pY = 0; }
+    if (pX + pW > pixelWidth)  pW = pixelWidth - pX;
+    if (pY + pH > pixelHeight) pH = pixelHeight - pY;
+    if (pW < 0) pW = 0;
+    if (pH < 0) pH = 0;
+}
+
+void VisionEngine::SetArtToPixelMapping(double aLeft, double aTop, double aRight, double aBottom)
+{
+    artMapping.artLeft   = aLeft;
+    artMapping.artTop    = aTop;
+    artMapping.artRight  = aRight;
+    artMapping.artBottom = aBottom;
+    artMapping.pixelWidth  = imgWidth;
+    artMapping.pixelHeight = imgHeight;
+    artMapping.valid = (imgWidth > 0 && imgHeight > 0);
+    VE_LOG("SetArtToPixelMapping: art=[%.0f,%.0f,%.0f,%.0f] px=[%d,%d] valid=%d",
+           aLeft, aTop, aRight, aBottom, imgWidth, imgHeight, artMapping.valid);
+}
+
+VisionEngine::SurfaceHint VisionEngine::InferSurfaceType(int x, int y, int w, int h)
+{
+    SurfaceHint result;
+    result.type = SurfaceType::Unknown;
+    result.confidence = 0.0;
+    result.gradientAngle = 0.0;
+
+    if (!IsLoaded() || w < 5 || h < 5) return result;
+
+    // Clamp region to image bounds
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > imgWidth)  w = imgWidth - x;
+    if (y + h > imgHeight) h = imgHeight - y;
+    if (w < 5 || h < 5) return result;
+
+    // Step 1: Extract sub-region, downsample if large
+    int step = 1;
+    while (w / step > 200 || h / step > 200) step++;
+    int sw = w / step, sh = h / step;
+    if (sw < 5 || sh < 5) return result;
+
+    std::vector<uint8_t> subImage(sw * sh);
+    for (int sy = 0; sy < sh; sy++) {
+        for (int sx = 0; sx < sw; sx++) {
+            int srcX = x + sx * step;
+            int srcY = y + sy * step;
+            subImage[sy * sw + sx] = pixels[srcY * imgWidth + srcX];
+        }
+    }
+
+    // Step 2: Blur and compute gradient on sub-region
+    auto blurred = GaussianBlur(subImage, sw, sh, 1.5);
+    Gradient grad = ComputeGradient(blurred, sw, sh);
+
+    // Step 3: Find magnitude threshold (5% of max) to ignore noise
+    double maxMag = 0;
+    for (int i = 0; i < sw * sh; i++) {
+        if (grad.magnitude[i] > maxMag) maxMag = grad.magnitude[i];
+    }
+    double magThresh = maxMag * 0.05;
+    if (maxMag < 1.0) {
+        // No significant gradients — flat region
+        result.type = SurfaceType::Flat;
+        result.confidence = 0.9;
+        return result;
+    }
+
+    // Step 4: Build gradient direction histogram (36 bins, 10 degrees each)
+    const int NBINS = 36;
+    double histogram[NBINS] = {};
+    double totalWeight = 0;
+    int pixelsAboveThresh = 0;
+
+    for (int i = 0; i < sw * sh; i++) {
+        if (grad.magnitude[i] < magThresh) continue;
+        pixelsAboveThresh++;
+        double angle = grad.direction[i];  // radians, -pi to pi
+        if (angle < 0) angle += M_PI * 2;  // normalize to 0..2pi
+        int bin = (int)(angle / (M_PI * 2) * NBINS);
+        if (bin >= NBINS) bin = NBINS - 1;
+        histogram[bin] += grad.magnitude[i];
+        totalWeight += grad.magnitude[i];
+    }
+
+    double activeRatio = (double)pixelsAboveThresh / (sw * sh);
+
+    // Step 5: If very few active pixels, it's flat
+    if (activeRatio < 0.15) {
+        result.type = SurfaceType::Flat;
+        result.confidence = 0.7 + 0.3 * (1.0 - activeRatio / 0.15);
+        return result;
+    }
+
+    // Step 6: Find peaks and classify histogram shape
+    // Find the strongest bin
+    int peakBin = 0;
+    double peakVal = 0;
+    for (int b = 0; b < NBINS; b++) {
+        if (histogram[b] > peakVal) { peakVal = histogram[b]; peakBin = b; }
+    }
+
+    // Weight in peak bin + neighbors (wrapped)
+    double peakWeight = histogram[peakBin]
+                      + histogram[(peakBin + 1) % NBINS]
+                      + histogram[(peakBin + NBINS - 1) % NBINS];
+    double peakRatio = (totalWeight > 0) ? peakWeight / totalWeight : 0;
+
+    // Dominant gradient angle from peak bin
+    result.gradientAngle = (peakBin + 0.5) * (M_PI * 2 / NBINS);
+
+    // Check for cylindrical: one strong directional peak
+    if (peakRatio > 0.50) {
+        result.type = SurfaceType::Cylindrical;
+        result.confidence = 0.5 + 0.5 * (peakRatio - 0.50) / 0.50;
+        if (result.confidence > 1.0) result.confidence = 1.0;
+        return result;
+    }
+
+    // Check for saddle: two peaks ~90 degrees apart
+    // Find second peak at least 5 bins (50 degrees) away from first
+    int peak2Bin = -1;
+    double peak2Val = 0;
+    for (int b = 0; b < NBINS; b++) {
+        int dist = abs(b - peakBin);
+        if (dist > NBINS / 2) dist = NBINS - dist;
+        if (dist < 5) continue;  // too close to first peak
+        if (histogram[b] > peak2Val) { peak2Val = histogram[b]; peak2Bin = b; }
+    }
+
+    if (peak2Bin >= 0) {
+        int angularDist = abs(peak2Bin - peakBin);
+        if (angularDist > NBINS / 2) angularDist = NBINS - angularDist;
+        double degreesDist = angularDist * (360.0 / NBINS);
+
+        double peak2Weight = histogram[peak2Bin]
+                           + histogram[(peak2Bin + 1) % NBINS]
+                           + histogram[(peak2Bin + NBINS - 1) % NBINS];
+        double peak2Ratio = (totalWeight > 0) ? peak2Weight / totalWeight : 0;
+
+        // Saddle: two peaks 70-110 degrees apart, each > 15% weight
+        if (degreesDist >= 70 && degreesDist <= 110 && peakRatio > 0.15 && peak2Ratio > 0.15) {
+            result.type = SurfaceType::Saddle;
+            result.confidence = 0.5 + 0.3 * fmin(peakRatio, peak2Ratio) / 0.25;
+            if (result.confidence > 1.0) result.confidence = 1.0;
+            return result;
+        }
+    }
+
+    // Step 7: Broad histogram — convex or concave. Distinguish via gradient divergence.
+    // Divergence = d(Gx)/dx + d(Gy)/dy. Positive = radiating out (convex), negative = converging (concave).
+    // Compute Gx and Gy components from magnitude + direction
+    std::vector<double> gx(sw * sh, 0), gy(sw * sh, 0);
+    for (int i = 0; i < sw * sh; i++) {
+        gx[i] = grad.magnitude[i] * cos(grad.direction[i]);
+        gy[i] = grad.magnitude[i] * sin(grad.direction[i]);
+    }
+
+    double totalDiv = 0;
+    int divCount = 0;
+    for (int py = 1; py < sh - 1; py++) {
+        for (int px = 1; px < sw - 1; px++) {
+            int idx = py * sw + px;
+            if (grad.magnitude[idx] < magThresh) continue;
+            double dGxdx = (gx[idx + 1] - gx[idx - 1]) * 0.5;
+            double dGydy = (gy[idx + sw] - gy[idx - sw]) * 0.5;
+            totalDiv += dGxdx + dGydy;
+            divCount++;
+        }
+    }
+
+    double avgDiv = (divCount > 0) ? totalDiv / divCount : 0;
+
+    if (avgDiv > 0.5) {
+        result.type = SurfaceType::Convex;
+        result.confidence = 0.4 + 0.4 * fmin(avgDiv / 3.0, 1.0);
+    } else if (avgDiv < -0.5) {
+        result.type = SurfaceType::Concave;
+        result.confidence = 0.4 + 0.4 * fmin(-avgDiv / 3.0, 1.0);
+    } else {
+        // Ambiguous — broad histogram with near-zero divergence
+        // Default to flat with low confidence
+        result.type = SurfaceType::Flat;
+        result.confidence = 0.3;
+    }
+
+    if (result.confidence > 1.0) result.confidence = 1.0;
+    VE_LOG("InferSurfaceType: region=[%d,%d,%dx%d] type=%d conf=%.2f angle=%.1f°",
+           x, y, w, h, (int)result.type, result.confidence,
+           result.gradientAngle * 180.0 / M_PI);
+    return result;
+}

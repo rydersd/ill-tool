@@ -289,6 +289,7 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
 {
     BOOL checked = (sender.state == NSControlStateValueOn);
     fprintf(stderr, "[IllTool Panel] Add to Selection: %s\n", checked ? "ON" : "OFF");
+    BridgeSetAddToSelection((bool)checked);
 }
 
 - (void)onThresholdChanged:(NSSlider *)sender

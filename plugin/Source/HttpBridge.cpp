@@ -324,6 +324,49 @@ void BridgeSetSmartThreshold(double value) { gSmartThreshold.store(value); }
 double BridgeGetSmartThreshold()           { return gSmartThreshold.load(); }
 
 //----------------------------------------------------------------------------------------
+//  Curve tension (Gap 2 — controls bezier handle length in ReclassifyAs)
+//----------------------------------------------------------------------------------------
+
+static std::atomic<double> gTension{50.0};  // 0-100, default midpoint
+
+void BridgeSetTension(double value) { gTension.store(value); }
+double BridgeGetTension()           { return gTension.load(); }
+
+//----------------------------------------------------------------------------------------
+//  Add to Selection toggle (Gap 4 — shift-select mode for polygon lasso)
+//----------------------------------------------------------------------------------------
+
+static std::atomic<bool> gAddToSelection{false};
+
+void BridgeSetAddToSelection(bool enabled) { gAddToSelection.store(enabled); }
+bool BridgeGetAddToSelection()             { return gAddToSelection.load(); }
+
+//----------------------------------------------------------------------------------------
+//  Select Small request (Gap 3 — select paths with arc length below threshold)
+//----------------------------------------------------------------------------------------
+
+static std::atomic<bool>   gSelectSmallRequested{false};
+static std::atomic<double> gSelectSmallThreshold{10.0};
+
+void BridgeRequestSelectSmall(double threshold) {
+    gSelectSmallThreshold.store(threshold);
+    gSelectSmallRequested.store(true);
+}
+bool   BridgeIsSelectSmallRequested()  { return gSelectSmallRequested.load(); }
+double BridgeGetSelectSmallThreshold() { return gSelectSmallThreshold.load(); }
+void   BridgeClearSelectSmallRequest() { gSelectSmallRequested.store(false); }
+
+//----------------------------------------------------------------------------------------
+//  Shape undo request (Gap 6 — undo ReclassifyAs / SimplifySelection)
+//----------------------------------------------------------------------------------------
+
+static std::atomic<bool> gUndoShapeRequested{false};
+
+void BridgeRequestUndoShape()       { gUndoShapeRequested.store(true); }
+bool BridgeIsUndoShapeRequested()   { return gUndoShapeRequested.load(); }
+void BridgeClearUndoShapeRequest()  { gUndoShapeRequested.store(false); }
+
+//----------------------------------------------------------------------------------------
 //  SSE event emitter
 //----------------------------------------------------------------------------------------
 
@@ -1134,6 +1177,100 @@ bool StartHttpBridge(int port)
         catch (const json::exception& e) {
             json resp;
             resp["ok"]    = false;
+            resp["error"] = e.what();
+            res.status = 400;
+            res.set_content(resp.dump(), "application/json");
+        }
+    });
+
+    //------------------------------------------------------------------------------------
+    //  POST /vision/set-mapping — set artwork-to-pixel coordinate mapping
+    //------------------------------------------------------------------------------------
+    gServer->Post("/vision/set-mapping", [](const httplib::Request& req, httplib::Response& res) {
+        AddCorsHeaders(res);
+        try {
+            json body = json::parse(req.body);
+            double artLeft   = body.value("art_left", 0.0);
+            double artTop    = body.value("art_top", 0.0);
+            double artRight  = body.value("art_right", 0.0);
+            double artBottom = body.value("art_bottom", 0.0);
+
+            VisionEngine::Instance().SetArtToPixelMapping(artLeft, artTop, artRight, artBottom);
+
+            json resp;
+            resp["ok"] = true;
+            resp["mapping_valid"] = VisionEngine::Instance().GetMapping().valid;
+            res.set_content(resp.dump(), "application/json");
+        }
+        catch (const json::exception& e) {
+            json resp;
+            resp["ok"]    = false;
+            resp["error"] = e.what();
+            res.status = 400;
+            res.set_content(resp.dump(), "application/json");
+        }
+    });
+
+    //------------------------------------------------------------------------------------
+    //  GET /vision/surface-hint — get last computed surface hint
+    //------------------------------------------------------------------------------------
+    gServer->Get("/vision/surface-hint", [](const httplib::Request& /*req*/, httplib::Response& res) {
+        AddCorsHeaders(res);
+        extern IllToolPlugin* gPlugin;
+        json resp;
+        resp["ok"] = true;
+        if (gPlugin) {
+            const char* typeNames[] = {"flat", "convex", "concave", "saddle", "cylindrical"};
+            int st = gPlugin->fLastSurfaceType;
+            resp["surface_type"] = (st >= 0 && st <= 4) ? typeNames[st] : "unknown";
+            resp["surface_type_id"] = st;
+            resp["confidence"]      = gPlugin->fLastSurfaceConfidence;
+            resp["gradient_angle"]  = gPlugin->fLastGradientAngle;
+        } else {
+            resp["surface_type"] = "unknown";
+            resp["surface_type_id"] = -1;
+            resp["confidence"] = 0.0;
+            resp["gradient_angle"] = 0.0;
+        }
+        res.set_content(resp.dump(), "application/json");
+    });
+
+    //------------------------------------------------------------------------------------
+    //  POST /vision/infer-surface — infer surface type for a region
+    //------------------------------------------------------------------------------------
+    gServer->Post("/vision/infer-surface", [](const httplib::Request& req, httplib::Response& res) {
+        AddCorsHeaders(res);
+        VisionEngine& ve = VisionEngine::Instance();
+        if (!ve.IsLoaded()) {
+            json resp;
+            resp["ok"] = false;
+            resp["error"] = "No image loaded";
+            res.status = 400;
+            res.set_content(resp.dump(), "application/json");
+            return;
+        }
+        try {
+            json body = json::parse(req.body);
+            int px = body.value("x", 0);
+            int py = body.value("y", 0);
+            int pw = body.value("w", 100);
+            int ph = body.value("h", 100);
+
+            auto hint = ve.InferSurfaceType(px, py, pw, ph);
+
+            const char* typeNames[] = {"flat", "convex", "concave", "saddle", "cylindrical"};
+            int st = (int)hint.type;
+            json resp;
+            resp["ok"] = true;
+            resp["surface_type"] = (st >= 0 && st <= 4) ? typeNames[st] : "unknown";
+            resp["surface_type_id"] = st;
+            resp["confidence"] = hint.confidence;
+            resp["gradient_angle"] = hint.gradientAngle;
+            res.set_content(resp.dump(), "application/json");
+        }
+        catch (const json::exception& e) {
+            json resp;
+            resp["ok"] = false;
             resp["error"] = e.what();
             res.status = 400;
             res.set_content(resp.dump(), "application/json");

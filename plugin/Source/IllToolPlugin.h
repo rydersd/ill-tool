@@ -207,6 +207,23 @@ private:
     MergeSnapshot fMergeSnapshot;
 
 public:
+    /** Snapshot of paths before shape operations (ReclassifyAs, SimplifySelection), for undo. */
+    struct ShapeSnapshot {
+        struct PathData {
+            AIArtHandle            art;        // the art handle that was modified
+            std::vector<AIPathSegment> segments;
+            AIBoolean              closed;
+        };
+        std::vector<PathData>  originals;
+        bool                   valid = false;
+    };
+
+    ShapeSnapshot fShapeSnapshot;
+
+    /** Save a snapshot of all selected paths before a destructive shape operation. */
+    void SnapshotSelectedPaths();
+
+public:
     /** Cached selection count — updated from Notify (where SDK calls work).
         Public so PluginGetSelectedAnchorCount() can read it. */
     int                     fLastKnownSelectionCount = 0;
@@ -299,8 +316,21 @@ public:
         @param tolerance  Drawing-space distance tolerance for point removal. */
     void SimplifySelection(double tolerance);
 
+    /** Select all paths with total arc length below the given threshold.
+        @param threshold  Maximum arc length in points to be selected. */
+    void SelectSmall(double threshold);
+
+    /** Undo the last shape operation (ReclassifyAs or SimplifySelection).
+        Restores paths from the shape snapshot stack. */
+    void UndoShapeOperation();
+
     /** Last detected shape name — read by the Cleanup panel to update the "Detected:" label. */
     const char* fLastDetectedShape = "---";
+
+    /** Last inferred surface type — stored for Stage 12 shading and LearningEngine. */
+    int         fLastSurfaceType = -1;        // VisionEngine::SurfaceType as int (-1 = Unknown)
+    double      fLastSurfaceConfidence = 0.0;
+    double      fLastGradientAngle = 0.0;
 
     /** Enter isolation mode for the parent group(s) of selected paths.
         Called after ExecutePolygonSelection selects segments. */

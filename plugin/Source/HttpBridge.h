@@ -220,4 +220,53 @@ void BridgeSetSmartThreshold(double value);
 /** Get the current smart select similarity threshold (0-100). Thread-safe. */
 double BridgeGetSmartThreshold();
 
+//----------------------------------------------------------------------------------------
+//  Tension value (slider 0-100, used by ReclassifyAs for bezier handle length)
+//----------------------------------------------------------------------------------------
+
+/** Set the curve tension value (0-100). Thread-safe. */
+void BridgeSetTension(double value);
+
+/** Get the current curve tension value (0-100). Thread-safe. */
+double BridgeGetTension();
+
+//----------------------------------------------------------------------------------------
+//  Add to Selection toggle (shift-select mode for polygon lasso)
+//----------------------------------------------------------------------------------------
+
+/** Set the add-to-selection mode. Thread-safe. */
+void BridgeSetAddToSelection(bool enabled);
+
+/** Get whether add-to-selection mode is active. Thread-safe. */
+bool BridgeGetAddToSelection();
+
+//----------------------------------------------------------------------------------------
+//  Select Small request (select paths with arc length below threshold)
+//----------------------------------------------------------------------------------------
+
+/** Signal the plugin to select all paths with arc length below threshold. Thread-safe. */
+void BridgeRequestSelectSmall(double threshold);
+
+/** Check whether a select-small request is pending. Thread-safe. */
+bool BridgeIsSelectSmallRequested();
+
+/** Get the threshold for the pending select-small request. */
+double BridgeGetSelectSmallThreshold();
+
+/** Clear the select-small request flag after handling it. Thread-safe. */
+void BridgeClearSelectSmallRequest();
+
+//----------------------------------------------------------------------------------------
+//  Shape undo request (restore paths modified by ReclassifyAs or SimplifySelection)
+//----------------------------------------------------------------------------------------
+
+/** Signal the plugin to undo the last shape operation. Thread-safe. */
+void BridgeRequestUndoShape();
+
+/** Check whether a shape-undo request is pending. Thread-safe. */
+bool BridgeIsUndoShapeRequested();
+
+/** Clear the shape-undo request flag after handling it. Thread-safe. */
+void BridgeClearUndoShapeRequest();
+
 #endif // __HTTPBRIDGE_H__

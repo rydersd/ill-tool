@@ -729,6 +729,24 @@ void IllToolPlugin::ProcessOperationQueue()
         InvalidateFullView();
     }
 
+    // Gap 3: Select Small — select paths with arc length below threshold
+    if (BridgeIsSelectSmallRequested()) {
+        double threshold = BridgeGetSelectSmallThreshold();
+        BridgeClearSelectSmallRequest();
+        fprintf(stderr, "[IllTool Timer] Select Small (threshold=%.1f) — executing in SDK context\n",
+                threshold);
+        SelectSmall(threshold);
+        InvalidateFullView();
+    }
+
+    // Gap 6: Undo shape operation (ReclassifyAs / SimplifySelection)
+    if (BridgeIsUndoShapeRequested()) {
+        BridgeClearUndoShapeRequest();
+        fprintf(stderr, "[IllTool Timer] Undo Shape — executing in SDK context\n");
+        UndoShapeOperation();
+        InvalidateFullView();
+    }
+
     // Stage 8: Enforce locked isolation mode (timer-based safety net).
     // If the user is in working mode but managed to exit isolation (e.g., double-click
     // outside, or the notifier missed it), re-enter isolation immediately.

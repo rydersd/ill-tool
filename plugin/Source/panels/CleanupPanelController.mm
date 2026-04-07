@@ -388,6 +388,7 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
     int value = (int)sender.integerValue;
     self.tensionValueLabel.stringValue = [NSString stringWithFormat:@"%d", value];
     fprintf(stderr, "[IllTool Panel] Tension: %d\n", value);
+    BridgeSetTension((double)value);
 }
 
 - (void)onSimplificationChanged:(NSSlider *)sender
@@ -427,7 +428,8 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
 - (void)onSelectSmall:(id)sender
 {
     double threshold = self.selectSmallField.doubleValue;
-    fprintf(stderr, "[IllTool Panel] Select Small (threshold: %.1f pt)\n", threshold);
+    fprintf(stderr, "[IllTool Panel] Select Small (threshold: %.1f pt) — queuing request\n", threshold);
+    BridgeRequestSelectSmall(threshold);
 }
 
 //----------------------------------------------------------------------------------------

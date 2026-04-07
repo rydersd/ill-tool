@@ -149,10 +149,30 @@ void IllToolPlugin::ExecutePolygonSelection()
                 (int)result, (int)numMatches);
         if (result != kNoErr || numMatches == 0) {
             fprintf(stderr, "[IllTool DEBUG] ExecutePolygonSelection: no path art found — aborting\n");
+            if (matches) sAIMdMemory->MdMemoryDisposeHandle((AIMdMemoryHandle)matches);
             return;
         }
 
         fprintf(stderr, "[IllTool] Testing %d paths against polygon\n", (int)numMatches);
+
+        // Gap 4: When Add to Selection is OFF, deselect all segments first
+        bool addToSelection = BridgeGetAddToSelection();
+        if (!addToSelection) {
+            for (ai::int32 d = 0; d < numMatches; d++) {
+                AIArtHandle dArt = (*matches)[d];
+                ai::int32 dAttrs = 0;
+                sAIArt->GetArtUserAttr(dArt, kArtLocked | kArtHidden, &dAttrs);
+                if (dAttrs & (kArtLocked | kArtHidden)) continue;
+                ai::int16 dSc = 0;
+                sAIPath->GetPathSegmentCount(dArt, &dSc);
+                for (ai::int16 ds = 0; ds < dSc; ds++) {
+                    sAIPath->SetPathSegmentSelected(dArt, ds, kSegmentNotSelected);
+                }
+            }
+            fprintf(stderr, "[IllTool] Deselected all segments (Add to Selection: OFF)\n");
+        } else {
+            fprintf(stderr, "[IllTool] Keeping existing selection (Add to Selection: ON)\n");
+        }
 
         int selectedCount = 0;
         int skippedLocked = 0;
