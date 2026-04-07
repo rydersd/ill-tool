@@ -260,6 +260,18 @@ void BridgeClearSelectSmallRequest();
 //  Shape undo request (restore paths modified by ReclassifyAs or SimplifySelection)
 //----------------------------------------------------------------------------------------
 
+/** Store surface hint result from ClassifySelection. Thread-safe. */
+void BridgeSetSurfaceHint(int surfaceType, double confidence, double gradientAngle);
+
+/** Get the last stored surface type (-1 = unknown, 0-4 per SurfaceType enum). Thread-safe. */
+int BridgeGetSurfaceType();
+
+/** Get the last stored surface confidence. Thread-safe. */
+double BridgeGetSurfaceConfidence();
+
+/** Get the last stored gradient angle. Thread-safe. */
+double BridgeGetGradientAngle();
+
 /** Signal the plugin to undo the last shape operation. Thread-safe. */
 void BridgeRequestUndoShape();
 

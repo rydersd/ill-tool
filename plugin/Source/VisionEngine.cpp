@@ -1367,8 +1367,10 @@ VisionEngine::SurfaceHint VisionEngine::InferSurfaceType(int x, int y, int w, in
         return result;
     }
 
-    // Step 4: Build gradient direction histogram (36 bins, 10 degrees each)
-    const int NBINS = 36;
+    // Step 4: Build AXIAL gradient direction histogram (18 bins, 10 degrees each, 0..180°)
+    // Gradients are axial — edges on both sides of a ridge point in opposite directions.
+    // Folding to 0..π merges them into the same bin (Codex P1 fix).
+    const int NBINS = 18;
     double histogram[NBINS] = {};
     double totalWeight = 0;
     int pixelsAboveThresh = 0;
@@ -1377,8 +1379,10 @@ VisionEngine::SurfaceHint VisionEngine::InferSurfaceType(int x, int y, int w, in
         if (grad.magnitude[i] < magThresh) continue;
         pixelsAboveThresh++;
         double angle = grad.direction[i];  // radians, -pi to pi
-        if (angle < 0) angle += M_PI * 2;  // normalize to 0..2pi
-        int bin = (int)(angle / (M_PI * 2) * NBINS);
+        // Fold to 0..pi (axial: direction and direction+pi are the same axis)
+        if (angle < 0) angle += M_PI;
+        if (angle >= M_PI) angle -= M_PI;
+        int bin = (int)(angle / M_PI * NBINS);
         if (bin >= NBINS) bin = NBINS - 1;
         histogram[bin] += grad.magnitude[i];
         totalWeight += grad.magnitude[i];
@@ -1394,7 +1398,6 @@ VisionEngine::SurfaceHint VisionEngine::InferSurfaceType(int x, int y, int w, in
     }
 
     // Step 6: Find peaks and classify histogram shape
-    // Find the strongest bin
     int peakBin = 0;
     double peakVal = 0;
     for (int b = 0; b < NBINS; b++) {
@@ -1407,10 +1410,10 @@ VisionEngine::SurfaceHint VisionEngine::InferSurfaceType(int x, int y, int w, in
                       + histogram[(peakBin + NBINS - 1) % NBINS];
     double peakRatio = (totalWeight > 0) ? peakWeight / totalWeight : 0;
 
-    // Dominant gradient angle from peak bin
-    result.gradientAngle = (peakBin + 0.5) * (M_PI * 2 / NBINS);
+    // Dominant gradient angle from peak bin (in axial range 0..pi)
+    result.gradientAngle = (peakBin + 0.5) * (M_PI / NBINS);
 
-    // Check for cylindrical: one strong directional peak
+    // Check for cylindrical: one strong directional peak in the axial histogram
     if (peakRatio > 0.50) {
         result.type = SurfaceType::Cylindrical;
         result.confidence = 0.5 + 0.5 * (peakRatio - 0.50) / 0.50;
@@ -1418,29 +1421,29 @@ VisionEngine::SurfaceHint VisionEngine::InferSurfaceType(int x, int y, int w, in
         return result;
     }
 
-    // Check for saddle: two peaks ~90 degrees apart
-    // Find second peak at least 5 bins (50 degrees) away from first
+    // Check for saddle: two peaks ~45 degrees apart in axial space (= 90° in full space)
+    // In 18-bin axial histogram, 45° = 4.5 bins
     int peak2Bin = -1;
     double peak2Val = 0;
     for (int b = 0; b < NBINS; b++) {
         int dist = abs(b - peakBin);
         if (dist > NBINS / 2) dist = NBINS - dist;
-        if (dist < 5) continue;  // too close to first peak
+        if (dist < 3) continue;  // too close to first peak
         if (histogram[b] > peak2Val) { peak2Val = histogram[b]; peak2Bin = b; }
     }
 
     if (peak2Bin >= 0) {
         int angularDist = abs(peak2Bin - peakBin);
         if (angularDist > NBINS / 2) angularDist = NBINS - angularDist;
-        double degreesDist = angularDist * (360.0 / NBINS);
+        double degreesDist = angularDist * (180.0 / NBINS);  // axial degrees
 
         double peak2Weight = histogram[peak2Bin]
                            + histogram[(peak2Bin + 1) % NBINS]
                            + histogram[(peak2Bin + NBINS - 1) % NBINS];
         double peak2Ratio = (totalWeight > 0) ? peak2Weight / totalWeight : 0;
 
-        // Saddle: two peaks 70-110 degrees apart, each > 15% weight
-        if (degreesDist >= 70 && degreesDist <= 110 && peakRatio > 0.15 && peak2Ratio > 0.15) {
+        // Saddle: two axial peaks 35-55° apart (= 70-110° in full space), each > 15% weight
+        if (degreesDist >= 35 && degreesDist <= 55 && peakRatio > 0.15 && peak2Ratio > 0.15) {
             result.type = SurfaceType::Saddle;
             result.confidence = 0.5 + 0.3 * fmin(peakRatio, peak2Ratio) / 0.25;
             if (result.confidence > 1.0) result.confidence = 1.0;
@@ -1448,16 +1451,18 @@ VisionEngine::SurfaceHint VisionEngine::InferSurfaceType(int x, int y, int w, in
         }
     }
 
-    // Step 7: Broad histogram — convex or concave. Distinguish via gradient divergence.
-    // Divergence = d(Gx)/dx + d(Gy)/dy. Positive = radiating out (convex), negative = converging (concave).
-    // Compute Gx and Gy components from magnitude + direction
+    // Step 7: Broad histogram — curved surface (convex or concave).
+    // Codex P1 fix: divergence sign is NOT reliable (flips with contrast polarity).
+    // Instead, use absolute divergence magnitude to detect curvature WITHOUT
+    // distinguishing convex from concave. Report as Convex with a note that
+    // the Python MCP pipeline (DSINE normals) can refine this.
     std::vector<double> gx(sw * sh, 0), gy(sw * sh, 0);
     for (int i = 0; i < sw * sh; i++) {
         gx[i] = grad.magnitude[i] * cos(grad.direction[i]);
         gy[i] = grad.magnitude[i] * sin(grad.direction[i]);
     }
 
-    double totalDiv = 0;
+    double totalAbsDiv = 0;
     int divCount = 0;
     for (int py = 1; py < sh - 1; py++) {
         for (int px = 1; px < sw - 1; px++) {
@@ -1465,22 +1470,20 @@ VisionEngine::SurfaceHint VisionEngine::InferSurfaceType(int x, int y, int w, in
             if (grad.magnitude[idx] < magThresh) continue;
             double dGxdx = (gx[idx + 1] - gx[idx - 1]) * 0.5;
             double dGydy = (gy[idx + sw] - gy[idx - sw]) * 0.5;
-            totalDiv += dGxdx + dGydy;
+            totalAbsDiv += fabs(dGxdx + dGydy);
             divCount++;
         }
     }
 
-    double avgDiv = (divCount > 0) ? totalDiv / divCount : 0;
+    double avgAbsDiv = (divCount > 0) ? totalAbsDiv / divCount : 0;
 
-    if (avgDiv > 0.5) {
+    if (avgAbsDiv > 0.5) {
+        // Significant divergence = curved surface. Report as Convex (heuristic).
+        // Python MCP override can refine to Concave when DSINE data is available.
         result.type = SurfaceType::Convex;
-        result.confidence = 0.4 + 0.4 * fmin(avgDiv / 3.0, 1.0);
-    } else if (avgDiv < -0.5) {
-        result.type = SurfaceType::Concave;
-        result.confidence = 0.4 + 0.4 * fmin(-avgDiv / 3.0, 1.0);
+        result.confidence = 0.35 + 0.35 * fmin(avgAbsDiv / 3.0, 1.0);
     } else {
-        // Ambiguous — broad histogram with near-zero divergence
-        // Default to flat with low confidence
+        // Low divergence + broad histogram = ambiguous. Default flat, low confidence.
         result.type = SurfaceType::Flat;
         result.confidence = 0.3;
     }

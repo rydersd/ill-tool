@@ -360,6 +360,20 @@ void   BridgeClearSelectSmallRequest() { gSelectSmallRequested.store(false); }
 //  Shape undo request (Gap 6 — undo ReclassifyAs / SimplifySelection)
 //----------------------------------------------------------------------------------------
 
+// Surface hint (thread-safe storage for ClassifySelection results)
+static std::atomic<int>    gSurfaceType{-1};
+static std::atomic<double> gSurfaceConfidence{0.0};
+static std::atomic<double> gSurfaceGradientAngle{0.0};
+
+void BridgeSetSurfaceHint(int surfaceType, double confidence, double gradientAngle) {
+    gSurfaceType.store(surfaceType);
+    gSurfaceConfidence.store(confidence);
+    gSurfaceGradientAngle.store(gradientAngle);
+}
+int    BridgeGetSurfaceType()       { return gSurfaceType.load(); }
+double BridgeGetSurfaceConfidence() { return gSurfaceConfidence.load(); }
+double BridgeGetGradientAngle()     { return gSurfaceGradientAngle.load(); }
+
 static std::atomic<bool> gUndoShapeRequested{false};
 
 void BridgeRequestUndoShape()       { gUndoShapeRequested.store(true); }
@@ -1216,22 +1230,14 @@ bool StartHttpBridge(int port)
     //------------------------------------------------------------------------------------
     gServer->Get("/vision/surface-hint", [](const httplib::Request& /*req*/, httplib::Response& res) {
         AddCorsHeaders(res);
-        extern IllToolPlugin* gPlugin;
+        const char* typeNames[] = {"flat", "convex", "concave", "saddle", "cylindrical"};
+        int st = BridgeGetSurfaceType();
         json resp;
         resp["ok"] = true;
-        if (gPlugin) {
-            const char* typeNames[] = {"flat", "convex", "concave", "saddle", "cylindrical"};
-            int st = gPlugin->fLastSurfaceType;
-            resp["surface_type"] = (st >= 0 && st <= 4) ? typeNames[st] : "unknown";
-            resp["surface_type_id"] = st;
-            resp["confidence"]      = gPlugin->fLastSurfaceConfidence;
-            resp["gradient_angle"]  = gPlugin->fLastGradientAngle;
-        } else {
-            resp["surface_type"] = "unknown";
-            resp["surface_type_id"] = -1;
-            resp["confidence"] = 0.0;
-            resp["gradient_angle"] = 0.0;
-        }
+        resp["surface_type"] = (st >= 0 && st <= 4) ? typeNames[st] : "unknown";
+        resp["surface_type_id"] = st;
+        resp["confidence"]      = BridgeGetSurfaceConfidence();
+        resp["gradient_angle"]  = BridgeGetGradientAngle();
         res.set_content(resp.dump(), "application/json");
     });
 

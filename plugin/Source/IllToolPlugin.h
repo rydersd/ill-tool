@@ -327,10 +327,7 @@ public:
     /** Last detected shape name — read by the Cleanup panel to update the "Detected:" label. */
     const char* fLastDetectedShape = "---";
 
-    /** Last inferred surface type — stored for Stage 12 shading and LearningEngine. */
-    int         fLastSurfaceType = -1;        // VisionEngine::SurfaceType as int (-1 = Unknown)
-    double      fLastSurfaceConfidence = 0.0;
-    double      fLastGradientAngle = 0.0;
+    // Surface hint now stored in thread-safe bridge atomics (BridgeSet/GetSurfaceHint)
 
     /** Enter isolation mode for the parent group(s) of selected paths.
         Called after ExecutePolygonSelection selects segments. */

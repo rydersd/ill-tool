@@ -234,7 +234,9 @@ void IllToolPlugin::ClassifySelection()
             }
             if (suggested != BridgeShapeType::Freeform) {
                 for (auto& c : cands) {
-                    if (c.type == suggested) {
+                    // Codex P2 fix: only boost if geometric candidate is already plausible (>0.2)
+                    // Prevents weak scores getting pushed past strong geometric matches
+                    if (c.type == suggested && c.conf > 0.2) {
                         c.conf += 0.15 * surfaceHint.confidence;
                         if (c.conf > 1.0) c.conf = 1.0;
                     }
@@ -249,13 +251,11 @@ void IllToolPlugin::ClassifySelection()
         for (auto& c : cands) { if (c.conf > bestConf) { bestConf = c.conf; bestType = c.type; } }
 
         fLastDetectedShape = kShapeNames[(int)bestType];
-        fLastSurfaceType = (int)surfaceHint.type;
-        fLastSurfaceConfidence = surfaceHint.confidence;
-        fLastGradientAngle = surfaceHint.gradientAngle;
+        BridgeSetSurfaceHint((int)surfaceHint.type, surfaceHint.confidence, surfaceHint.gradientAngle);
         fprintf(stderr, "[IllTool Timer] ClassifySelection: detected=%s (conf=%.2f) "
                 "[line=%.2f arc=%.2f L=%.2f rect=%.2f S=%.2f ell=%.2f] surface=%d\n",
                 fLastDetectedShape, bestConf, lineConf, arcConf, lConf, rectConf, sConf, ellConf,
-                fLastSurfaceType);
+                (int)surfaceHint.type);
     }
     catch (ai::Error& ex) { fprintf(stderr, "[IllTool Timer] ClassifySelection error: %d\n", (int)ex); fLastDetectedShape = "ERROR"; }
     catch (...) { fprintf(stderr, "[IllTool Timer] ClassifySelection unknown error\n"); fLastDetectedShape = "ERROR"; }
@@ -522,16 +522,6 @@ void IllToolPlugin::SimplifySelection(double tolerance)
 //  SelectSmall — select all paths with arc length below threshold
 //========================================================================================
 
-// Approximate bezier segment arc length using control polygon (Issue #5).
-// Sum of chord distances along control polygon: P0→P1→P2→P3 is a simple upper bound;
-// average of chord (P0→P3) and control polygon gives a reasonable estimate.
-static double BezierSegmentLength(AIRealPoint p0, AIRealPoint out0, AIRealPoint in1, AIRealPoint p1)
-{
-    double chord = Dist2D(p0, p1);
-    double poly = Dist2D(p0, out0) + Dist2D(out0, in1) + Dist2D(in1, p1);
-    return (chord + poly) * 0.5;  // average of chord and control polygon
-}
-
 void IllToolPlugin::SelectSmall(double threshold)
 {
     try {
@@ -545,7 +535,7 @@ void IllToolPlugin::SelectSmall(double threshold)
             return;
         }
 
-        // Issue #4: Deselect all paths first so SelectSmall replaces the selection
+        // Deselect all paths first so SelectSmall replaces the selection
         for (ai::int32 d = 0; d < numMatches; d++) {
             AIArtHandle dArt = (*matches)[d];
             sAIArt->SetArtUserAttr(dArt, kArtSelected, 0);
@@ -562,19 +552,34 @@ void IllToolPlugin::SelectSmall(double threshold)
             sAIPath->GetPathSegmentCount(art, &segCount);
             if (segCount < 2) continue;
 
-            std::vector<AIPathSegment> segs(segCount);
-            result = sAIPath->GetPathSegments(art, 0, segCount, segs.data());
-            if (result != kNoErr) continue;
-
-            // Approximate arc length using bezier control polygon average (Issue #5)
-            double totalLen = 0;
-            for (ai::int16 s = 1; s < segCount; s++) {
-                totalLen += BezierSegmentLength(segs[s-1].p, segs[s-1].out, segs[s].in, segs[s].p);
-            }
             AIBoolean closed = false;
             sAIPath->GetPathClosed(art, &closed);
-            if (closed && segCount >= 2) {
-                totalLen += BezierSegmentLength(segs[segCount-1].p, segs[segCount-1].out, segs[0].in, segs[0].p);
+
+            // Codex P2 fix: Use MeasureSegments for accurate bezier arc length
+            // (same pattern as IllToolSmartSelect.cpp ComputeSignature)
+            ai::int16 numPieces = closed ? segCount : (ai::int16)(segCount - 1);
+            double totalLen = 0;
+            if (numPieces > 0) {
+                std::vector<AIReal> pieceLengths(numPieces);
+                std::vector<AIReal> accumLengths(numPieces);
+                ASErr measErr = sAIPath->MeasureSegments(art, 0, numPieces,
+                                                         pieceLengths.data(), accumLengths.data());
+                if (measErr == kNoErr) {
+                    totalLen = (double)accumLengths[numPieces - 1]
+                             + (double)pieceLengths[numPieces - 1];
+                }
+            }
+
+            // Fallback: sum chord distances if MeasureSegments yielded zero
+            if (totalLen <= 0.0) {
+                std::vector<AIPathSegment> segs(segCount);
+                sAIPath->GetPathSegments(art, 0, segCount, segs.data());
+                for (ai::int16 s = 1; s < segCount; s++) {
+                    totalLen += Dist2D(segs[s-1].p, segs[s].p);
+                }
+                if (closed && segCount >= 2) {
+                    totalLen += Dist2D(segs[segCount-1].p, segs[0].p);
+                }
             }
 
             if (totalLen < threshold) {
