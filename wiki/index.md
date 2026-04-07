@@ -1,7 +1,8 @@
 # Wiki Index
-> Auto-maintained. Last updated: 2026-04-07. Articles: 37. Words: ~78K.
+> Auto-maintained. Last updated: 2026-04-07. Articles: 38. Words: ~82K.
 
 ## Recent
+- 2026-04-07: [CEP → C++ Port Audit](concepts/cep-to-cpp-port-audit.md) — Function-by-function audit: 7 correct, 10 partial, 2 wrong, 7 missing. AverageSelection completely wrong (centroid collapse vs PCA+classify+refit). Tags: audit, port, cep, c++
 - 2026-04-07: [Adversarial Review Round 3](concepts/plugin-adversarial-review-round3.md) — 40 issues from 5 specialist reviewers (thread, math, memory, integration, MRC). All P0s fixed. Tags: review, thread-safety, adversarial
 - 2026-04-07: [Perspective Grid Foundation](concepts/perspective-grid-foundation.md) — Draggable-line perspective grid, VPs derived from extensions, annotator overlay. Tags: perspective, grid, annotator, tool
 - 2026-04-07: [Blend Tool Implementation](concepts/blend-tool-implementation.md) — Production blend: arc-length resampling, easing curve editor, re-editable groups, AIDictionarySuite persistence. Tags: blend, easing, tool
