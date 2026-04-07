@@ -341,6 +341,18 @@ bool BridgeGetPerspectiveLocked() {
     return gPerspLocked;
 }
 
+static bool gPerspVisible = true;
+
+void BridgeSetPerspectiveVisible(bool visible) {
+    std::lock_guard<std::mutex> lock(gPerspMutex);
+    gPerspVisible = visible;
+}
+
+bool BridgeGetPerspectiveVisible() {
+    std::lock_guard<std::mutex> lock(gPerspMutex);
+    return gPerspVisible;
+}
+
 //----------------------------------------------------------------------------------------
 //  Blend state (Stage 11)
 //----------------------------------------------------------------------------------------
@@ -361,6 +373,54 @@ bool BridgeHasBlendPathA()             { return gBlendHasPathA.load(); }
 bool BridgeHasBlendPathB()             { return gBlendHasPathB.load(); }
 void BridgeSetBlendPathASet(bool set)  { gBlendHasPathA.store(set); }
 void BridgeSetBlendPathBSet(bool set)  { gBlendHasPathB.store(set); }
+
+//----------------------------------------------------------------------------------------
+//  Shading state (Stage 12) — continuous state, mutex-protected
+//----------------------------------------------------------------------------------------
+
+static std::atomic<int> gShadingMode{0};  // 0=blend, 1=mesh
+
+static std::mutex gShadingColorMutex;
+static double gShadingHighR = 1.0, gShadingHighG = 1.0, gShadingHighB = 1.0;
+static double gShadingShadR = 0.0, gShadingShadG = 0.0, gShadingShadB = 0.0;
+
+static std::atomic<double> gShadingLightAngle{315.0};  // degrees, 0=right, CCW
+static std::atomic<double> gShadingIntensity{70.0};     // 0-100
+static std::atomic<int>    gShadingBlendSteps{7};       // 3-15
+static std::atomic<int>    gShadingMeshGrid{3};         // 2-6
+
+void BridgeSetShadingMode(int mode)       { gShadingMode.store(mode); }
+int  BridgeGetShadingMode()               { return gShadingMode.load(); }
+
+void BridgeSetShadingHighlight(double r, double g, double b) {
+    std::lock_guard<std::mutex> lock(gShadingColorMutex);
+    gShadingHighR = r; gShadingHighG = g; gShadingHighB = b;
+}
+void BridgeGetShadingHighlight(double& r, double& g, double& b) {
+    std::lock_guard<std::mutex> lock(gShadingColorMutex);
+    r = gShadingHighR; g = gShadingHighG; b = gShadingHighB;
+}
+
+void BridgeSetShadingShadow(double r, double g, double b) {
+    std::lock_guard<std::mutex> lock(gShadingColorMutex);
+    gShadingShadR = r; gShadingShadG = g; gShadingShadB = b;
+}
+void BridgeGetShadingShadow(double& r, double& g, double& b) {
+    std::lock_guard<std::mutex> lock(gShadingColorMutex);
+    r = gShadingShadR; g = gShadingShadG; b = gShadingShadB;
+}
+
+void BridgeSetShadingLightAngle(double angle) { gShadingLightAngle.store(angle); }
+double BridgeGetShadingLightAngle()           { return gShadingLightAngle.load(); }
+
+void BridgeSetShadingIntensity(double intensity) { gShadingIntensity.store(intensity); }
+double BridgeGetShadingIntensity()               { return gShadingIntensity.load(); }
+
+void BridgeSetShadingBlendSteps(int steps) { gShadingBlendSteps.store(steps); }
+int  BridgeGetShadingBlendSteps()          { return gShadingBlendSteps.load(); }
+
+void BridgeSetShadingMeshGrid(int size) { gShadingMeshGrid.store(size); }
+int  BridgeGetShadingMeshGrid()         { return gShadingMeshGrid.load(); }
 
 //----------------------------------------------------------------------------------------
 //  SSE event emitter
@@ -1439,6 +1499,176 @@ bool StartHttpBridge(int port)
         catch (const json::exception& e) {
             json resp;
             resp["ok"] = false;
+            resp["error"] = e.what();
+            res.status = 400;
+            res.set_content(resp.dump(), "application/json");
+        }
+    });
+
+    //------------------------------------------------------------------------------------
+    //  POST /shading/apply — apply shading to selected path
+    //------------------------------------------------------------------------------------
+    gServer->Post("/shading/apply", [](const httplib::Request& req, httplib::Response& res) {
+        AddCorsHeaders(res);
+        try {
+            json body = json::parse(req.body);
+            int mode = body.value("mode", BridgeGetShadingMode());
+
+            PluginOp op;
+            if (mode == 1) {
+                op.type = OpType::ShadingApplyMesh;
+            } else {
+                op.type = OpType::ShadingApplyBlend;
+            }
+            BridgeEnqueueOp(op);
+
+            json resp;
+            resp["ok"]   = true;
+            resp["mode"] = (mode == 1) ? "mesh" : "blend";
+            res.set_content(resp.dump(), "application/json");
+            fprintf(stderr, "[IllTool HTTP] POST /shading/apply mode=%s\n",
+                    (mode == 1) ? "mesh" : "blend");
+        }
+        catch (const json::exception& e) {
+            json resp;
+            resp["ok"]    = false;
+            resp["error"] = e.what();
+            res.status = 400;
+            res.set_content(resp.dump(), "application/json");
+        }
+    });
+
+    //------------------------------------------------------------------------------------
+    //  POST /shading/mode — set shading mode (0=blend, 1=mesh)
+    //------------------------------------------------------------------------------------
+    gServer->Post("/shading/mode", [](const httplib::Request& req, httplib::Response& res) {
+        AddCorsHeaders(res);
+        try {
+            json body = json::parse(req.body);
+            int mode = body.value("mode", 0);
+            BridgeSetShadingMode(mode);
+            json resp;
+            resp["ok"]   = true;
+            resp["mode"] = mode;
+            res.set_content(resp.dump(), "application/json");
+        }
+        catch (const json::exception& e) {
+            json resp;
+            resp["ok"]    = false;
+            resp["error"] = e.what();
+            res.status = 400;
+            res.set_content(resp.dump(), "application/json");
+        }
+    });
+
+    //------------------------------------------------------------------------------------
+    //  POST /shading/colors — set highlight and shadow colors
+    //------------------------------------------------------------------------------------
+    gServer->Post("/shading/colors", [](const httplib::Request& req, httplib::Response& res) {
+        AddCorsHeaders(res);
+        try {
+            json body = json::parse(req.body);
+            if (body.contains("highlight")) {
+                auto hl = body["highlight"];
+                double r = hl.value("r", 1.0);
+                double g = hl.value("g", 0.93);
+                double b = hl.value("b", 0.80);
+                BridgeSetShadingHighlight(r, g, b);
+            }
+            if (body.contains("shadow")) {
+                auto sh = body["shadow"];
+                double r = sh.value("r", 0.15);
+                double g = sh.value("g", 0.10);
+                double b = sh.value("b", 0.25);
+                BridgeSetShadingShadow(r, g, b);
+            }
+            if (body.contains("light_angle")) {
+                BridgeSetShadingLightAngle(body["light_angle"].get<double>());
+            }
+            if (body.contains("intensity")) {
+                BridgeSetShadingIntensity(body["intensity"].get<double>());
+            }
+            json resp;
+            resp["ok"] = true;
+            res.set_content(resp.dump(), "application/json");
+            fprintf(stderr, "[IllTool HTTP] POST /shading/colors updated\n");
+        }
+        catch (const json::exception& e) {
+            json resp;
+            resp["ok"]    = false;
+            resp["error"] = e.what();
+            res.status = 400;
+            res.set_content(resp.dump(), "application/json");
+        }
+    });
+
+    //------------------------------------------------------------------------------------
+    //  GET /shading/state — get current shading state
+    //------------------------------------------------------------------------------------
+    gServer->Get("/shading/state", [](const httplib::Request& /*req*/, httplib::Response& res) {
+        AddCorsHeaders(res);
+        double hR, hG, hB, sR, sG, sB;
+        BridgeGetShadingHighlight(hR, hG, hB);
+        BridgeGetShadingShadow(sR, sG, sB);
+
+        json resp;
+        resp["mode"]       = BridgeGetShadingMode();
+        resp["highlight"]  = { {"r", hR}, {"g", hG}, {"b", hB} };
+        resp["shadow"]     = { {"r", sR}, {"g", sG}, {"b", sB} };
+        resp["lightAngle"] = BridgeGetShadingLightAngle();
+        resp["intensity"]  = BridgeGetShadingIntensity();
+        resp["blendSteps"] = BridgeGetShadingBlendSteps();
+        resp["gridSize"]   = BridgeGetShadingMeshGrid();
+        res.set_content(resp.dump(), "application/json");
+    });
+
+    //------------------------------------------------------------------------------------
+    //  POST /shading/params — set shading parameters (partial update)
+    //------------------------------------------------------------------------------------
+    gServer->Post("/shading/params", [](const httplib::Request& req, httplib::Response& res) {
+        AddCorsHeaders(res);
+        try {
+            json body = json::parse(req.body);
+
+            // Each field is optional — only set what's provided
+            if (body.contains("lightAngle")) {
+                BridgeSetShadingLightAngle(body["lightAngle"].get<double>());
+            }
+            if (body.contains("intensity")) {
+                BridgeSetShadingIntensity(body["intensity"].get<double>());
+            }
+            if (body.contains("blendSteps")) {
+                BridgeSetShadingBlendSteps(body["blendSteps"].get<int>());
+            }
+            if (body.contains("gridSize")) {
+                BridgeSetShadingMeshGrid(body["gridSize"].get<int>());
+            }
+            if (body.contains("highlight")) {
+                auto& h = body["highlight"];
+                double r = h.value("r", 1.0);
+                double g = h.value("g", 1.0);
+                double b = h.value("b", 1.0);
+                BridgeSetShadingHighlight(r, g, b);
+            }
+            if (body.contains("shadow")) {
+                auto& s = body["shadow"];
+                double r = s.value("r", 0.0);
+                double g = s.value("g", 0.0);
+                double b = s.value("b", 0.0);
+                BridgeSetShadingShadow(r, g, b);
+            }
+            if (body.contains("mode")) {
+                BridgeSetShadingMode(body["mode"].get<int>());
+            }
+
+            json resp;
+            resp["ok"] = true;
+            res.set_content(resp.dump(), "application/json");
+            fprintf(stderr, "[IllTool HTTP] POST /shading/params updated\n");
+        }
+        catch (const json::exception& e) {
+            json resp;
+            resp["ok"]    = false;
             resp["error"] = e.what();
             res.status = 400;
             res.set_content(resp.dump(), "application/json");

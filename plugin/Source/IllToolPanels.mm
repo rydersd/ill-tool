@@ -18,6 +18,7 @@
 #import "panels/CleanupPanelController.h"
 #import "panels/GroupingPanelController.h"
 #import "panels/MergePanelController.h"
+#import "panels/ShadingPanelController.h"
 
 #include <cstdio>
 
@@ -59,6 +60,16 @@ static void GroupingPanelVisibilityChanged(AIPanelRef inPanel, AIBoolean isVisib
 }
 
 static void MergePanelVisibilityChanged(AIPanelRef inPanel, AIBoolean isVisible)
+{
+    AIPanelUserData ud = NULL;
+    sAIPanel->GetUserData(inPanel, ud);
+    if (ud) {
+        IllToolPlugin* plugin = reinterpret_cast<IllToolPlugin*>(ud);
+        plugin->UpdatePanelMenu(inPanel, isVisible);
+    }
+}
+
+static void ShadingPanelVisibilityChanged(AIPanelRef inPanel, AIBoolean isVisible)
 {
     AIPanelUserData ud = NULL;
     sAIPanel->GetUserData(inPanel, ud);
@@ -284,6 +295,27 @@ ASErr IllToolPlugin::AddPanels()
         }
     }
 
+    // --- Shading Panel (Stage 12) ---
+    {
+        ShadingPanelController *ctrl = [[ShadingPanelController alloc] init];
+        fShadingController = (void*)[ctrl retain];
+
+        error = CreateOnePanel(
+            fPluginRef, this,
+            kIllToolShadingPanelID,
+            kIllToolShadingMenuItem,
+            540.0,
+            ShadingPanelVisibilityChanged,
+            ctrl, ctrl.rootView,
+            fShadingPanel, fShadingMenuHandle);
+
+        if (error) {
+            fprintf(stderr, "[IllTool] Shading panel creation failed: %d\n", (int)error);
+        } else {
+            fprintf(stderr, "[IllTool] Shading panel registered\n");
+        }
+    }
+
     fprintf(stderr, "[IllTool] AddPanels complete\n");
     return kNoErr;
 }
@@ -301,6 +333,7 @@ void IllToolPlugin::DestroyPanels()
         if (fCleanupPanel)   { sAIPanel->Destroy(fCleanupPanel);   fCleanupPanel = NULL; }
         if (fGroupingPanel)  { sAIPanel->Destroy(fGroupingPanel);  fGroupingPanel = NULL; }
         if (fMergePanel)     { sAIPanel->Destroy(fMergePanel);     fMergePanel = NULL; }
+        if (fShadingPanel)   { sAIPanel->Destroy(fShadingPanel);   fShadingPanel = NULL; }
     }
 
     // Release retained Objective-C controllers
@@ -308,6 +341,7 @@ void IllToolPlugin::DestroyPanels()
     if (fCleanupController)   { [(id)fCleanupController release];   fCleanupController = NULL; }
     if (fGroupingController)  { [(id)fGroupingController release];  fGroupingController = NULL; }
     if (fMergeController)     { [(id)fMergeController release];     fMergeController = NULL; }
+    if (fShadingController)   { [(id)fShadingController release];   fShadingController = NULL; }
 }
 
 //========================================================================================
@@ -322,6 +356,7 @@ void IllToolPlugin::UpdatePanelMenu(AIPanelRef panel, AIBoolean isVisible)
     else if (panel == fCleanupPanel)   menuHandle = fCleanupMenuHandle;
     else if (panel == fGroupingPanel)  menuHandle = fGroupingMenuHandle;
     else if (panel == fMergePanel)     menuHandle = fMergeMenuHandle;
+    else if (panel == fShadingPanel)   menuHandle = fShadingMenuHandle;
 
     if (menuHandle && sAIMenu) {
         sAIMenu->CheckItem(menuHandle, isVisible);

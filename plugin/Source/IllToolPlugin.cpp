@@ -69,14 +69,17 @@ IllToolPlugin::IllToolPlugin(SPPluginRef pluginRef) :
     fIsolationChangedNotifier(NULL),
     fSelectionPanel(NULL), fCleanupPanel(NULL),
     fGroupingPanel(NULL), fMergePanel(NULL),
+    fShadingPanel(NULL),
     fSelectionMenuHandle(NULL), fCleanupMenuHandle(NULL),
     fGroupingMenuHandle(NULL), fMergeMenuHandle(NULL),
+    fShadingMenuHandle(NULL),
     fAppMenuRootHandle(NULL),
     fMenuLassoHandle(NULL), fMenuSmartHandle(NULL),
     fMenuCleanupHandle(NULL), fMenuGroupingHandle(NULL),
     fMenuMergeHandle(NULL), fMenuSelectionHandle(NULL),
     fSelectionController(NULL), fCleanupController(NULL),
     fGroupingController(NULL), fMergeController(NULL),
+    fShadingController(NULL),
     fLastClickTime(0.0)
 {
     fLastCursorPos.h = 0;
@@ -333,6 +336,7 @@ ASErr IllToolPlugin::GoMenuItem(AIMenuMessage* message)
                 { fCleanupMenuHandle,   fCleanupPanel,   "Cleanup" },
                 { fGroupingMenuHandle,  fGroupingPanel,  "Grouping" },
                 { fMergeMenuHandle,     fMergePanel,     "Merge" },
+                { fShadingMenuHandle,   fShadingPanel,   "Shading" },
                 // Application submenu panel toggles (same panels, different menu items)
                 { fMenuCleanupHandle,   fCleanupPanel,   "Cleanup (menu)" },
                 { fMenuGroupingHandle,  fGroupingPanel,  "Grouping (menu)" },
@@ -393,6 +397,7 @@ ASErr IllToolPlugin::UpdateMenuItem(AIMenuMessage* message)
                 { fMenuGroupingHandle,  fGroupingPanel },
                 { fMenuMergeHandle,     fMergePanel },
                 { fMenuSelectionHandle, fSelectionPanel },
+                { fShadingMenuHandle,   fShadingPanel },
             };
             for (auto& item : items) {
                 if (message->menuItem == item.menu && item.panel) {
@@ -768,6 +773,20 @@ void IllToolPlugin::ProcessOperationQueue()
             case OpType::BlendSetEasing:
                 BridgeSetBlendEasing(op.intParam);
                 fprintf(stderr, "[IllTool Timer] Blend set easing=%d\n", op.intParam);
+                break;
+
+            // Stage 12: Surface Shading
+            case OpType::ShadingApplyBlend:
+            case OpType::ShadingApplyMesh:
+                fprintf(stderr, "[IllTool Timer] Shading %s\n",
+                        op.type == OpType::ShadingApplyBlend ? "Apply Blend" : "Apply Mesh");
+                DispatchShadingOp(op.type);
+                InvalidateFullView();
+                break;
+
+            case OpType::ShadingSetMode:
+                BridgeSetShadingMode(op.intParam);
+                fprintf(stderr, "[IllTool Timer] Shading set mode=%d\n", op.intParam);
                 break;
         }
     }

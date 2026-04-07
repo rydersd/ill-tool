@@ -62,7 +62,11 @@ enum class OpType : int {
     BlendPickB,          // enter pick-B mode (next click stores path B)
     BlendExecute,        // run blend with current settings
     BlendSetSteps,       // intParam = step count (1-20)
-    BlendSetEasing       // intParam = preset (0=linear,1=easeIn,2=easeOut,3=easeInOut,4=custom)
+    BlendSetEasing,      // intParam = preset (0=linear,1=easeIn,2=easeOut,3=easeInOut,4=custom)
+    // Stage 12: Surface Shading
+    ShadingApplyBlend,   // apply blend shading to selected path
+    ShadingApplyMesh,    // apply mesh gradient shading to selected path
+    ShadingSetMode       // intParam = 0 (blend) or 1 (mesh)
 };
 
 /** A queued operation with parameters. Pushed by panels/HTTP, popped by timer. */
@@ -390,6 +394,10 @@ double BridgeGetHorizonY();
 void BridgeSetPerspectiveLocked(bool locked);
 bool BridgeGetPerspectiveLocked();
 
+/** Set/get perspective grid visibility (show/hide without clearing). Thread-safe. */
+void BridgeSetPerspectiveVisible(bool visible);
+bool BridgeGetPerspectiveVisible();
+
 //----------------------------------------------------------------------------------------
 //  Blend state (Stage 11)
 //----------------------------------------------------------------------------------------
@@ -411,5 +419,37 @@ bool BridgeHasBlendPathA();
 bool BridgeHasBlendPathB();
 void BridgeSetBlendPathASet(bool set);
 void BridgeSetBlendPathBSet(bool set);
+
+//----------------------------------------------------------------------------------------
+//  Shading state (Stage 12) — continuous state, read by panel/ProcessOperationQueue
+//----------------------------------------------------------------------------------------
+
+/** Set/get shading mode (0=blend, 1=mesh). Thread-safe. */
+void BridgeSetShadingMode(int mode);
+int  BridgeGetShadingMode();
+
+/** Set/get highlight color (RGB 0-1). Thread-safe. */
+void BridgeSetShadingHighlight(double r, double g, double b);
+void BridgeGetShadingHighlight(double& r, double& g, double& b);
+
+/** Set/get shadow color (RGB 0-1). Thread-safe. */
+void BridgeSetShadingShadow(double r, double g, double b);
+void BridgeGetShadingShadow(double& r, double& g, double& b);
+
+/** Set/get light angle in degrees (0-360). Thread-safe. */
+void BridgeSetShadingLightAngle(double angle);
+double BridgeGetShadingLightAngle();
+
+/** Set/get shading intensity (0-100). Thread-safe. */
+void BridgeSetShadingIntensity(double intensity);
+double BridgeGetShadingIntensity();
+
+/** Set/get blend step count for shading mode A (3-15). Thread-safe. */
+void BridgeSetShadingBlendSteps(int steps);
+int  BridgeGetShadingBlendSteps();
+
+/** Set/get mesh grid size for shading mode B (2-6). Thread-safe. */
+void BridgeSetShadingMeshGrid(int size);
+int  BridgeGetShadingMeshGrid();
 
 #endif // __HTTPBRIDGE_H__

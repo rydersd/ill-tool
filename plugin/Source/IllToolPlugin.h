@@ -101,17 +101,19 @@ private:
     //  Panel state
     //------------------------------------------------------------------------------------
 
-    /** Panel refs for the four tool panels. */
+    /** Panel refs for the tool panels. */
     AIPanelRef              fSelectionPanel;
     AIPanelRef              fCleanupPanel;
     AIPanelRef              fGroupingPanel;
     AIPanelRef              fMergePanel;
+    AIPanelRef              fShadingPanel;
 
     /** Menu item handles for panel show/hide in Window menu. */
     AIMenuItemHandle        fSelectionMenuHandle;
     AIMenuItemHandle        fCleanupMenuHandle;
     AIMenuItemHandle        fGroupingMenuHandle;
     AIMenuItemHandle        fMergeMenuHandle;
+    AIMenuItemHandle        fShadingMenuHandle;
 
     //------------------------------------------------------------------------------------
     //  Application menu (Window > IllTool submenu)
@@ -140,6 +142,7 @@ private:
     void*                   fCleanupController;
     void*                   fGroupingController;
     void*                   fMergeController;
+    void*                   fShadingController;
 
     //------------------------------------------------------------------------------------
     //  Polygon lasso state
@@ -435,6 +438,7 @@ public:
         PerspectiveLine verticalVP;      ///< Line converging to vertical VP (optional, 3-point)
         double horizonY = 400;           ///< Adjustable horizon line Y coordinate
         bool locked = false;             ///< true when user confirms the grid
+        bool visible = true;             ///< show/hide overlay without clearing grid
         int gridDensity = 5;             ///< Number of grid lines per axis (2-20)
 
         // Computed from lines (updated by Recompute):
@@ -451,6 +455,12 @@ public:
 
         /** Return the number of active lines (0-3). */
         int ActiveLineCount() const;
+
+        /** Save grid state to document dictionary (persists with file). */
+        void SaveToDocument();
+
+        /** Load grid state from document dictionary (on document open). */
+        void LoadFromDocument();
 
         /** Compute a 3x3 homography matrix for the floor plane.
             Maps from grid-space (u,v) to artwork-space (x,y).
@@ -534,6 +544,36 @@ public:
         Draws: user lines with handles, dotted extensions, computed VP markers,
         horizon line, and grid lines (when locked). */
     void DrawPerspectiveOverlay(AIAnnotatorMessage* message);
+
+    //------------------------------------------------------------------------------------
+    //  Surface Shading (Stage 12)
+    //------------------------------------------------------------------------------------
+
+    /** Running counter for shading group naming ("Shading Group 1", etc.). */
+    int fShadingGroupCounter = 0;
+
+    /** Apply blend shading (stacked contours) to a closed path.
+        Creates N scaled/offset copies with colors from shadow→highlight ramp.
+        Colors are RGB 0-1 range. Intensity is 0-100 (slider value).
+        @return Number of contour paths created, or 0 on failure. */
+    int ApplyBlendShading(AIArtHandle path, int steps,
+        double highlightR, double highlightG, double highlightB,
+        double shadowR, double shadowG, double shadowB,
+        double lightAngle, double intensity);
+
+    /** Apply mesh gradient shading to a path.
+        Creates a kMeshArt with vertex colors based on light direction.
+        Colors are RGB 0-1 range. Intensity is 0-100 (slider value).
+        @return 1 on success, 0 on failure. */
+    int ApplyMeshShading(AIArtHandle path, int gridSize,
+        double highlightR, double highlightG, double highlightB,
+        double shadowR, double shadowG, double shadowB,
+        double lightAngle, double intensity);
+
+    /** Dispatch a shading operation from the operation queue.
+        Reads current shading parameters from bridge state, finds the selected
+        path, and calls ApplyBlendShading or ApplyMeshShading. */
+    void DispatchShadingOp(OpType opType);
 };
 
 #endif // __ILLTOOLPLUGIN_H__

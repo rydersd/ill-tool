@@ -289,9 +289,32 @@ static void DrawHandleSquare(AIAnnotatorDrawer* drawer, AIPoint center, int half
     sAIAnnotatorDrawer->DrawRect(drawer, r, true);
 }
 
+void IllToolPlugin::PerspectiveGrid::SaveToDocument()
+{
+    if (!sAIDictionary) return;
+    // Store grid data on the document's dictionary via AIDictionarySuite
+    // Keys: IllToolPerspGrid_* for each line handle + horizon + density + locked
+    fprintf(stderr, "[IllTool] PerspectiveGrid::SaveToDocument — grid valid=%d lines=%d\n",
+            valid, ActiveLineCount());
+    // Implementation uses sAIDocument->GetDocumentDictionary() if available,
+    // or stores as a named art item with dictionary entries.
+    // For now, the bridge state persists during the session.
+    // Full document persistence will use the same AIDictionarySuite pattern as blend groups.
+}
+
+void IllToolPlugin::PerspectiveGrid::LoadFromDocument()
+{
+    fprintf(stderr, "[IllTool] PerspectiveGrid::LoadFromDocument — checking for saved grid\n");
+    // Mirror of SaveToDocument — reads back from document dictionary.
+    // Stub for now; full implementation in a follow-up pass.
+}
+
 void IllToolPlugin::DrawPerspectiveOverlay(AIAnnotatorMessage* message)
 {
     if (!message || !message->drawer) return;
+
+    // Show/hide toggle — grid data preserved but overlay not drawn
+    if (!fPerspectiveGrid.visible) return;
 
     // Draw even if not fully valid — show individual lines as they're placed
     bool hasAnyLine = fPerspectiveGrid.leftVP.active ||

@@ -25,6 +25,7 @@
 #include "AITimer.h"  // AITimerSuite — SDK-context timer dispatch
 #include "AIPathStyle.h" // AIPathStyleSuite — read/write fill+stroke styles
 #include "AIDictionary.h" // AIDictionarySuite — per-art metadata storage
+#include "AIMesh.h"      // AIMeshSuite, AIMeshVertexIteratorSuite — mesh gradient creation
 
 extern  "C" AIUnicodeStringSuite*       sAIUnicodeString;
 extern  "C" SPBlocksSuite*              sSPBlocks;
@@ -49,5 +50,7 @@ extern  "C" AILayerSuite*               sAILayer;
 extern  "C" AITimerSuite*               sAITimer;
 extern  "C" AIPathStyleSuite*           sAIPathStyle;
 extern  "C" AIDictionarySuite*          sAIDictionary;
+extern  "C" AIMeshSuite*               sAIMesh;
+extern  "C" AIMeshVertexIteratorSuite*  sAIMeshVertex;
 
 #endif // __ILLTOOLSUITES_H__
