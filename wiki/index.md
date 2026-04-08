@@ -2,6 +2,7 @@
 > Auto-maintained. Last updated: 2026-04-07. Articles: 38. Words: ~82K.
 
 ## Recent
+- 2026-04-07: [IllTool PRD](concepts/illtool-prd.md) — Complete product requirements: trace → classify → simplify → perspective → shade. P0-P2 priorities, UX specs, what exists vs missing. Tags: prd, requirements, workflow
 - 2026-04-07: [CEP → C++ Port Audit](concepts/cep-to-cpp-port-audit.md) — Function-by-function audit: 7 correct, 10 partial, 2 wrong, 7 missing. AverageSelection completely wrong (centroid collapse vs PCA+classify+refit). Tags: audit, port, cep, c++
 - 2026-04-07: [Adversarial Review Round 3](concepts/plugin-adversarial-review-round3.md) — 40 issues from 5 specialist reviewers (thread, math, memory, integration, MRC). All P0s fixed. Tags: review, thread-safety, adversarial
 - 2026-04-07: [Perspective Grid Foundation](concepts/perspective-grid-foundation.md) — Draggable-line perspective grid, VPs derived from extensions, annotator overlay. Tags: perspective, grid, annotator, tool
