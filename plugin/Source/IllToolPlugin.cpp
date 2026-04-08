@@ -633,23 +633,11 @@ void IllToolPlugin::ProcessOperationQueue()
         }
     }
 
-    // Stage 8: Enforce locked isolation mode (timer-based safety net).
-    auto* cleanup = GetModule<CleanupModule>();
-    if (cleanup && cleanup->IsInWorkingMode() && cleanup->GetWorkingGroup() && sAIIsolationMode) {
-        if (!sAIIsolationMode->IsInIsolationMode()) {
-            fprintf(stderr, "[IllTool Timer] Isolation breach detected -- re-entering\n");
-            AIArtHandle wg = cleanup->GetWorkingGroup();
-            if (sAIIsolationMode->CanIsolateArt(wg)) {
-                ASErr isoErr = sAIIsolationMode->EnterIsolationMode(wg, false);
-                if (isoErr == kNoErr) {
-                    fprintf(stderr, "[IllTool Timer] Re-entered isolation mode\n");
-                    sAIDocument->RedrawDocument();
-                } else {
-                    fprintf(stderr, "[IllTool Timer] Re-enter isolation failed: %d\n", (int)isoErr);
-                }
-            }
-        }
-    }
+    // Stage 8: Isolation re-entry DISABLED.
+    // User wants preview path to stay visible and adjustable without forced isolation.
+    // The preview has an orange stroke and stays selected — no need to lock the user in.
+    // Isolation re-entry was forcing the user back into isolation every time they clicked
+    // outside the working group, preventing normal interaction with other tools.
 }
 
 /*
@@ -798,10 +786,12 @@ ASErr IllToolPlugin::AddAnnotator(SPInterfaceMessage *message)
         result = sAIAnnotator->AddAnnotator(message->d.self, "IllTool Overlay", &fAnnotatorHandle);
         aisdk::check_ai_error(result);
 
-        result = sAIAnnotator->SetAnnotatorActive(fAnnotatorHandle, false);
+        // Activate immediately — overlays (perspective grid, bbox, lasso)
+        // must be visible regardless of which tool is active
+        result = sAIAnnotator->SetAnnotatorActive(fAnnotatorHandle, true);
         aisdk::check_ai_error(result);
 
-        fprintf(stderr, "[IllTool] Annotator registered (inactive)\n");
+        fprintf(stderr, "[IllTool] Annotator registered (ACTIVE)\n");
     }
     catch (ai::Error& ex) {
         result = ex;
@@ -1004,6 +994,11 @@ ASErr IllToolPlugin::DrawAnnotation(AIAnnotatorMessage* message)
         }
 
         // Delegate overlay drawing to all modules
+        static int drawCount = 0;
+        if (drawCount++ % 100 == 0) {
+            fprintf(stderr, "[IllTool] DrawAnnotation called (%d modules, cycle %d)\n",
+                    (int)fModules.size(), drawCount);
+        }
         for (auto& mod : fModules) {
             mod->DrawOverlay(message);
         }

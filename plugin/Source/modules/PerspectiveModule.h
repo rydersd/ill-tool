@@ -124,6 +124,11 @@ private:
     /** Track which line to place next when clicking empty space (cycles 0,1,2). */
     int fNextLineIndex = 0;
 
+    /** When true, next click on canvas places VP1 + auto-mirrors VP2.
+        Set by ActivatePerspectiveTool instead of switching to the perspective tool
+        (which gets immediately deselected when the panel takes focus). */
+    bool fPlacementMode = false;
+
     /** Hit-test radius for perspective handles in artwork-space points. */
     static constexpr double kHandleHitRadius = 8.0;
 

@@ -368,13 +368,16 @@ AIArtHandle PlacePreview(
     sAIPath->SetPathSegments(newPath, 0, (ai::int16)n, segs.data());
     sAIPath->SetPathClosed(newPath, closed);
 
-    // Style: 1pt black stroke, no fill
-    AIPathStyle style = {};
+    // Style: 1.5pt orange stroke (#FF6600), no fill — visible edit-mode path
+    AIPathStyle style;
+    memset(&style, 0, sizeof(style));
     style.fillPaint = false;
     style.strokePaint = true;
-    style.stroke.width = 1.0;
-    style.stroke.color.kind = kGrayColor;
-    style.stroke.color.c.g.gray = 0; // black
+    style.stroke.width = (AIReal)1.5;
+    style.stroke.color.kind = kThreeColor;
+    style.stroke.color.c.rgb.red   = (AIReal)1.0;   // FF
+    style.stroke.color.c.rgb.green = (AIReal)0.4;    // 66
+    style.stroke.color.c.rgb.blue  = (AIReal)0.0;    // 00
     sAIPathStyle->SetPathStyle(newPath, &style);
 
     // Name for identification

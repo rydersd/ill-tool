@@ -554,6 +554,7 @@ void PerspectiveModule::ClearGrid()
     for (int i = 0; i < 3; i++) BridgeClearPerspectiveLine(i);
     BridgeSetPerspectiveLocked(false);
     fNextLineIndex = 0;
+    fPlacementMode = false;
     fprintf(stderr, "[IllTool PerspModule] Grid cleared\n");
     InvalidateFullView();
 }
@@ -592,14 +593,19 @@ void PerspectiveModule::ActivatePerspectiveTool()
     fGrid.visible = true;
     BridgeSetPerspectiveVisible(true);
 
-    // Activate the perspective tool
+    fPlacementMode = true;
+
+    // Activate our main tool so we receive mouse events from the canvas.
+    // (SDK only sends ToolMouseDown to the plugin that owns the active tool.)
     if (fPlugin && sAITool) {
         AIToolHandle perspTool = fPlugin->GetPerspectiveToolHandle();
         if (perspTool) {
             sAITool->SetSelectedTool(perspTool);
+            fprintf(stderr, "[IllTool PerspModule] Activated perspective tool for VP placement\n");
         }
     }
-    fprintf(stderr, "[IllTool PerspModule] Perspective tool activated\n");
+
+    fprintf(stderr, "[IllTool PerspModule] Placement mode activated (click canvas to place VP)\n");
     InvalidateFullView();
 }
 
@@ -661,6 +667,7 @@ void PerspectiveModule::OnDocumentChanged()
     fDragLine = -1;
     fDragHandle = 0;
     fNextLineIndex = 0;
+    fPlacementMode = false;
     fUndoStack.Clear();
 
     // Try to load persisted grid from new document
@@ -680,14 +687,51 @@ static double PerspDist(AIRealPoint a, AIRealPoint b) {
 
 bool PerspectiveModule::HandleMouseDown(AIToolMessage* msg)
 {
-    // Only consume if grid is visible and not locked
-    if (!fGrid.visible) return false;
-
-    // If grid is locked, only consume if we're NOT in a perspective tool
-    // (handles should be undraggable when locked)
-    if (fGrid.locked) return false;
-
     AIRealPoint click = msg->cursor;
+
+    // Placement mode: click places VP1 + auto-mirrors VP2, then exits placement mode
+    if (fPlacementMode && !fGrid.locked) {
+        // Get viewport bounds to find horizontal center for mirroring
+        AIRealRect viewBounds = {0, 0, 0, 0};
+        if (sAIDocumentView) {
+            sAIDocumentView->GetDocumentViewBounds(NULL, &viewBounds);
+        }
+        double viewCenterX = (viewBounds.left + viewBounds.right) * 0.5;
+        if (std::abs(viewBounds.right - viewBounds.left) < 1.0) viewCenterX = 400.0;
+
+        // VP1: place line at click position
+        fGrid.leftVP.handle1 = click;
+        fGrid.leftVP.handle2 = { (AIReal)(click.h + 100.0), click.v };
+        fGrid.leftVP.active = true;
+        BridgeSetPerspectiveLine(0,
+            fGrid.leftVP.handle1.h, fGrid.leftVP.handle1.v,
+            fGrid.leftVP.handle2.h, fGrid.leftVP.handle2.v);
+
+        // VP2: auto-mirror across horizontal center of viewport
+        AIRealPoint mirH1 = { (AIReal)(2.0 * viewCenterX - click.h), click.v };
+        AIRealPoint mirH2 = { (AIReal)(2.0 * viewCenterX - (click.h + 100.0)), click.v };
+        fGrid.rightVP.handle1 = mirH1;
+        fGrid.rightVP.handle2 = mirH2;
+        fGrid.rightVP.active = true;
+        BridgeSetPerspectiveLine(1,
+            fGrid.rightVP.handle1.h, fGrid.rightVP.handle1.v,
+            fGrid.rightVP.handle2.h, fGrid.rightVP.handle2.v);
+
+        BridgeSetPerspectiveVisible(true);
+        fNextLineIndex = 2;
+        fPlacementMode = false;
+
+        fprintf(stderr, "[IllTool PerspModule] Placement: VP1 at (%.0f,%.0f), auto-mirrored VP2 at (%.0f,%.0f)\n",
+                click.h, click.v, mirH1.h, mirH1.v);
+
+        fGrid.Recompute();
+        InvalidateFullView();
+        return true;
+    }
+
+    // Only consume handle drags if grid is visible and not locked
+    if (!fGrid.visible) return false;
+    if (fGrid.locked) return false;
 
     // Hit-test existing handles — works with ANY active tool
     PerspectiveLine* lines[3] = {

@@ -374,13 +374,11 @@ void SelectionModule::ExecutePolygonSelection()
 
         // If we selected anything and NOT already in working mode,
         // enter working mode (duplicate, dim, isolate).
-        // Enter working mode via CleanupModule if we selected something
-        if (selectedCount > 0 && fPlugin) {
-            auto* cleanup = fPlugin->GetModule<CleanupModule>();
-            if (cleanup && !cleanup->IsInWorkingMode()) {
-                fprintf(stderr, "[SelectionModule] Calling CleanupModule::EnterWorkingMode\n");
-                cleanup->EnterWorkingMode();
-            }
+        // After lasso selection, just log. User clicks "Average Selection" to cleanup.
+        // Do NOT auto-enter working mode — that duplicates paths without averaging.
+        if (selectedCount > 0) {
+            fprintf(stderr, "[SelectionModule] Lasso selected %d paths — ready for Average Selection\n",
+                    selectedCount);
         }
 
         sAIDocument->RedrawDocument();

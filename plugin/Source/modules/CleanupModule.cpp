@@ -221,6 +221,12 @@ void CleanupModule::OnSelectionChanged()
 {
     // Selection count is updated externally via SetSelectedAnchorCount
     // from the plugin's Notify handler where SDK calls are valid.
+
+    // Recompute bounding box if preview path is being edited in working mode
+    if (fInWorkingMode && fPreviewPath) {
+        ComputeBoundingBox();
+        InvalidateFullView();
+    }
 }
 
 void CleanupModule::OnDocumentChanged()
