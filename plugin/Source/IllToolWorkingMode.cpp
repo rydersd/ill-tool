@@ -19,32 +19,32 @@ extern IllToolPlugin* gPlugin;
 //========================================================================================
 
 /*
-    AverageSelection — compute the centroid of all selected anchor points
-    and move them to that centroid. This is the classic Illustrator "Average"
-    operation but applied to the current point selection.
+    AverageSelection — CEP-faithful pipeline:
+    1. Collect ALL selected anchor [x,y] from all paths
+    2. sortByPCA — order by principal component
+    3. classifyShape — identify as line/arc/L/rect/S-curve/ellipse/freeform
+    4. precomputeLOD — 20 levels of Douglas-Peucker with inflection preservation
+    5. placePreview — create new clean path with bezier handles
+    6. Enter working mode (dim originals, enter isolation on preview group)
+    7. User adjusts tension/simplification via slider (reads LOD cache)
+    8. Confirm → delete originals, promote preview. Cancel → restore originals.
 */
 void IllToolPlugin::AverageSelection()
 {
     try {
+        // Step 1: Collect all selected anchor positions
         AIMatchingArtSpec spec(kPathArt, 0, 0);
         AIArtHandle** matches = nullptr;
         ai::int32 numMatches = 0;
 
-        ASErr result = GetMatchingArtIsolationAware(&spec, 1, &matches, &numMatches);
+        ASErr result = sAIMatchingArt->GetMatchingArt(&spec, 1, &matches, &numMatches);
         if (result != kNoErr || numMatches == 0) {
             fprintf(stderr, "[IllTool] AverageSelection: no path art found\n");
             return;
         }
 
-        // First pass: collect selected anchor positions and compute centroid
-        double sumX = 0.0, sumY = 0.0;
-        int selectedCount = 0;
-
-        struct SelectedSeg {
-            AIArtHandle art;
-            ai::int16   seg;
-        };
-        std::vector<SelectedSeg> selectedSegs;
+        std::vector<AIRealPoint> anchors;
+        std::vector<AIArtHandle> sourcePaths;
 
         for (ai::int32 i = 0; i < numMatches; i++) {
             AIArtHandle art = (*matches)[i];
@@ -58,6 +58,7 @@ void IllToolPlugin::AverageSelection()
             result = sAIPath->GetPathSegmentCount(art, &segCount);
             if (result != kNoErr || segCount == 0) continue;
 
+            bool hasSelected = false;
             for (ai::int16 s = 0; s < segCount; s++) {
                 ai::int16 selected = kSegmentNotSelected;
                 result = sAIPath->GetPathSegmentSelected(art, s, &selected);
@@ -66,49 +67,17 @@ void IllToolPlugin::AverageSelection()
                 if (selected & kSegmentPointSelected) {
                     AIPathSegment seg;
                     result = sAIPath->GetPathSegments(art, s, 1, &seg);
-                    if (result != kNoErr) continue;
-
-                    sumX += seg.p.h;
-                    sumY += seg.p.v;
-                    selectedCount++;
-                    selectedSegs.push_back({art, s});
+                    if (result == kNoErr) {
+                        anchors.push_back(seg.p);
+                        hasSelected = true;
+                    }
                 }
             }
-        }
-
-        if (selectedCount < 2) {
-            fprintf(stderr, "[IllTool] AverageSelection: need 2+ selected anchors (found %d)\n",
-                    selectedCount);
-            if (matches) sAIMdMemory->MdMemoryDisposeHandle((AIMdMemoryHandle)matches);
-            return;
-        }
-
-        double avgX = sumX / selectedCount;
-        double avgY = sumY / selectedCount;
-        fprintf(stderr, "[IllTool] AverageSelection: centroid (%.2f, %.2f) from %d points\n",
-                avgX, avgY, selectedCount);
-
-        // Second pass: move all selected anchors to the centroid
-        for (auto& ss : selectedSegs) {
-            AIPathSegment seg;
-            result = sAIPath->GetPathSegments(ss.art, ss.seg, 1, &seg);
-            if (result != kNoErr) continue;
-
-            // Adjust control handles relative to the anchor movement
-            AIReal dx = (AIReal)avgX - seg.p.h;
-            AIReal dy = (AIReal)avgY - seg.p.v;
-
-            seg.p.h = (AIReal)avgX;
-            seg.p.v = (AIReal)avgY;
-            seg.in.h  += dx;
-            seg.in.v  += dy;
-            seg.out.h += dx;
-            seg.out.v += dy;
-
-            result = sAIPath->SetPathSegments(ss.art, ss.seg, 1, &seg);
-            if (result != kNoErr) {
-                fprintf(stderr, "[IllTool] AverageSelection: SetPathSegments failed: %d\n",
-                        (int)result);
+            if (hasSelected) {
+                // Track unique source paths for dimming
+                bool alreadyTracked = false;
+                for (auto sp : sourcePaths) { if (sp == art) { alreadyTracked = true; break; } }
+                if (!alreadyTracked) sourcePaths.push_back(art);
             }
         }
 
@@ -117,8 +86,112 @@ void IllToolPlugin::AverageSelection()
             matches = nullptr;
         }
 
-        fprintf(stderr, "[IllTool] AverageSelection: moved %d anchors to centroid\n", selectedCount);
+        if ((int)anchors.size() < 2) {
+            fprintf(stderr, "[IllTool] AverageSelection: need 2+ selected anchors (found %d)\n",
+                    (int)anchors.size());
+            return;
+        }
+
+        fprintf(stderr, "[IllTool] AverageSelection: collected %d anchors from %d paths\n",
+                (int)anchors.size(), (int)sourcePaths.size());
+
+        // Step 2: Sort by PCA — orders points along dominant direction
+        fCachedSortedPoints = SortByPCA(anchors);
+        fprintf(stderr, "[IllTool] AverageSelection: PCA sorted %d points\n",
+                (int)fCachedSortedPoints.size());
+
+        // Step 3: Classify shape — identify type + generate fitted output
+        fCachedShapeFit = ClassifyPoints(fCachedSortedPoints);
+        fprintf(stderr, "[IllTool] AverageSelection: classified as %s (conf=%.2f, %d output pts)\n",
+                kShapeNames[(int)fCachedShapeFit.shape], fCachedShapeFit.confidence,
+                (int)fCachedShapeFit.points.size());
+
+        // Step 4: Precompute LOD levels for instant slider scrubbing
+        fLODCache = PrecomputeLOD(fCachedSortedPoints, 20,
+                                  &fCachedShapeFit);
+        fprintf(stderr, "[IllTool] AverageSelection: precomputed %d LOD levels\n",
+                (int)fLODCache.size());
+
+        // Step 5: Enter working mode — dim originals, create working group
+        if (fInWorkingMode) {
+            fprintf(stderr, "[IllTool] AverageSelection: already in working mode — cancelling first\n");
+            CancelWorkingMode();
+        }
+
+        if (!sAIBlendStyle) {
+            fprintf(stderr, "[IllTool] AverageSelection: AIBlendStyleSuite not available\n");
+            return;
+        }
+
+        // Find or create Working layer + group
+        // (reuse the same pattern as EnterWorkingMode)
+        AIArtHandle layerGroup = nullptr;
+        {
+            AILayerHandle layer = nullptr;
+            ai::UnicodeString workingTitle("Working");
+            result = sAILayer->GetLayerByTitle(&layer, workingTitle);
+            if (result != kNoErr || layer == nullptr) {
+                result = sAILayer->InsertLayer(nullptr, kPlaceAboveAll, &layer);
+                if (result != kNoErr || layer == nullptr) {
+                    fprintf(stderr, "[IllTool] AverageSelection: failed to create Working layer\n");
+                    return;
+                }
+                sAILayer->SetLayerTitle(layer, workingTitle);
+            }
+            result = sAIArt->GetFirstArtOfLayer(layer, &layerGroup);
+            if (result != kNoErr || !layerGroup) {
+                fprintf(stderr, "[IllTool] AverageSelection: failed to get layer group\n");
+                return;
+            }
+        }
+
+        AIArtHandle workGroup = nullptr;
+        result = sAIArt->NewArt(kGroupArt, kPlaceInsideOnTop, layerGroup, &workGroup);
+        if (result != kNoErr || !workGroup) {
+            fprintf(stderr, "[IllTool] AverageSelection: failed to create working group\n");
+            return;
+        }
+
+        // Dim and lock originals
+        fOriginalPaths.clear();
+        for (AIArtHandle art : sourcePaths) {
+            AIReal prevOpacity = sAIBlendStyle->GetOpacity(art);
+            fOriginalPaths.push_back({art, prevOpacity});
+            sAIBlendStyle->SetOpacity(art, 0.30);
+            sAIArt->SetArtUserAttr(art, kArtLocked, kArtLocked);
+        }
+
+        // Step 6: Place preview path inside the working group
+        fPreviewPath = PlacePreview(workGroup,
+                                    fCachedShapeFit.points,
+                                    fCachedShapeFit.handles,
+                                    fCachedShapeFit.closed);
+
+        fWorkingGroup = workGroup;
+        fInWorkingMode = true;
+
+        // Step 7: Enter isolation mode on the working group
+        if (sAIIsolationMode && !sAIIsolationMode->IsInIsolationMode()) {
+            if (sAIIsolationMode->CanIsolateArt(workGroup)) {
+                result = sAIIsolationMode->EnterIsolationMode(workGroup, false);
+                if (result == kNoErr) {
+                    fprintf(stderr, "[IllTool] AverageSelection: entered isolation on working group\n");
+                }
+            }
+        }
+
+        // Select the preview path for direct editing
+        if (fPreviewPath) {
+            sAIArt->SetArtUserAttr(fPreviewPath, kArtSelected, kArtSelected);
+        }
+
+        // Update the detected shape label
+        fLastDetectedShape = kShapeNames[(int)fCachedShapeFit.shape];
+
         sAIDocument->RedrawDocument();
+        fprintf(stderr, "[IllTool] AverageSelection: complete — %d anchors → %s preview with %d points\n",
+                (int)anchors.size(), fLastDetectedShape,
+                (int)fCachedShapeFit.points.size());
     }
     catch (ai::Error& ex) {
         fprintf(stderr, "[IllTool] AverageSelection error: %d\n", (int)ex);
@@ -126,6 +199,41 @@ void IllToolPlugin::AverageSelection()
     catch (...) {
         fprintf(stderr, "[IllTool] AverageSelection unknown error\n");
     }
+}
+
+//========================================================================================
+//  Apply LOD Level — slider scrubbing over precomputed cache
+//========================================================================================
+
+void IllToolPlugin::ApplyLODLevel(int level)
+{
+    if (fLODCache.empty() || !fInWorkingMode || !fWorkingGroup) {
+        fprintf(stderr, "[IllTool] ApplyLODLevel: no LOD cache or not in working mode\n");
+        return;
+    }
+
+    // Find the closest cached level at or below the requested value
+    const LODLevel* best = &fLODCache[0];
+    for (auto& lod : fLODCache) {
+        if (lod.value <= level) best = &lod;
+    }
+
+    // Delete old preview and create new one
+    if (fPreviewPath) {
+        sAIArt->DisposeArt(fPreviewPath);
+        fPreviewPath = nullptr;
+    }
+
+    fPreviewPath = PlacePreview(fWorkingGroup, best->points, best->handles,
+                                fCachedShapeFit.closed);
+
+    if (fPreviewPath) {
+        sAIArt->SetArtUserAttr(fPreviewPath, kArtSelected, kArtSelected);
+    }
+
+    sAIDocument->RedrawDocument();
+    fprintf(stderr, "[IllTool] ApplyLODLevel: level=%d → %d points\n",
+            level, (int)best->points.size());
 }
 
 //========================================================================================
@@ -577,7 +685,11 @@ void IllToolPlugin::ApplyWorkingMode(bool deleteOriginals)
         // Step 3: Clear state
         fOriginalPaths.clear();
         fWorkingGroup = nullptr;
+        fPreviewPath = nullptr;
         fInWorkingMode = false;
+        fCachedSortedPoints.clear();
+        fCachedShapeFit = ShapeFitResult{};
+        fLODCache.clear();
 
         // Step 4: Redraw
         sAIDocument->RedrawDocument();
@@ -638,7 +750,11 @@ void IllToolPlugin::CancelWorkingMode()
         // Step 4: Clear state
         fOriginalPaths.clear();
         fWorkingGroup = nullptr;
+        fPreviewPath = nullptr;
         fInWorkingMode = false;
+        fCachedSortedPoints.clear();
+        fCachedShapeFit = ShapeFitResult{};
+        fLODCache.clear();
 
         // Step 5: Redraw
         sAIDocument->RedrawDocument();

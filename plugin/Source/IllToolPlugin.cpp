@@ -732,10 +732,18 @@ void IllToolPlugin::ProcessOperationQueue()
                 break;
 
             case OpType::Simplify: {
-                double tolerance = op.param1 * 0.5;  // slider 0-100 → tolerance 0-50pt
-                fprintf(stderr, "[IllTool Timer] Simplify (slider=%.0f, tolerance=%.1f)\n",
-                        op.param1, tolerance);
-                SimplifySelection(tolerance);
+                if (fInWorkingMode && !fLODCache.empty()) {
+                    // LOD scrubbing mode: use precomputed cache
+                    int level = (int)op.param1;
+                    fprintf(stderr, "[IllTool Timer] Simplify LOD (slider=%d)\n", level);
+                    ApplyLODLevel(level);
+                } else {
+                    // Legacy mode: one-shot Douglas-Peucker
+                    double tolerance = op.param1 * 0.5;
+                    fprintf(stderr, "[IllTool Timer] Simplify (slider=%.0f, tolerance=%.1f)\n",
+                            op.param1, tolerance);
+                    SimplifySelection(tolerance);
+                }
                 InvalidateFullView();
                 break;
             }

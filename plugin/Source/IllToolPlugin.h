@@ -45,9 +45,18 @@ ASErr GetMatchingArtIsolationAware(
     AIArtHandle*** matches, ai::int32* numMatches);
 
 /** C-callable function to average selected anchor points.
-    Computes the centroid of all selected anchors and moves them to it.
+    PCA sort → classify → LOD → preview. Full CEP pipeline.
     Called from the Cleanup panel's "Average Selection" button. */
 void PluginAverageSelection();
+
+/** Sort points by projection onto first principal component.
+    Orders scattered anchors along their dominant direction.
+    Defined in IllToolShapes.cpp, used by AverageSelection. */
+std::vector<AIRealPoint> SortByPCA(const std::vector<AIRealPoint>& pts);
+
+/** Shape type name strings indexed by BridgeShapeType enum.
+    Defined in IllToolShapes.cpp. */
+extern const char* kShapeNames[];
 
 /** C-callable function to count currently selected anchor points.
     Iterates all path art and counts segments where the anchor is selected.
@@ -219,6 +228,63 @@ private:
     bool                    fInWorkingMode = false;
 
     //------------------------------------------------------------------------------------
+    //  Shape pipeline types — used by AverageSelection, ReclassifyAs, LOD
+    //------------------------------------------------------------------------------------
+
+public:
+    /** Handle pair for bezier control points (in/left and out/right). */
+    struct HandlePair {
+        AIRealPoint left;   // incoming handle
+        AIRealPoint right;  // outgoing handle
+    };
+
+    /** Result of shape classification + fitting — carries output points and handles. */
+    struct ShapeFitResult {
+        BridgeShapeType              shape = BridgeShapeType::Freeform;
+        std::vector<AIRealPoint>     points;
+        std::vector<HandlePair>      handles;
+        bool                         closed = false;
+        double                       confidence = 0;
+    };
+
+    /** One level in the LOD cache — slider value + simplified points. */
+    struct LODLevel {
+        int                          value;     // 0..100
+        std::vector<AIRealPoint>     points;
+        std::vector<HandlePair>      handles;   // empty if corner-only
+    };
+
+    /** Precompute LOD levels for a point array. */
+    std::vector<LODLevel> PrecomputeLOD(
+        const std::vector<AIRealPoint>& pts,
+        int numLevels = 20,
+        const ShapeFitResult* primitiveFit = nullptr);
+
+    /** Create a preview path from points + handles inside a parent group. */
+    AIArtHandle PlacePreview(
+        AIArtHandle parentGroup,
+        const std::vector<AIRealPoint>& points,
+        const std::vector<HandlePair>& handles,
+        bool closed);
+
+private:
+    //------------------------------------------------------------------------------------
+    //  AverageSelection pipeline cache (CEP port)
+    //------------------------------------------------------------------------------------
+
+    /** PCA-sorted anchor points from last AverageSelection call. */
+    std::vector<AIRealPoint>     fCachedSortedPoints;
+
+    /** Shape classification result from last AverageSelection. */
+    ShapeFitResult               fCachedShapeFit;
+
+    /** Precomputed LOD levels from last AverageSelection. */
+    std::vector<LODLevel>        fLODCache;
+
+    /** The preview path created by AverageSelection (inside working group). */
+    AIArtHandle                  fPreviewPath = nullptr;
+
+    //------------------------------------------------------------------------------------
     //  Merge endpoint scan state (Stage 6)
     //------------------------------------------------------------------------------------
 
@@ -367,9 +433,18 @@ private:
     void InvalidateFullView();
 
 public:
-    /** Average selected anchor points: move all selected anchors to their centroid.
-        This is the "Average Selection" cleanup operation. */
+    /** Average selected anchor points: PCA sort → classify → LOD → preview.
+        Replaces the old centroid-collapse with the full CEP pipeline. */
     void AverageSelection();
+
+    /** Classify a raw point array (not from a path) — returns fitted points + handles. */
+    ShapeFitResult ClassifyPoints(const std::vector<AIRealPoint>& pts, bool isClosed = false);
+
+    /** Force-fit sorted points to a specific shape type — returns fitted points + handles. */
+    ShapeFitResult FitPointsToShape(const std::vector<AIRealPoint>& pts, BridgeShapeType shapeType);
+
+    /** Apply a precomputed LOD level from the cache. Called when simplification slider moves. */
+    void ApplyLODLevel(int level);
 
     /** Classify the currently selected path's shape type (line, arc, L, rect, S, ellipse, freeform).
         Reads path segments, runs a simple heuristic, and stores the result for panel display. */
