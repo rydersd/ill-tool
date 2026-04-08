@@ -9,6 +9,7 @@
 
 #import "CleanupPanelController.h"
 #include "IllToolPlugin.h"
+#include "modules/CleanupModule.h"
 #include "HttpBridge.h"
 #import <cstdio>
 
@@ -172,7 +173,11 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
     self.lastPolledCount = count;
 
     // Also read the detected shape from the plugin
-    const char* detectedShape = gPlugin ? gPlugin->fLastDetectedShape : "---";
+    const char* detectedShape = "---";
+    if (gPlugin) {
+        auto* cleanup = gPlugin->GetModule<CleanupModule>();
+        if (cleanup) detectedShape = cleanup->GetLastDetectedShape();
+    }
 
     dispatch_async(dispatch_get_main_queue(), ^{
         self.pointsCountLabel.stringValue = [NSString stringWithFormat:@"Points: %d", count];
