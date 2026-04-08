@@ -257,7 +257,7 @@ void BridgeRequestUndoShape()       { BridgeEnqueueOp({OpType::UndoShape}); }
 
 static std::mutex gPerspMutex;
 static BridgePerspectiveLine gPerspLines[3];   // 0=left, 1=right, 2=vertical
-static double gPerspHorizonY = 400.0;
+static double gPerspHorizonY = 33.0;
 static bool   gPerspLocked = false;
 
 void BridgeSetPerspectiveLine(int lineIndex, double h1x, double h1y, double h2x, double h2y) {

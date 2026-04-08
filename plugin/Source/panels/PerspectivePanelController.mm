@@ -79,6 +79,18 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
 }
 
 //========================================================================================
+//  FlippedView — NSView subclass with y=0 at top (like UIKit)
+//  Prevents top-of-panel clipping when panel window is shorter than content.
+//========================================================================================
+
+@interface PerspFlippedView : NSView
+@end
+
+@implementation PerspFlippedView
+- (BOOL)isFlipped { return YES; }
+@end
+
+//========================================================================================
 //  PerspectivePanelController
 //========================================================================================
 
@@ -247,19 +259,14 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
 - (void)buildUI
 {
     CGFloat totalHeight = 500.0;  // must match panel height in IllToolPanels.mm
-    // Use a flipped NSView subclass so (0,0) is top-left and content doesn't clip from the top
-    NSView *root = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, kPanelWidth, totalHeight)];
+    // Flipped view: y=0 at top, content builds top-down. If panel is shorter,
+    // bottom gets clipped (less important) rather than top (buttons).
+    PerspFlippedView *root = [[PerspFlippedView alloc] initWithFrame:NSMakeRect(0, 0, kPanelWidth, totalHeight)];
     root.wantsLayer = YES;
     root.layer.backgroundColor = ITBGColor().CGColor;
     root.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     self.rootViewInternal = root;
-    [root release];  // strong property retains
-
-    // Cocoa NSView origin is bottom-left. Illustrator clips from the top when
-    // the panel is shorter than the content. So we lay out BOTTOM-UP: important
-    // buttons go at low y (bottom = always visible), less critical info at high y.
-    //
-    // y starts near the bottom and we work upward.
+    [root release];
 
     CGFloat y = kPadding;
 
@@ -402,83 +409,83 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
 
 - (NSView *)buildGridTab:(NSRect)frame
 {
-    NSView *container = [[NSView alloc] initWithFrame:frame];
-    CGFloat y = frame.size.height - kPadding;
+    PerspFlippedView *container = [[PerspFlippedView alloc] initWithFrame:frame];
+    CGFloat y = kPadding;
 
     // --- Status label ---
     NSTextField *status = MakeLabel(@"No grid", ITMonoFont(), ITDimColor());
-    status.frame = NSMakeRect(kPadding, y - 14, kPanelWidth - 2*kPadding, 14);
+    status.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, 14);
     [container addSubview:status];
     self.statusLabel = status;
-    y -= (14 + kPadding);
+    y += (14 + kPadding);
 
     // --- VP coordinate readouts (read-only) ---
     NSTextField *vp1 = MakeLabel(@"VP1 \u2014 Not set", ITMonoFont(), ITDimColor());
-    vp1.frame = NSMakeRect(kPadding, y - 14, kPanelWidth - 2*kPadding, 14);
+    vp1.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, 14);
     [container addSubview:vp1];
     self.vp1CoordLabel = vp1;
-    y -= (14 + 2);
+    y += (14 + 2);
 
     NSTextField *vp2 = MakeLabel(@"VP2 \u2014 Not set", ITMonoFont(), ITDimColor());
-    vp2.frame = NSMakeRect(kPadding, y - 14, kPanelWidth - 2*kPadding, 14);
+    vp2.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, 14);
     [container addSubview:vp2];
     self.vp2CoordLabel = vp2;
-    y -= (14 + 2);
+    y += (14 + 2);
 
     NSTextField *vp3 = MakeLabel(@"VP3 \u2014 Not set", ITMonoFont(), ITDimColor());
-    vp3.frame = NSMakeRect(kPadding, y - 14, kPanelWidth - 2*kPadding, 14);
+    vp3.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, 14);
     [container addSubview:vp3];
     self.vp3CoordLabel = vp3;
-    y -= (14 + kPadding);
+    y += (14 + kPadding);
 
-    // --- Horizon slider ---
-    NSTextField *horizLbl = MakeLabel(@"Horizon Y", ITLabelFont(), ITTextColor());
-    horizLbl.frame = NSMakeRect(kPadding, y - 14, 80, 14);
+    // --- Horizon slider (0-100% of artboard height, 100=top) ---
+    NSTextField *horizLbl = MakeLabel(@"Horizon", ITLabelFont(), ITTextColor());
+    horizLbl.frame = NSMakeRect(kPadding, y, 80, 14);
     [container addSubview:horizLbl];
 
-    NSTextField *horizVal = MakeLabel(@"400", ITMonoFont(), ITAccentColor());
-    horizVal.frame = NSMakeRect(kPanelWidth - kPadding - 40, y - 14, 40, 14);
+    NSTextField *horizVal = MakeLabel(@"33%", ITMonoFont(), ITAccentColor());
+    horizVal.frame = NSMakeRect(kPanelWidth - kPadding - 40, y, 40, 14);
     horizVal.alignment = NSTextAlignmentRight;
     [container addSubview:horizVal];
     self.horizonValueLabel = horizVal;
-    y -= (14 + 2);
+    y += (14 + 2);
 
-    NSSlider *horizSlider = [NSSlider sliderWithValue:400 minValue:-500 maxValue:1500
+    NSSlider *horizSlider = [NSSlider sliderWithValue:33 minValue:0 maxValue:100
                                                target:self action:@selector(onHorizonChanged:)];
-    horizSlider.frame = NSMakeRect(kPadding, y - kSliderH, kPanelWidth - 2*kPadding, kSliderH);
+    horizSlider.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kSliderH);
     [container addSubview:horizSlider];
     self.horizonSlider = horizSlider;
-    y -= (kSliderH + kPadding);
+    y += (kSliderH + kPadding);
 
     // --- Grid density slider ---
     NSTextField *densLbl = MakeLabel(@"Grid Density", ITLabelFont(), ITTextColor());
-    densLbl.frame = NSMakeRect(kPadding, y - 14, 100, 14);
+    densLbl.frame = NSMakeRect(kPadding, y, 100, 14);
     [container addSubview:densLbl];
 
     NSTextField *densVal = MakeLabel(@"5", ITMonoFont(), ITAccentColor());
-    densVal.frame = NSMakeRect(kPanelWidth - kPadding - 30, y - 14, 30, 14);
+    densVal.frame = NSMakeRect(kPanelWidth - kPadding - 30, y, 30, 14);
     densVal.alignment = NSTextAlignmentRight;
     [container addSubview:densVal];
     self.densityValueLabel = densVal;
-    y -= (14 + 2);
+    y += (14 + 2);
 
     NSSlider *densSlider = [NSSlider sliderWithValue:5 minValue:2 maxValue:20
                                               target:self action:@selector(onDensityChanged:)];
-    densSlider.frame = NSMakeRect(kPadding, y - kSliderH, kPanelWidth - 2*kPadding, kSliderH);
+    densSlider.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kSliderH);
     [container addSubview:densSlider];
     self.densitySlider = densSlider;
-    y -= (kSliderH + kPadding);
+    y += (kSliderH + kPadding);
 
     // --- Separator ---
     NSBox *sep2 = [[NSBox alloc] initWithFrame:NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, 1)];
     sep2.boxType = NSBoxSeparator;
     [container addSubview:sep2];
     [sep2 release];
-    y -= (1 + kPadding);
+    y += (1 + kPadding);
 
     // --- Clear Grid button ---
     NSButton *clearBtn = MakeButton(@"Clear Grid", self, @selector(onClearGrid:));
-    clearBtn.frame = NSMakeRect(kPadding, y - kRowHeight, kPanelWidth - 2*kPadding, kRowHeight);
+    clearBtn.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kRowHeight);
     [container addSubview:clearBtn];
 
     return container;
@@ -490,42 +497,42 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
 
 - (NSView *)buildMirrorTab:(NSRect)frame
 {
-    NSView *container = [[NSView alloc] initWithFrame:frame];
-    CGFloat y = frame.size.height - kPadding;
+    PerspFlippedView *container = [[PerspFlippedView alloc] initWithFrame:frame];
+    CGFloat y = kPadding;
 
     // --- Axis selector ---
     NSTextField *axisLbl = MakeLabel(@"Axis:", ITLabelFont(), ITTextColor());
-    axisLbl.frame = NSMakeRect(kPadding, y - 14, 40, 14);
+    axisLbl.frame = NSMakeRect(kPadding, y, 40, 14);
     [container addSubview:axisLbl];
-    y -= (14 + 4);
+    y += (14 + 4);
 
     NSArray *axisLabels = @[@"Vertical", @"Horizontal", @"Custom"];
     NSSegmentedControl *axisSeg = [NSSegmentedControl segmentedControlWithLabels:axisLabels
         trackingMode:NSSegmentSwitchTrackingSelectOne
         target:self action:@selector(onMirrorAxisChanged:)];
-    axisSeg.frame = NSMakeRect(kPadding, y - kRowHeight, kPanelWidth - 2*kPadding, kRowHeight);
+    axisSeg.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kRowHeight);
     axisSeg.font = [NSFont systemFontOfSize:10];
     axisSeg.selectedSegment = 0;
     [container addSubview:axisSeg];
     self.mirrorAxisSegment = axisSeg;
-    y -= (kRowHeight + kPadding);
+    y += (kRowHeight + kPadding);
 
     // --- Options ---
     NSButton *replaceChk = MakeCheckbox(@"Replace original (copy by default)", self, @selector(onMirrorOptionChanged:));
-    replaceChk.frame = NSMakeRect(kPadding, y - kRowHeight, kPanelWidth - 2*kPadding, kRowHeight);
+    replaceChk.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kRowHeight);
     [container addSubview:replaceChk];
     self.mirrorReplaceCheck = replaceChk;
-    y -= (kRowHeight + 2);
+    y += (kRowHeight + 2);
 
     NSButton *previewChk = MakeCheckbox(@"Preview", self, @selector(onMirrorOptionChanged:));
-    previewChk.frame = NSMakeRect(kPadding, y - kRowHeight, kPanelWidth - 2*kPadding, kRowHeight);
+    previewChk.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kRowHeight);
     [container addSubview:previewChk];
     self.mirrorPreviewCheck = previewChk;
-    y -= (kRowHeight + kPadding);
+    y += (kRowHeight + kPadding);
 
     // --- Mirror button ---
     NSButton *mirrorBtn = MakeButton(@"Mirror", self, @selector(onMirrorExecute:));
-    mirrorBtn.frame = NSMakeRect(kPadding, y - kRowHeight, kPanelWidth - 2*kPadding, kRowHeight);
+    mirrorBtn.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kRowHeight);
     [container addSubview:mirrorBtn];
 
     return container;
@@ -537,54 +544,54 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
 
 - (NSView *)buildDuplicateTab:(NSRect)frame
 {
-    NSView *container = [[NSView alloc] initWithFrame:frame];
-    CGFloat y = frame.size.height - kPadding;
+    PerspFlippedView *container = [[PerspFlippedView alloc] initWithFrame:frame];
+    CGFloat y = kPadding;
 
     // --- Count slider ---
     NSTextField *countLbl = MakeLabel(@"Count:", ITLabelFont(), ITTextColor());
-    countLbl.frame = NSMakeRect(kPadding, y - 14, 50, 14);
+    countLbl.frame = NSMakeRect(kPadding, y, 50, 14);
     [container addSubview:countLbl];
 
     NSTextField *countVal = MakeLabel(@"3", ITMonoFont(), ITAccentColor());
-    countVal.frame = NSMakeRect(kPanelWidth - kPadding - 30, y - 14, 30, 14);
+    countVal.frame = NSMakeRect(kPanelWidth - kPadding - 30, y, 30, 14);
     countVal.alignment = NSTextAlignmentRight;
     [container addSubview:countVal];
     self.dupCountLabel = countVal;
-    y -= (14 + 2);
+    y += (14 + 2);
 
     NSSlider *countSlider = [NSSlider sliderWithValue:3 minValue:1 maxValue:20
                                                target:self action:@selector(onDupCountChanged:)];
-    countSlider.frame = NSMakeRect(kPadding, y - kSliderH, kPanelWidth - 2*kPadding, kSliderH);
+    countSlider.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kSliderH);
     [container addSubview:countSlider];
     self.dupCountSlider = countSlider;
-    y -= (kSliderH + kPadding);
+    y += (kSliderH + kPadding);
 
     // --- Spacing popup ---
     NSTextField *spaceLbl = MakeLabel(@"Spacing:", ITLabelFont(), ITTextColor());
-    spaceLbl.frame = NSMakeRect(kPadding, y - 14, 60, 14);
+    spaceLbl.frame = NSMakeRect(kPadding, y, 60, 14);
     [container addSubview:spaceLbl];
-    y -= (14 + 4);
+    y += (14 + 4);
 
-    NSPopUpButton *popup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(kPadding, y - kRowHeight, kPanelWidth - 2*kPadding, kRowHeight) pullsDown:NO];
+    NSPopUpButton *popup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kRowHeight) pullsDown:NO];
     [popup addItemsWithTitles:@[@"Equal in Perspective", @"Equal in Screen", @"Custom"]];
     popup.font = ITLabelFont();
     popup.target = self;
     popup.action = @selector(onDupSpacingChanged:);
     [container addSubview:popup];
     self.dupSpacingPopup = popup;
-    [popup release];  // strong property retains
-    y -= (kRowHeight + kPadding);
+    [popup release];
+    y += (kRowHeight + kPadding);
 
     // --- Options ---
     NSButton *previewChk = MakeCheckbox(@"Preview", self, @selector(onDupOptionChanged:));
-    previewChk.frame = NSMakeRect(kPadding, y - kRowHeight, kPanelWidth - 2*kPadding, kRowHeight);
+    previewChk.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kRowHeight);
     [container addSubview:previewChk];
     self.dupPreviewCheck = previewChk;
-    y -= (kRowHeight + kPadding);
+    y += (kRowHeight + kPadding);
 
     // --- Duplicate button ---
     NSButton *dupBtn = MakeButton(@"Duplicate", self, @selector(onDuplicateExecute:));
-    dupBtn.frame = NSMakeRect(kPadding, y - kRowHeight, kPanelWidth - 2*kPadding, kRowHeight);
+    dupBtn.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kRowHeight);
     [container addSubview:dupBtn];
 
     return container;
@@ -596,48 +603,48 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
 
 - (NSView *)buildPasteTab:(NSRect)frame
 {
-    NSView *container = [[NSView alloc] initWithFrame:frame];
-    CGFloat y = frame.size.height - kPadding;
+    PerspFlippedView *container = [[PerspFlippedView alloc] initWithFrame:frame];
+    CGFloat y = kPadding;
 
     // --- Plane selector ---
     NSTextField *planeLbl = MakeLabel(@"Plane:", ITLabelFont(), ITTextColor());
-    planeLbl.frame = NSMakeRect(kPadding, y - 14, 50, 14);
+    planeLbl.frame = NSMakeRect(kPadding, y, 50, 14);
     [container addSubview:planeLbl];
-    y -= (14 + 4);
+    y += (14 + 4);
 
     NSArray *planeLabels = @[@"Floor", @"Left Wall", @"Right Wall", @"Custom"];
     NSSegmentedControl *planeSeg = [NSSegmentedControl segmentedControlWithLabels:planeLabels
         trackingMode:NSSegmentSwitchTrackingSelectOne
         target:self action:@selector(onPastePlaneChanged:)];
-    planeSeg.frame = NSMakeRect(kPadding, y - kRowHeight, kPanelWidth - 2*kPadding, kRowHeight);
+    planeSeg.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kRowHeight);
     planeSeg.font = [NSFont systemFontOfSize:9];
     planeSeg.selectedSegment = 0;
     [container addSubview:planeSeg];
     self.pastePlaneSegment = planeSeg;
-    y -= (kRowHeight + kPadding);
+    y += (kRowHeight + kPadding);
 
     // --- Scale slider ---
     NSTextField *scaleLbl = MakeLabel(@"Scale:", ITLabelFont(), ITTextColor());
-    scaleLbl.frame = NSMakeRect(kPadding, y - 14, 50, 14);
+    scaleLbl.frame = NSMakeRect(kPadding, y, 50, 14);
     [container addSubview:scaleLbl];
 
     NSTextField *scaleVal = MakeLabel(@"100%", ITMonoFont(), ITAccentColor());
-    scaleVal.frame = NSMakeRect(kPanelWidth - kPadding - 45, y - 14, 45, 14);
+    scaleVal.frame = NSMakeRect(kPanelWidth - kPadding - 45, y, 45, 14);
     scaleVal.alignment = NSTextAlignmentRight;
     [container addSubview:scaleVal];
     self.pasteScaleLabel = scaleVal;
-    y -= (14 + 2);
+    y += (14 + 2);
 
     NSSlider *scaleSlider = [NSSlider sliderWithValue:100 minValue:10 maxValue:200
                                                target:self action:@selector(onPasteScaleChanged:)];
-    scaleSlider.frame = NSMakeRect(kPadding, y - kSliderH, kPanelWidth - 2*kPadding, kSliderH);
+    scaleSlider.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kSliderH);
     [container addSubview:scaleSlider];
     self.pasteScaleSlider = scaleSlider;
-    y -= (kSliderH + kPadding * 2);
+    y += (kSliderH + kPadding * 2);
 
     // --- Paste in Perspective button ---
     NSButton *pasteBtn = MakeButton(@"Paste in Perspective", self, @selector(onPasteExecute:));
-    pasteBtn.frame = NSMakeRect(kPadding, y - kRowHeight, kPanelWidth - 2*kPadding, kRowHeight);
+    pasteBtn.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kRowHeight);
     [container addSubview:pasteBtn];
 
     return container;
@@ -704,12 +711,20 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
 - (void)onLockToggle:(NSButton *)sender
 {
     bool newLocked = (sender.state == NSControlStateValueOn);
+    // Lock = exit edit mode. Unlock = enter edit mode.
     PluginOp op;
     op.type = OpType::LockPerspective;
     op.boolParam1 = newLocked;
     BridgeEnqueueOp(op);
     BridgeSetPerspectiveLocked(newLocked);
-    fprintf(stderr, "[IllTool Panel] %s grid\n", newLocked ? "Lock" : "Unlock");
+    // Also toggle edit mode via bridge op
+    PluginOp editOp;
+    editOp.type = OpType::SetPerspEditMode;
+    editOp.boolParam1 = !newLocked;  // edit when unlocked
+    BridgeEnqueueOp(editOp);
+    fprintf(stderr, "[IllTool Panel] %s grid (%s)\n",
+            newLocked ? "Lock" : "Unlock",
+            newLocked ? "exit edit" : "enter edit");
 }
 
 - (void)onShowToggle:(NSButton *)sender
@@ -732,10 +747,11 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
 
 - (void)onHorizonChanged:(NSSlider *)sender
 {
-    double value = sender.doubleValue;
-    self.horizonValueLabel.stringValue = [NSString stringWithFormat:@"%.0f", value];
-    BridgeSetHorizonY(value);
-    fprintf(stderr, "[IllTool Panel] Horizon Y: %.0f\n", value);
+    double pct = sender.doubleValue;
+    self.horizonValueLabel.stringValue = [NSString stringWithFormat:@"%.0f%%", pct];
+    // Send as percentage — module converts to artboard Y
+    BridgeSetHorizonY(pct);
+    fprintf(stderr, "[IllTool Panel] Horizon: %.0f%%\n", pct);
 }
 
 - (void)onDensityChanged:(NSSlider *)sender

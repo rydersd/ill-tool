@@ -464,9 +464,20 @@ void PerspectiveModule::SyncFromBridge()
         }
     }
 
-    double bridgeHorizon = BridgeGetHorizonY();
-    if (fGrid.horizonY != bridgeHorizon) {
-        fGrid.horizonY = bridgeHorizon;
+    // Horizon is stored as percentage (0-100). Convert to artboard Y coordinate.
+    double horizonPct = BridgeGetHorizonY();
+    double horizonY = horizonPct;  // fallback: treat as absolute
+    if (sAIDocumentView) {
+        AIRealRect vb = {0, 0, 0, 0};
+        if (sAIDocumentView->GetDocumentViewBounds(NULL, &vb) == kNoErr) {
+            // Illustrator Y: top is smaller number, bottom is larger
+            double top = std::min((double)vb.top, (double)vb.bottom);
+            double bot = std::max((double)vb.top, (double)vb.bottom);
+            horizonY = top + (bot - top) * (1.0 - horizonPct / 100.0);
+        }
+    }
+    if (fGrid.horizonY != horizonY) {
+        fGrid.horizonY = horizonY;
         anyChanged = true;
     }
 
@@ -501,6 +512,10 @@ bool PerspectiveModule::HandleOp(const PluginOp& op)
 
         case OpType::LockPerspective:
             LockGrid(op.boolParam1);
+            return true;
+
+        case OpType::SetPerspEditMode:
+            SetEditMode(op.boolParam1);
             return true;
 
         case OpType::SetGridDensity:
@@ -678,10 +693,12 @@ void PerspectiveModule::OnDocumentChanged()
 //  Mouse event handlers
 //========================================================================================
 
-/** Helper: compute distance between two points. */
-static double PerspDist(AIRealPoint a, AIRealPoint b) {
-    double dx = a.h - b.h;
-    double dy = a.v - b.v;
+/** Helper: view-space distance for perspective handles (zoom-independent). */
+static double PerspViewDist(AIRealPoint a, AIRealPoint b) {
+    AIPoint va, vb;
+    if (sAIDocumentView->ArtworkPointToViewPoint(NULL, &a, &va) != kNoErr) return 1e20;
+    if (sAIDocumentView->ArtworkPointToViewPoint(NULL, &b, &vb) != kNoErr) return 1e20;
+    double dx = va.h - vb.h, dy = va.v - vb.v;
     return std::sqrt(dx * dx + dy * dy);
 }
 
@@ -720,8 +737,9 @@ bool PerspectiveModule::HandleMouseDown(AIToolMessage* msg)
         BridgeSetPerspectiveVisible(true);
         fNextLineIndex = 2;
         fPlacementMode = false;
+        fEditMode = true;  // Auto-enter edit mode after VP placement
 
-        fprintf(stderr, "[IllTool PerspModule] Placement: VP1 at (%.0f,%.0f), auto-mirrored VP2 at (%.0f,%.0f)\n",
+        fprintf(stderr, "[IllTool PerspModule] Placement: VP1 at (%.0f,%.0f), auto-mirrored VP2 at (%.0f,%.0f) — entering edit mode\n",
                 click.h, click.v, mirH1.h, mirH1.v);
 
         fGrid.Recompute();
@@ -729,9 +747,8 @@ bool PerspectiveModule::HandleMouseDown(AIToolMessage* msg)
         return true;
     }
 
-    // Only consume handle drags if grid is visible and not locked
-    if (!fGrid.visible) return false;
-    if (fGrid.locked) return false;
+    // Only consume handle drags if in edit mode (or grid visible and not locked)
+    if (!fEditMode && (!fGrid.visible || fGrid.locked)) return false;
 
     // Hit-test existing handles — works with ANY active tool
     PerspectiveLine* lines[3] = {
@@ -743,8 +760,8 @@ bool PerspectiveModule::HandleMouseDown(AIToolMessage* msg)
     for (int i = 0; i < 3; i++) {
         if (!lines[i]->active) continue;
 
-        double d1 = PerspDist(click, lines[i]->handle1);
-        double d2 = PerspDist(click, lines[i]->handle2);
+        double d1 = PerspViewDist(click, lines[i]->handle1);
+        double d2 = PerspViewDist(click, lines[i]->handle2);
 
         if (d1 <= kHandleHitRadius) {
             fDragLine = i;
@@ -814,6 +831,67 @@ bool PerspectiveModule::HandleMouseUp(AIToolMessage* msg)
 }
 
 //========================================================================================
+//  Edit mode — enter/exit perspective editing
+//========================================================================================
+
+void PerspectiveModule::SetEditMode(bool edit)
+{
+    fEditMode = edit;
+    if (edit) {
+        fGrid.locked = false;
+        BridgeSetPerspectiveLocked(false);
+        fprintf(stderr, "[IllTool PerspModule] Entered edit mode\n");
+    } else {
+        fGrid.locked = true;
+        BridgeSetPerspectiveLocked(true);
+        fHoverLine = -1;
+        fHoverHandle = 0;
+        fprintf(stderr, "[IllTool PerspModule] Exited edit mode (grid locked)\n");
+    }
+    InvalidateFullView();
+}
+
+//========================================================================================
+//  Cursor tracking — hover highlighting for VP handles
+//========================================================================================
+
+void PerspectiveModule::HandleCursorTrack(AIRealPoint artPt)
+{
+    if (!fGrid.visible || fGrid.locked) {
+        fHoverLine = -1;
+        fHoverHandle = 0;
+        return;
+    }
+
+    int prevLine = fHoverLine;
+    int prevHandle = fHoverHandle;
+    fHoverLine = -1;
+    fHoverHandle = 0;
+
+    PerspectiveLine* lines[3] = {
+        &fGrid.leftVP,
+        &fGrid.rightVP,
+        &fGrid.verticalVP
+    };
+
+    for (int i = 0; i < 3; i++) {
+        if (!lines[i]->active) continue;
+        double d1 = PerspViewDist(artPt, lines[i]->handle1);
+        double d2 = PerspViewDist(artPt, lines[i]->handle2);
+        if (d1 <= kHandleHitRadius) {
+            fHoverLine = i; fHoverHandle = 1; break;
+        }
+        if (d2 <= kHandleHitRadius) {
+            fHoverLine = i; fHoverHandle = 2; break;
+        }
+    }
+
+    if (fHoverLine != prevLine || fHoverHandle != prevHandle) {
+        InvalidateFullView();
+    }
+}
+
+//========================================================================================
 //  Perspective tool mouse handlers (called when perspective tool is active)
 //  These handle VP placement on click + auto-mirror + switch to arrow tool
 //========================================================================================
@@ -838,8 +916,8 @@ void PerspectiveModule::ToolMouseDown(AIToolMessage* msg)
     for (int i = 0; i < 3; i++) {
         if (!lines[i]->active) continue;
 
-        double d1 = PerspDist(click, lines[i]->handle1);
-        double d2 = PerspDist(click, lines[i]->handle2);
+        double d1 = PerspViewDist(click, lines[i]->handle1);
+        double d2 = PerspViewDist(click, lines[i]->handle2);
 
         if (d1 <= kHandleHitRadius) {
             fDragLine = i;
@@ -929,13 +1007,20 @@ void PerspectiveModule::ToolMouseUp(AIToolMessage* msg)
 static void DrawHandleCircle(AIAnnotatorDrawer* drawer, AIPoint center, int radius,
                               const AIRGBColor& color)
 {
-    sAIAnnotatorDrawer->SetColor(drawer, color);
     AIRect r;
     r.left   = center.h - radius;
     r.top    = center.v - radius;
     r.right  = center.h + radius;
     r.bottom = center.v + radius;
+
+    // White fill + colored outline — matches cleanup bbox handle style
+    AIRGBColor white;
+    white.red = white.green = white.blue = 65535;
+    sAIAnnotatorDrawer->SetColor(drawer, white);
     sAIAnnotatorDrawer->DrawEllipse(drawer, r, true);
+    sAIAnnotatorDrawer->SetColor(drawer, color);
+    sAIAnnotatorDrawer->SetLineWidth(drawer, 1.5);
+    sAIAnnotatorDrawer->DrawEllipse(drawer, r, false);
 }
 
 /** Helper: create a dimmed version of a color (for extension lines). */
@@ -1002,8 +1087,16 @@ void PerspectiveModule::DrawPerspectiveOverlay(AIAnnotatorMessage* message)
         sAIAnnotatorDrawer->SetLineDashedEx(drawer, dashArray, 2);
         sAIAnnotatorDrawer->SetColor(drawer, horizonColor);
 
-        AIRealPoint artLeft  = {(AIReal)-5000.0, (AIReal)fGrid.horizonY};
-        AIRealPoint artRight = {(AIReal)5000.0,  (AIReal)fGrid.horizonY};
+        // Horizon line extends across visible canvas
+        double horizExtend = 2000.0;
+        if (sAIDocumentView) {
+            AIRealRect vb = {0, 0, 0, 0};
+            if (sAIDocumentView->GetDocumentViewBounds(NULL, &vb) == kNoErr) {
+                horizExtend = fabs(vb.right - vb.left) * 0.6;
+            }
+        }
+        AIRealPoint artLeft  = {(AIReal)(-horizExtend), (AIReal)fGrid.horizonY};
+        AIRealPoint artRight = {(AIReal)(horizExtend),  (AIReal)fGrid.horizonY};
         AIPoint vLeft, vRight;
         if (sAIDocumentView->ArtworkPointToViewPoint(NULL, &artLeft, &vLeft) == kNoErr &&
             sAIDocumentView->ArtworkPointToViewPoint(NULL, &artRight, &vRight) == kNoErr) {
@@ -1027,10 +1120,28 @@ void PerspectiveModule::DrawPerspectiveOverlay(AIAnnotatorMessage* message)
         sAIAnnotatorDrawer->SetLineDashedEx(drawer, nullptr, 0);
         sAIAnnotatorDrawer->DrawLine(drawer, vh1, vh2);
 
-        // Circle handles — hidden when grid is locked
+        // Circle handles — hidden when grid is locked, hover-highlighted
         if (!fGrid.locked) {
-            DrawHandleCircle(drawer, vh1, 5, color);
-            DrawHandleCircle(drawer, vh2, 5, color);
+            // Find which line index this is (for hover check)
+            int lineIdx = -1;
+            if (&line == &fGrid.leftVP) lineIdx = 0;
+            else if (&line == &fGrid.rightVP) lineIdx = 1;
+            else if (&line == &fGrid.verticalVP) lineIdx = 2;
+
+            bool h1Hover = (fHoverLine == lineIdx && fHoverHandle == 1);
+            bool h2Hover = (fHoverLine == lineIdx && fHoverHandle == 2);
+            bool h1Drag  = (fDragLine == lineIdx && fDragHandle == 1);
+            bool h2Drag  = (fDragLine == lineIdx && fDragHandle == 2);
+
+            AIRGBColor hoverColor;
+            hoverColor.red = (ai::uint16)(1.0 * 65535);
+            hoverColor.green = (ai::uint16)(1.0 * 65535);
+            hoverColor.blue = (ai::uint16)(0.5 * 65535);
+
+            DrawHandleCircle(drawer, vh1, (h1Hover || h1Drag) ? 7 : 5,
+                             (h1Hover || h1Drag) ? hoverColor : color);
+            DrawHandleCircle(drawer, vh2, (h2Hover || h2Drag) ? 7 : 5,
+                             (h2Hover || h2Drag) ? hoverColor : color);
         }
 
         // Dotted extension lines
@@ -1041,7 +1152,16 @@ void PerspectiveModule::DrawPerspectiveOverlay(AIAnnotatorMessage* message)
 
         double nx = dx / len;
         double ny = dy / len;
-        double extendDist = 5000.0;
+        // Extend lines to fill the visible canvas
+        double extendDist = 2000.0;  // default
+        if (sAIDocumentView) {
+            AIRealRect vb = {0, 0, 0, 0};
+            if (sAIDocumentView->GetDocumentViewBounds(NULL, &vb) == kNoErr) {
+                double vw = fabs(vb.right - vb.left);
+                double vh = fabs(vb.top - vb.bottom);
+                extendDist = std::max(vw, vh) * 1.2;
+            }
+        }
 
         AIRealPoint extA = {(AIReal)(line.handle1.h - nx * extendDist),
                             (AIReal)(line.handle1.v - ny * extendDist)};
@@ -1095,16 +1215,25 @@ void PerspectiveModule::DrawPerspectiveOverlay(AIAnnotatorMessage* message)
         sAIAnnotatorDrawer->DrawEllipse(drawer, vpRect, false);
     };
 
+    // Draw VP markers only if they're within a reasonable screen range
+    // (VPs at ±1M cause annotator overflow)
     if (fGrid.valid) {
-        drawVPMarker(fGrid.computedVP1, vp1Color);
-        drawVPMarker(fGrid.computedVP2, vp2Color);
+        if (std::abs(fGrid.computedVP1.h) < 50000 && std::abs(fGrid.computedVP1.v) < 50000) {
+            drawVPMarker(fGrid.computedVP1, vp1Color);
+        }
+        if (std::abs(fGrid.computedVP2.h) < 50000 && std::abs(fGrid.computedVP2.v) < 50000) {
+            drawVPMarker(fGrid.computedVP2, vp2Color);
+        }
     }
     if (fGrid.verticalVP.active && fGrid.valid) {
-        drawVPMarker(fGrid.computedVP3, vp3Color);
+        if (std::abs(fGrid.computedVP3.h) < 50000 && std::abs(fGrid.computedVP3.v) < 50000) {
+            drawVPMarker(fGrid.computedVP3, vp3Color);
+        }
     }
 
     // --- Draw grid lines (only when locked) ---
-    if (fGrid.locked && fGrid.valid) {
+    // Draw grid lines when valid (in edit mode or locked)
+    if (fGrid.valid) {
         sAIAnnotatorDrawer->SetColor(drawer, gridColor);
         sAIAnnotatorDrawer->SetOpacity(drawer, 0.3);
         sAIAnnotatorDrawer->SetLineWidth(drawer, 0.5);

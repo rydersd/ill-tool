@@ -110,6 +110,16 @@ std::vector<AIRealPoint> SortByPCA(const std::vector<AIRealPoint>& pts)
     for (int m = 0; m < (int)pts.size(); m++) {
         sorted[m] = pts[indexed[m].idx];
     }
+
+    // Direction check: if sorted order is reversed relative to the original
+    // first anchor, flip it. This prevents the curve from being mirrored.
+    AIRealPoint origFirst = pts[0];
+    double distToFirst = Dist2D(sorted[0], origFirst);
+    double distToLast  = Dist2D(sorted.back(), origFirst);
+    if (distToLast < distToFirst) {
+        std::reverse(sorted.begin(), sorted.end());
+    }
+
     return sorted;
 }
 
@@ -368,16 +378,16 @@ AIArtHandle PlacePreview(
     sAIPath->SetPathSegments(newPath, 0, (ai::int16)n, segs.data());
     sAIPath->SetPathClosed(newPath, closed);
 
-    // Style: 1.5pt orange stroke (#FF6600), no fill — visible edit-mode path
+    // Style: 1pt 80% black stroke, no fill — clear preview for cleanup editing
     AIPathStyle style;
     memset(&style, 0, sizeof(style));
     style.fillPaint = false;
     style.strokePaint = true;
-    style.stroke.width = (AIReal)1.5;
+    style.stroke.width = (AIReal)1.0;
     style.stroke.color.kind = kThreeColor;
-    style.stroke.color.c.rgb.red   = (AIReal)1.0;   // FF
-    style.stroke.color.c.rgb.green = (AIReal)0.4;    // 66
-    style.stroke.color.c.rgb.blue  = (AIReal)0.0;    // 00
+    style.stroke.color.c.rgb.red   = (AIReal)0.2;
+    style.stroke.color.c.rgb.green = (AIReal)0.2;
+    style.stroke.color.c.rgb.blue  = (AIReal)0.2;
     sAIPathStyle->SetPathStyle(newPath, &style);
 
     // Name for identification
@@ -386,6 +396,44 @@ AIArtHandle PlacePreview(
     fprintf(stderr, "[IllTool] PlacePreview: created path with %d segments (handles=%s, closed=%s)\n",
             n, hasHandles ? "yes" : "no", closed ? "yes" : "no");
     return newPath;
+}
+
+//========================================================================================
+//  Update an existing preview path's segments in place (no destroy+create)
+//========================================================================================
+
+bool UpdatePreviewSegments(
+    AIArtHandle existingPath,
+    const std::vector<AIRealPoint>& points,
+    const std::vector<HandlePair>& handles,
+    bool closed)
+{
+    if (!existingPath || points.empty()) return false;
+
+    int n = (int)points.size();
+    std::vector<AIPathSegment> segs(n);
+    bool hasHandles = ((int)handles.size() == n);
+
+    for (int i = 0; i < n; i++) {
+        segs[i].p = points[i];
+        if (hasHandles) {
+            segs[i].in  = handles[i].left;
+            segs[i].out = handles[i].right;
+            segs[i].corner = false;
+        } else {
+            segs[i].in  = points[i];
+            segs[i].out = points[i];
+            segs[i].corner = true;
+        }
+    }
+
+    sAIPath->SetPathSegmentCount(existingPath, (ai::int16)n);
+    sAIPath->SetPathSegments(existingPath, 0, (ai::int16)n, segs.data());
+    sAIPath->SetPathClosed(existingPath, closed);
+
+    fprintf(stderr, "[IllTool] UpdatePreviewSegments: updated to %d segments (handles=%s, closed=%s)\n",
+            n, hasHandles ? "yes" : "no", closed ? "yes" : "no");
+    return true;
 }
 
 //========================================================================================

@@ -200,36 +200,74 @@ After tracing, paths need to be organized by surface type, body part, or spatial
 
 ### What It Must Do
 1. User selects messy paths (lasso or click)
-2. Clicks "Average Selection"
+2. Clicks ANY shape button (Line, Arc, L, Rect, S, Ellipse, Free) — OR clicks "Average Selection"
 3. Plugin collects ALL selected anchors across all paths into ONE sorted array
 4. Creates ONE output path spanning first-to-last point
 5. Classifies shape: line (2pts), arc (3pts + handles), L-shape (3pts), rectangle (4pts), S-curve (3pts + handles), ellipse (4pts + handles), freeform
-6. Simplifies to fewest possible points for that shape type
-7. Preview path replaces messy originals (dimmed, in isolation)
-8. **Handles stay active** — user can drag to adjust
-9. Simplification slider scrubs through LOD cache (0=original, 100=pure primitive)
-10. Tension slider adjusts handle smoothness
-11. Reclassify buttons force a different shape type
-12. Confirm = delete originals, promote preview. Cancel = restore originals.
+6. **Optimizes to minimum control points** for that shape type. Simple shapes get 2-4 points. Complex paths (wires, snakes, multi-directional) get more points at inflection changes, but always the minimum needed to faithfully represent the shape.
+7. Preview path replaces messy originals (dimmed at 30% but visible as reference, in isolation)
+8. **Tool switches to Selection tool (black arrow)** — user immediately sees bounding box + can interact
+9. **Shape buttons toggle between types** — clicking a different shape updates the preview in place (no new path). Active shape button is highlighted in the panel.
+10. **Bounding box handles are draggable** — free distortion by default. If perspective is active and snap-to-perspective is on, distortion snaps through perspective homography.
+11. **Path control point handles are draggable** — the 3-4 (or more) anchor handles on the cleaned path can be dragged directly without switching tools. Handle size matches bounding box handle size for consistency.
+12. Simplification slider scrubs through LOD cache (0=original, 100=pure primitive)
+13. Tension slider adjusts handle smoothness
+14. Confirm/Apply = delete originals (if checkbox checked), promote preview to real path on original layer, exit isolation. Cancel = restore originals, delete preview, exit isolation.
+15. **Undo must work** throughout the entire cleanup editing session.
+16. Preview stroke: **1pt 80% black** (not orange). User-definable color is a future enhancement.
+17. **Isolation mode prevents selecting background elements** during cleanup editing.
+
+### UX Flow (2026-04-08 session refinement)
+```
+Select paths (lasso) → Click shape button → ONE merged path appears
+  ↓ tool switches to black arrow, path is selected in isolation
+  ↓ bounding box handles visible, path handles visible
+  ↓ user can: drag bbox handles (distort/perspective), drag path handles (refine curve)
+  ↓ user can: click different shape buttons to toggle (updates in place)
+  ↓ user can: adjust simplification slider, tension slider
+  ↓ user can: undo any step
+  ↓ Apply (deletes originals if checked, promotes path, exits isolation)
+  ↓ OR Cancel (restores originals, deletes preview, exits isolation)
+```
 
 ### What Exists
 - [x] PCA sort (SortByPCA)
 - [x] Shape classification with fitted output points + handles (ClassifyPoints)
 - [x] LOD precomputation with inflection preservation (PrecomputeLOD)
-- [x] Preview path creation (PlacePreview)
-- [x] Working mode (dim originals, isolate working group)
-- [x] LOD slider scrubbing (ApplyLODLevel)
-- [x] Reclassify on cached sorted points (FitPointsToShape)
+- [x] Preview path creation (PlacePreview) + in-place segment update (UpdatePreviewSegments)
+- [x] Working mode (dim originals at 30%, lock, isolate working group)
+- [x] LOD slider scrubbing (ApplyLODLevel) — updates in place
+- [x] Reclassify on cached sorted points (FitPointsToShape) — updates in place
 - [x] Catmull-Rom handle computation (ComputeSmoothHandles)
+- [x] Shape buttons auto-trigger AverageSelection when not in working mode
+- [x] Tool switches to Selection tool (black arrow) after Average Selection
+- [x] Preview stroke: 1pt 80% black
+- [x] Apply exits isolation + deletes originals + promotes preview to original layer
+- [x] Active shape button highlighting in panel
+- [x] Isolation re-entry via kAIIsolationModeChangedNotifier
+
+### Handle Interaction Design (2026-04-08)
+Two kinds of handles, both draggable with the IllTool tool (no tool switch needed):
+
+1. **Bounding box handles = circles** — 8 handles (4 corners + 4 midpoints). Default behavior: scale (aligned to perspective if active). Toggle for free distort mode (individual corner drag). Outside bbox near corners = **rotate** (cursor changes to rotation icon). All drawn by annotator (screen-space, non-scaling).
+
+2. **Path control point handles = squares** — the 3-4+ anchor points of the cleaned path. Dragging = move the anchor point, curve adjusts. These are also drawn by the annotator at the same visual size as bbox handles. The user should be able to edit the path directly without switching to Illustrator's Direct Selection tool.
+
+3. **Rotation** — clicking just outside a bbox corner starts rotation around the bbox center. Cursor should show rotation affordance.
+
+4. **Perspective alignment** — by default, bbox scale snaps to perspective grid if active. Free distort toggle overrides this.
+
+Both handle types must be the same visual size. The IllTool tool intercepts ToolMouseDown/Drag/Up and hit-tests: anchor handles → bbox handles → rotate zone.
 
 ### What's Missing / Broken
-- [ ] Verify ONE path is created (not multiple)
-- [ ] Handles must be visible and draggable after preview creation (Direct Selection tool activation)
-- [ ] Auto-switch to Direct Selection tool after Average Selection
-- [ ] Stroke: 80% black for preview path (not 1pt black default)
+- [ ] **Bounding box handle dragging** — handles drawn by annotator, hit-test + drag working for our tool. Need to wire distortion math (affine for free, homography for perspective-snap).
+- [ ] **Path control point handle dragging** — draw square handles at anchor positions via annotator, hit-test on ToolMouseDown, update segment position on drag, redraw on mouse up.
+- [ ] **Handle size consistency** — both handle types same visual size (circles for bbox, squares for path anchors).
+- [ ] Background element selection during isolation — verify notifier re-entry prevents this.
+- [ ] Undo integration during cleanup editing — verify undo stack works with in-place segment updates.
 - [ ] Surface hint from VisionEngine integration (InferSurfaceType → boost classification confidence)
 - [ ] Resmooth (tension slider recomputing handles on preview)
-- [ ] Test end-to-end in Illustrator
+- [ ] User-definable preview stroke color (future)
 
 ---
 

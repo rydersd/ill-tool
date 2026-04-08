@@ -107,7 +107,13 @@ bool SelectionModule::HandleMouseDown(AIToolMessage* msg)
         return true;
     }
 
-    // Lasso mode: click to add vertex, double-click to close
+    // If CleanupModule is in working mode, don't start a new lasso — defer to handle editing
+    if (gPlugin) {
+        auto* cleanup = gPlugin->GetModule<CleanupModule>();
+        if (cleanup && cleanup->IsInWorkingMode()) return false;
+    }
+
+    // Lasso mode: click to add vertex, drag existing vertex, double-click to close
     try {
         AIRealPoint artPt = msg->cursor;
 
@@ -118,18 +124,37 @@ bool SelectionModule::HandleMouseDown(AIToolMessage* msg)
                           && !fPolygonVertices.empty();
         fLastClickTime = now;
 
+        // Hit-test existing vertices FIRST — prevents accidental double-click close
+        if (!fPolygonVertices.empty() && sAIDocumentView) {
+            for (int v = 0; v < (int)fPolygonVertices.size(); v++) {
+                AIPoint va, vb;
+                if (sAIDocumentView->ArtworkPointToViewPoint(NULL, &artPt, &va) == kNoErr &&
+                    sAIDocumentView->ArtworkPointToViewPoint(NULL, &fPolygonVertices[v], &vb) == kNoErr) {
+                    double dx = va.h - vb.h, dy = va.v - vb.v;
+                    if (sqrt(dx * dx + dy * dy) <= 7.0) {
+                        fDragVertexIdx = v;
+                        fLastClickTime = 0;  // reset double-click timer
+                        fprintf(stderr, "[SelectionModule] Drag vertex %d\n", v);
+                        return true;
+                    }
+                }
+            }
+        }
+
+        // THEN double-click detection (only if no vertex was hit)
         if (isDoubleClick && fPolygonVertices.size() >= 3) {
-            // Close the polygon
             fprintf(stderr, "[SelectionModule] Double-click close, %zu vertices\n",
                     fPolygonVertices.size());
             ExecutePolygonSelection();
             fPolygonVertices.clear();
+            fDragVertexIdx = -1;
+            fHoverVertexIdx = -1;
             UpdatePolygonOverlay();
             InvalidateFullView();
             return true;
         }
 
-        // Add vertex
+        // No vertex hit — add new vertex
         fPolygonVertices.push_back(artPt);
         fLastCursorPos = artPt;
         fprintf(stderr, "[SelectionModule] Added vertex %zu at (%.1f, %.1f)\n",
@@ -144,7 +169,19 @@ bool SelectionModule::HandleMouseDown(AIToolMessage* msg)
 
 bool SelectionModule::HandleMouseDrag(AIToolMessage* msg)
 {
-    // Update rubber band cursor position
+    if (gPlugin) {
+        auto* cleanup = gPlugin->GetModule<CleanupModule>();
+        if (cleanup && cleanup->IsInWorkingMode()) return false;
+    }
+
+    // Vertex drag
+    if (fDragVertexIdx >= 0 && fDragVertexIdx < (int)fPolygonVertices.size()) {
+        fPolygonVertices[fDragVertexIdx] = msg->cursor;
+        fLastCursorPos = msg->cursor;
+        UpdatePolygonOverlay();
+        return true;
+    }
+
     fLastCursorPos = msg->cursor;
     UpdatePolygonOverlay();
     return true;
@@ -152,6 +189,16 @@ bool SelectionModule::HandleMouseDrag(AIToolMessage* msg)
 
 bool SelectionModule::HandleMouseUp(AIToolMessage* msg)
 {
+    if (gPlugin) {
+        auto* cleanup = gPlugin->GetModule<CleanupModule>();
+        if (cleanup && cleanup->IsInWorkingMode()) return false;
+    }
+
+    if (fDragVertexIdx >= 0) {
+        fprintf(stderr, "[SelectionModule] Drag vertex %d end\n", fDragVertexIdx);
+        fDragVertexIdx = -1;
+    }
+
     fLastCursorPos = msg->cursor;
     UpdatePolygonOverlay();
     return true;
@@ -165,6 +212,31 @@ void SelectionModule::DrawOverlay(AIAnnotatorMessage* msg)
 {
     // Lasso overlay is drawn via DrawCommands (UpdatePolygonOverlay pushes them)
     // No direct annotator drawing needed — the annotator renders DrawCommands centrally
+}
+
+void SelectionModule::UpdateHoverVertex(AIRealPoint artPt)
+{
+    int prev = fHoverVertexIdx;
+    fHoverVertexIdx = -1;
+
+    if (!fPolygonVertices.empty() && sAIDocumentView) {
+        for (int v = 0; v < (int)fPolygonVertices.size(); v++) {
+            AIPoint va, vb;
+            if (sAIDocumentView->ArtworkPointToViewPoint(NULL, &artPt, &va) == kNoErr &&
+                sAIDocumentView->ArtworkPointToViewPoint(NULL, &fPolygonVertices[v], &vb) == kNoErr) {
+                double dx = va.h - vb.h, dy = va.v - vb.v;
+                if (sqrt(dx * dx + dy * dy) <= 7.0) {
+                    fHoverVertexIdx = v;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (fHoverVertexIdx != prev) {
+        UpdatePolygonOverlay();
+        InvalidateFullView();
+    }
 }
 
 void SelectionModule::OnDocumentChanged()
@@ -236,16 +308,20 @@ void SelectionModule::UpdatePolygonOverlay()
         }
     }
 
-    // Filled box handles at vertices
+    // Filled box handles at vertices — hover highlighted
+    Color4 hoverYellow = {1.0, 0.9, 0.3, 1.0};
+    Color4 dragOrange  = {1.0, 0.6, 0.1, 1.0};
     for (size_t i = 0; i < fPolygonVertices.size(); i++) {
+        bool isHovered = (fHoverVertexIdx == (int)i);
+        bool isDragged = (fDragVertexIdx == (int)i);
         DrawCommand handle;
         handle.type = DrawCommandType::Rect;
         handle.id = "_lasso_handle_" + std::to_string(i);
         handle.center = {fPolygonVertices[i].h, fPolygonVertices[i].v};
-        handle.width = 6.0;
-        handle.height = 6.0;
+        handle.width = (isHovered || isDragged) ? 9.0 : 6.0;
+        handle.height = (isHovered || isDragged) ? 9.0 : 6.0;
         handle.strokeColor = darkCyan;
-        handle.fillColor = darkCyan;
+        handle.fillColor = isDragged ? dragOrange : (isHovered ? hoverYellow : darkCyan);
         handle.strokeWidth = 1.0;
         handle.filled = true;
         handle.stroked = true;

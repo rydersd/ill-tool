@@ -10,7 +10,9 @@ INSTALL=~/Developer/ai-plugins/IllTool.aip
 IDENTITY="Developer ID Application: Ryder Booth (ASH39KMW4S)"
 
 echo "=== Step 1: Copy source files to SDK ==="
+rm -f "$SDK_SRC/modules/"*.cpp "$SDK_SRC/modules/"*.h
 cp plugin/Source/*.cpp plugin/Source/*.h "$SDK_SRC/"
+cp plugin/Source/modules/*.cpp plugin/Source/modules/*.h "$SDK_SRC/modules/"
 cp plugin/Source/panels/*.mm plugin/Source/panels/*.h "$SDK_SRC/panels/"
 
 echo "=== Step 2: Build ==="

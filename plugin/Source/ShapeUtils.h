@@ -120,6 +120,13 @@ AIArtHandle PlacePreview(
     const std::vector<HandlePair>& handles,
     bool closed);
 
+/** Update an existing path's segments in place (avoids destroy+create flicker). */
+bool UpdatePreviewSegments(
+    AIArtHandle existingPath,
+    const std::vector<AIRealPoint>& points,
+    const std::vector<HandlePair>& handles,
+    bool closed);
+
 //------------------------------------------------------------------------------------
 //  Selection helpers
 //------------------------------------------------------------------------------------

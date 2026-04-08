@@ -88,6 +88,18 @@ public:
     PerspectiveGrid& GetGrid() { return fGrid; }
     const PerspectiveGrid& GetGrid() const { return fGrid; }
 
+    /** Returns true if a VP handle is currently hovered (for cursor change). */
+    bool IsHandleHovered() const { return fHoverLine >= 0; }
+
+    /** Returns true if in perspective editing mode (arrow cursor, handles draggable). */
+    bool IsInEditMode() const { return fEditMode; }
+
+    /** Enter/exit perspective editing mode. */
+    void SetEditMode(bool edit);
+
+    /** Update hover state from cursor tracking (called from TrackToolCursor). */
+    void HandleCursorTrack(AIRealPoint artPt);
+
     /** Project a set of points through the perspective grid.
         @param plane 0=floor, 1=left wall, 2=right wall. */
     std::vector<AIRealPoint> ProjectPointsThroughPerspective(
@@ -116,6 +128,10 @@ private:
     //------------------------------------------------------------------------------------
 
     /** Which perspective line is being dragged (-1 = none, 0-2 = line index). */
+    bool fEditMode = false;    ///< In perspective editing mode (arrow cursor, handles draggable)
+    int fHoverLine = -1;       ///< Which line's handle is hovered (-1=none)
+    int fHoverHandle = 0;      ///< Which handle (1 or 2) is hovered
+
     int fDragLine = -1;
 
     /** Which handle of the line is being dragged (1 = handle1, 2 = handle2, 0 = none). */

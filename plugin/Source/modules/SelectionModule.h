@@ -47,6 +47,8 @@ private:
     std::vector<AIRealPoint> fPolygonVertices;
     AIRealPoint              fLastCursorPos = {0, 0};
     double                   fLastClickTime = 0;
+    int                      fDragVertexIdx = -1;    ///< Which vertex is being dragged (-1=none)
+    int                      fHoverVertexIdx = -1;   ///< Which vertex is hovered (-1=none)
 
     static constexpr double kDoubleClickThreshold = 0.3;
 
@@ -55,6 +57,12 @@ private:
     //------------------------------------------------------------------------------------
 
     void UpdatePolygonOverlay();
+
+public:
+    /** Update hover state for lasso vertex highlighting (called from TrackToolCursor). */
+    void UpdateHoverVertex(AIRealPoint artPt);
+
+private:
     void ExecutePolygonSelection();
     static bool PointInPolygon(const AIRealPoint& pt,
                                const std::vector<AIRealPoint>& polygon);

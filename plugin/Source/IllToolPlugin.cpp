@@ -322,15 +322,38 @@ ASErr IllToolPlugin::Message(char* caller, char* selector, void* message)
                     }
                     else {
                         // Main tool: delegate drag/up to modules
+                        // Priority: cleanup → perspective → others
                         if (strcmp(selector, kSelectorAIToolMouseDrag) == 0) {
-                            for (auto& mod : fModules) {
-                                if (mod->HandleMouseDrag(toolMsg)) break;
+                            bool handled = false;
+                            auto* cleanup = GetModule<CleanupModule>();
+                            if (cleanup && cleanup->IsInWorkingMode()) {
+                                handled = cleanup->HandleMouseDrag(toolMsg);
+                            }
+                            if (!handled) {
+                                auto* persp = GetModule<PerspectiveModule>();
+                                if (persp) handled = persp->HandleMouseDrag(toolMsg);
+                            }
+                            if (!handled) {
+                                for (auto& mod : fModules) {
+                                    if (mod->HandleMouseDrag(toolMsg)) break;
+                                }
                             }
                             result = kNoErr;
                         }
                         else if (strcmp(selector, kSelectorAIToolMouseUp) == 0) {
-                            for (auto& mod : fModules) {
-                                if (mod->HandleMouseUp(toolMsg)) break;
+                            bool handled = false;
+                            auto* cleanup = GetModule<CleanupModule>();
+                            if (cleanup && cleanup->IsInWorkingMode()) {
+                                handled = cleanup->HandleMouseUp(toolMsg);
+                            }
+                            if (!handled) {
+                                auto* persp = GetModule<PerspectiveModule>();
+                                if (persp) handled = persp->HandleMouseUp(toolMsg);
+                            }
+                            if (!handled) {
+                                for (auto& mod : fModules) {
+                                    if (mod->HandleMouseUp(toolMsg)) break;
+                                }
                             }
                             result = kNoErr;
                         }
@@ -552,7 +575,8 @@ ASErr IllToolPlugin::Notify(AINotifierMessage* message)
         // Stage 8: Locked isolation mode -- re-enter if user escapes while in working mode
         if (message->notifier == fIsolationChangedNotifier) {
             auto* cleanup = GetModule<CleanupModule>();
-            if (cleanup && cleanup->IsInWorkingMode() && cleanup->GetWorkingGroup() && sAIIsolationMode) {
+            if (cleanup && cleanup->IsInWorkingMode() && !cleanup->IsExitingWorkingMode()
+                && cleanup->GetWorkingGroup() && sAIIsolationMode) {
                 AIIsolationModeChangedNotifierData* data =
                     (AIIsolationModeChangedNotifierData*)message->notifyData;
                 if (data && !data->inIsolationMode) {
@@ -594,8 +618,24 @@ ASErr IllToolPlugin::ToolMouseDown(AIToolMessage* message)
             return kNoErr;
         }
 
-        // Try each module's HandleMouseDown (perspective VP hit-test, bbox, blend pick, etc.)
+        // Priority 1: if CleanupModule is in working mode, try it first (handle editing)
+        {
+            auto* cleanup = GetModule<CleanupModule>();
+            if (cleanup && cleanup->IsInWorkingMode()) {
+                if (cleanup->HandleMouseDown(message)) return kNoErr;
+            }
+        }
+
+        // Priority 2: if perspective grid is visible+unlocked, try VP handle dragging
+        // This lets the user drag VP handles with the main IllTool tool (no tool switch)
+        {
+            auto* persp = GetModule<PerspectiveModule>();
+            if (persp && persp->HandleMouseDown(message)) return kNoErr;
+        }
+
+        // Try each module's HandleMouseDown (lasso, blend pick, etc.)
         for (auto& mod : fModules) {
+            if (dynamic_cast<PerspectiveModule*>(mod.get())) continue;  // already tried at Priority 2
             if (mod->HandleMouseDown(message)) return kNoErr;
         }
     }
@@ -656,9 +696,39 @@ ASErr IllToolPlugin::TrackToolCursor(AIToolMessage* message)
             InvalidateFullView();
         }
 
-        // Set cursor
+        // Track cursor for handle hover highlighting (cleanup + perspective)
+        auto* cleanup = GetModule<CleanupModule>();
+        if (cleanup && cleanup->IsInWorkingMode()) {
+            cleanup->HandleCursorTrack(message->cursor);
+        }
+        // Only track non-cleanup handles when cleanup is NOT in working mode
+        if (!cleanup || !cleanup->IsInWorkingMode()) {
+            auto* persp = GetModule<PerspectiveModule>();
+            if (persp) {
+                persp->HandleCursorTrack(message->cursor);
+            }
+            auto* selection = GetModule<SelectionModule>();
+            if (selection) {
+                selection->UpdateHoverVertex(message->cursor);
+            }
+        }
+
+        // Set cursor — arrow when editing handles (cleanup or perspective), lasso icon otherwise
         if (sAIUser != NULL) {
-            result = sAIUser->SetSVGCursor(kIllToolIconResourceID, fResourceManagerHandle);
+            bool showArrow = false;
+            if (cleanup && cleanup->IsInWorkingMode()) showArrow = true;
+
+            // Show arrow when in perspective edit mode
+            if (!showArrow) {
+                auto* persp = GetModule<PerspectiveModule>();
+                if (persp && persp->IsInEditMode()) showArrow = true;
+            }
+
+            if (showArrow) {
+                sAIUser->SetCursor(kAIArrowCursorID, fResourceManagerHandle);
+            } else {
+                result = sAIUser->SetSVGCursor(kIllToolIconResourceID, fResourceManagerHandle);
+            }
         }
     }
     catch (ai::Error& ex) {

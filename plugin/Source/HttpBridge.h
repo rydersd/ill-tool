@@ -56,6 +56,7 @@ enum class OpType : int {
     UndoShape,
     ClearPerspective,
     LockPerspective,     // boolParam1 = lock/unlock
+    SetPerspEditMode,    // boolParam1 = enter/exit edit mode
     SetGridDensity,      // intParam = density (2-20)
     // Stage 11: Blend Harmonization
     BlendPickA,          // enter pick-A mode (next click stores path A)

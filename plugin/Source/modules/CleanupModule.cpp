@@ -21,6 +21,9 @@
 
 extern IllToolPlugin* gPlugin;
 
+// Forward declaration — defined after bounding box section
+static double ViewSpaceDist(AIRealPoint a, AIRealPoint b);
+
 //========================================================================================
 //  UndoStack implementation (standalone, from IllToolModule.h)
 //========================================================================================
@@ -174,43 +177,343 @@ bool CleanupModule::HandleOp(const PluginOp& op)
 
 bool CleanupModule::HandleMouseDown(AIToolMessage* msg)
 {
-    if (!fInWorkingMode || !fBBox.visible) return false;
+    if (!fInWorkingMode) return false;
+
+    // Safety: clear any stale drag state from a missed MouseUp
+    if (fDragBezierIdx >= 0) {
+        fDragBezierIdx = -1;
+    }
+    if (fDragAnchorIdx >= 0) {
+        fDragAnchorIdx = -1;
+        ComputeBoundingBox();
+    }
+    if (fBBox.dragHandle >= 0) {
+        fBBox.dragHandle = -1;
+    }
 
     AIRealPoint artPt = msg->cursor;
-    int hit = HitTestBBoxHandle(artPt);
-    if (hit >= 0) {
-        fBBox.dragHandle = hit;
-        fBBox.dragStart = artPt;
+    bool optionKey = msg->event && (msg->event->modifiers & aiEventModifiers_optionKey) != 0;
+    bool shiftKey  = msg->event && (msg->event->modifiers & aiEventModifiers_shiftKey) != 0;
+
+    // Shift-click on an anchor: toggle sharp/smooth
+    if (shiftKey && !optionKey && fPreviewPath) {
+        int anchorHit = HitTestAnchorHandle(artPt, 7.0);
+        if (anchorHit >= 0) {
+            ai::int16 segCount = 0;
+            sAIPath->GetPathSegmentCount(fPreviewPath, &segCount);
+            if (anchorHit < segCount) {
+                AIPathSegment seg;
+                sAIPath->GetPathSegments(fPreviewPath, anchorHit, 1, &seg);
+                if (seg.corner) {
+                    // Convert to smooth: compute handles from neighbors
+                    seg.corner = false;
+                    std::vector<AIPathSegment> allSegs(segCount);
+                    sAIPath->GetPathSegments(fPreviewPath, 0, segCount, allSegs.data());
+                    AIRealPoint prev = (anchorHit > 0) ? allSegs[anchorHit-1].p : seg.p;
+                    AIRealPoint next = (anchorHit < segCount-1) ? allSegs[anchorHit+1].p : seg.p;
+                    double dx = next.h - prev.h, dy = next.v - prev.v;
+                    double tn = 1.0 / 6.0;
+                    seg.in.h  = (AIReal)(seg.p.h - dx * tn);
+                    seg.in.v  = (AIReal)(seg.p.v - dy * tn);
+                    seg.out.h = (AIReal)(seg.p.h + dx * tn);
+                    seg.out.v = (AIReal)(seg.p.v + dy * tn);
+                } else {
+                    // Convert to sharp: collapse handles to anchor
+                    seg.corner = true;
+                    seg.in = seg.p;
+                    seg.out = seg.p;
+                }
+                sAIPath->SetPathSegments(fPreviewPath, anchorHit, 1, &seg);
+                InvalidateFullView();
+                sAIDocument->RedrawDocument();
+                fprintf(stderr, "[CleanupModule] Toggled point %d to %s\n",
+                        anchorHit, seg.corner ? "sharp" : "smooth");
+                return true;
+            }
+        }
+    }
+
+    // Option-click on the path: add a new anchor point at click position
+    // Option+Shift = sharp corner (no handles)
+    if (optionKey && fPreviewPath) {
+        ai::int16 segCount = 0;
+        sAIPath->GetPathSegmentCount(fPreviewPath, &segCount);
+        if (segCount >= 2) {
+            std::vector<AIPathSegment> segs(segCount);
+            sAIPath->GetPathSegments(fPreviewPath, 0, segCount, segs.data());
+
+            double bestDist = 1e20;
+            int insertAfter = 0;
+            for (int i = 0; i < segCount - 1; i++) {
+                double d = PointToSegmentDist(artPt, segs[i].p, segs[i+1].p);
+                if (d < bestDist) { bestDist = d; insertAfter = i; }
+            }
+
+            if (bestDist < 20.0) {
+                bool sharp = shiftKey;
+
+                // Compute smooth handles for the new point using neighbors
+                AIRealPoint prev = segs[insertAfter].p;
+                AIRealPoint next = segs[insertAfter + 1].p;
+                double tn = 1.0 / 6.0;
+
+                AIPathSegment newSeg = {};
+                newSeg.p = artPt;
+                if (sharp) {
+                    newSeg.in = artPt;
+                    newSeg.out = artPt;
+                    newSeg.corner = true;
+                } else {
+                    double dx = next.h - prev.h;
+                    double dy = next.v - prev.v;
+                    newSeg.in.h  = (AIReal)(artPt.h - dx * tn);
+                    newSeg.in.v  = (AIReal)(artPt.v - dy * tn);
+                    newSeg.out.h = (AIReal)(artPt.h + dx * tn);
+                    newSeg.out.v = (AIReal)(artPt.v + dy * tn);
+                    newSeg.corner = false;
+                }
+
+                // Shorten the outgoing handle of the previous point
+                // and the incoming handle of the next point
+                double prevToNew = Dist2D(prev, artPt);
+                double newToNext = Dist2D(artPt, next);
+                double prevToNext = Dist2D(prev, next);
+                if (prevToNext > 1e-6) {
+                    double prevRatio = prevToNew / prevToNext;
+                    double nextRatio = newToNext / prevToNext;
+                    // Scale outgoing handle of prev toward the new point
+                    AIPathSegment& prevSeg = segs[insertAfter];
+                    double odx = prevSeg.out.h - prevSeg.p.h;
+                    double ody = prevSeg.out.v - prevSeg.p.v;
+                    prevSeg.out.h = (AIReal)(prevSeg.p.h + odx * prevRatio);
+                    prevSeg.out.v = (AIReal)(prevSeg.p.v + ody * prevRatio);
+                    // Scale incoming handle of next toward the new point
+                    AIPathSegment& nextSeg = segs[insertAfter + 1];
+                    double idx = nextSeg.in.h - nextSeg.p.h;
+                    double idy = nextSeg.in.v - nextSeg.p.v;
+                    nextSeg.in.h = (AIReal)(nextSeg.p.h + idx * nextRatio);
+                    nextSeg.in.v = (AIReal)(nextSeg.p.v + idy * nextRatio);
+                }
+
+                std::vector<AIPathSegment> newSegs;
+                for (int i = 0; i <= insertAfter; i++) newSegs.push_back(segs[i]);
+                newSegs.push_back(newSeg);
+                for (int i = insertAfter + 1; i < segCount; i++) newSegs.push_back(segs[i]);
+
+                ai::int16 nc = (ai::int16)newSegs.size();
+                sAIPath->SetPathSegmentCount(fPreviewPath, nc);
+                sAIPath->SetPathSegments(fPreviewPath, 0, nc, newSegs.data());
+
+                ComputeBoundingBox();
+                InvalidateFullView();
+                sAIDocument->RedrawDocument();
+                fprintf(stderr, "[CleanupModule] Added %s point at (%.1f, %.1f) after seg %d\n",
+                        sharp ? "sharp" : "smooth", artPt.h, artPt.v, insertAfter);
+                return true;
+            }
+        }
+    }
+
+    // Priority 1: bezier handle endpoint hit-test (small circles)
+    {
+        int bezierHit = HitTestBezierHandle(artPt);
+        if (bezierHit >= 0) {
+            fDragBezierIdx = bezierHit;
+            fBezierDragStart = artPt;
+            fprintf(stderr, "[CleanupModule] Bezier handle drag start: %s of seg %d\n",
+                    (bezierHit % 2 == 0) ? "in" : "out", bezierHit / 2);
+            return true;
+        }
+    }
+
+    // Priority 2: path anchor handle hit-test (squares)
+    int anchorHit = HitTestAnchorHandle(artPt);
+    if (anchorHit >= 0) {
+        fDragAnchorIdx = anchorHit;
+        fAnchorDragStart = artPt;
+        // Snapshot the original segment for undo
+        ai::int16 segCount = 0;
+        sAIPath->GetPathSegmentCount(fPreviewPath, &segCount);
+        if (anchorHit < segCount) {
+            sAIPath->GetPathSegments(fPreviewPath, anchorHit, 1, &fAnchorDragOrigSeg);
+        }
+        fprintf(stderr, "[CleanupModule] Anchor drag start: idx=%d\n", anchorHit);
         return true;
     }
+
+    // Priority 2: bounding box handle hit-test (circles)
+    if (fBBox.visible) {
+        int bboxHit = HitTestBBoxHandle(artPt);
+        if (bboxHit >= 0) {
+            fBBox.dragHandle = bboxHit;
+            fBBox.dragStart = artPt;
+            fprintf(stderr, "[CleanupModule] BBox drag start: handle=%d\n", bboxHit);
+            return true;
+        }
+
+        // Priority 3: rotate zone — outside bbox near corners
+        if (HitTestBBoxRotateZone(artPt)) {
+            fBBox.dragHandle = 8;  // 8 = rotating
+            fBBox.dragStart = artPt;
+            fBBox.dragStartAngle = atan2(artPt.v - fBBox.center.v, artPt.h - fBBox.center.h);
+            fprintf(stderr, "[CleanupModule] Rotation drag start\n");
+            return true;
+        }
+    }
+
     return false;
 }
 
 bool CleanupModule::HandleMouseDrag(AIToolMessage* msg)
 {
-    if (fBBox.dragHandle < 0) return false;
+    // Bezier handle drag
+    if (fDragBezierIdx >= 0) {
+        ApplyBezierDrag(fDragBezierIdx, msg->cursor);
+        InvalidateFullView();
+        return true;
+    }
 
-    ApplyBBoxTransform(fBBox.dragHandle, msg->cursor);
-    InvalidateFullView();
-    return true;
+    // Anchor drag
+    if (fDragAnchorIdx >= 0) {
+        ApplyAnchorDrag(fDragAnchorIdx, msg->cursor);
+        InvalidateFullView();
+        return true;
+    }
+
+    // Bbox rotation
+    if (fBBox.dragHandle == 8) {
+        ApplyBBoxRotation(msg->cursor);
+        InvalidateFullView();
+        return true;
+    }
+
+    // Bbox scale/distort
+    if (fBBox.dragHandle >= 0 && fBBox.dragHandle < 8) {
+        ApplyBBoxTransform(fBBox.dragHandle, msg->cursor);
+        InvalidateFullView();
+        return true;
+    }
+
+    return false;
 }
 
 bool CleanupModule::HandleMouseUp(AIToolMessage* msg)
 {
-    if (fBBox.dragHandle < 0) return false;
+    if (!fInWorkingMode) {
+        // Clear any stale drag state
+        fDragBezierIdx = -1;
+        fDragAnchorIdx = -1;
+        fBBox.dragHandle = -1;
+        return false;
+    }
 
-    fBBox.dragHandle = -1;
-    sAIDocument->RedrawDocument();
-    return true;
+    if (fDragBezierIdx >= 0) {
+        fprintf(stderr, "[CleanupModule] Bezier handle drag end: %s of seg %d\n",
+                (fDragBezierIdx % 2 == 0) ? "in" : "out", fDragBezierIdx / 2);
+        fDragBezierIdx = -1;
+        sAIDocument->RedrawDocument();
+        return true;
+    }
+
+    if (fDragAnchorIdx >= 0) {
+        fprintf(stderr, "[CleanupModule] Anchor drag end: idx=%d\n", fDragAnchorIdx);
+
+        // Auto-merge: if this anchor landed within 5px of another anchor, merge them
+        if (fPreviewPath) {
+            ai::int16 segCount = 0;
+            sAIPath->GetPathSegmentCount(fPreviewPath, &segCount);
+            if (segCount > 2 && fDragAnchorIdx < segCount) {
+                AIPathSegment dragSeg;
+                sAIPath->GetPathSegments(fPreviewPath, fDragAnchorIdx, 1, &dragSeg);
+
+                for (ai::int16 j = 0; j < segCount; j++) {
+                    if (j == (ai::int16)fDragAnchorIdx) continue;
+                    AIPathSegment otherSeg;
+                    sAIPath->GetPathSegments(fPreviewPath, j, 1, &otherSeg);
+                    if (ViewSpaceDist(dragSeg.p, otherSeg.p) <= 5.0) {
+                        // Merge: remove the dragged point
+                        std::vector<AIPathSegment> allSegs(segCount);
+                        sAIPath->GetPathSegments(fPreviewPath, 0, segCount, allSegs.data());
+                        allSegs.erase(allSegs.begin() + fDragAnchorIdx);
+                        ai::int16 nc = (ai::int16)allSegs.size();
+                        sAIPath->SetPathSegmentCount(fPreviewPath, nc);
+                        sAIPath->SetPathSegments(fPreviewPath, 0, nc, allSegs.data());
+                        fprintf(stderr, "[CleanupModule] Auto-merged point %d onto %d\n",
+                                fDragAnchorIdx, (int)j);
+                        fHoverAnchorIdx = -1;
+                        fHoverBezierIdx = -1;
+                        break;
+                    }
+                }
+            }
+        }
+
+        fDragAnchorIdx = -1;
+        ComputeBoundingBox();
+        sAIDocument->RedrawDocument();
+        return true;
+    }
+
+    if (fBBox.dragHandle >= 0) {
+        fprintf(stderr, "[CleanupModule] BBox drag end: handle=%d\n", fBBox.dragHandle);
+        fBBox.dragHandle = -1;
+        ComputeBoundingBox();
+        sAIDocument->RedrawDocument();
+        return true;
+    }
+
+    return false;
 }
 
 //========================================================================================
-//  Draw overlay — bounding box with circle handles
+//  Cursor tracking — pre-highlight handles on hover
+//========================================================================================
+
+void CleanupModule::HandleCursorTrack(AIRealPoint artPt)
+{
+    if (!fInWorkingMode) {
+        fHoverAnchorIdx = -1;
+        fHoverBBoxIdx = -1;
+        return;
+    }
+
+    int prevAnchor = fHoverAnchorIdx;
+    int prevBBox = fHoverBBoxIdx;
+    int prevBezier = fHoverBezierIdx;
+
+    fHoverBezierIdx = -1;
+    fHoverAnchorIdx = -1;
+    fHoverBBoxIdx = -1;
+
+    // Check bezier handle endpoints first
+    fHoverBezierIdx = HitTestBezierHandle(artPt, 5.0);
+
+    if (fHoverBezierIdx < 0) {
+        // Check anchor handles
+        fHoverAnchorIdx = HitTestAnchorHandle(artPt, 6.0);
+    }
+
+    if (fHoverAnchorIdx < 0 && fHoverBezierIdx < 0) {
+        // Check bbox handles
+        fHoverBBoxIdx = HitTestBBoxHandle(artPt, 8.0);
+        if (fHoverBBoxIdx < 0 && HitTestBBoxRotateZone(artPt)) {
+            fHoverBBoxIdx = 8;
+        }
+    }
+
+    if (fHoverAnchorIdx != prevAnchor || fHoverBBoxIdx != prevBBox || fHoverBezierIdx != prevBezier) {
+        InvalidateFullView();
+    }
+}
+
+//========================================================================================
+//  Draw overlay — bounding box with circle handles + path anchor squares
 //========================================================================================
 
 void CleanupModule::DrawOverlay(AIAnnotatorMessage* msg)
 {
     DrawBoundingBoxOverlay(msg);
+    DrawPathAnchorHandles(msg);
 }
 
 //========================================================================================
@@ -223,7 +526,9 @@ void CleanupModule::OnSelectionChanged()
     // from the plugin's Notify handler where SDK calls are valid.
 
     // Recompute bounding box if preview path is being edited in working mode
-    if (fInWorkingMode && fPreviewPath) {
+    // BUT NOT during an active drag — segment modifications trigger selection
+    // change events which would recompute the bbox mid-drag and break the interaction.
+    if (fInWorkingMode && fPreviewPath && fBBox.dragHandle < 0 && fDragAnchorIdx < 0) {
         ComputeBoundingBox();
         InvalidateFullView();
     }
@@ -237,6 +542,9 @@ void CleanupModule::OnDocumentChanged()
     fLODCache.clear();
     fPreviewPath = nullptr;
     fWorkingGroup = nullptr;
+    fSourceGroup = nullptr;
+    fSourceGroupName.clear();
+    fSourceLayerName.clear();
     fInWorkingMode = false;
     fOriginalPaths.clear();
     fBBox.visible = false;
@@ -365,42 +673,93 @@ void CleanupModule::AverageSelection()
             return;
         }
 
-        // Find or create Working layer + group
-        AIArtHandle layerGroup = nullptr;
+        // Detect source group — find the common parent of selected paths
+        fSourceGroup = nullptr;
+        fSourceGroupName.clear();
+        fSourceLayerName.clear();
         {
+            // Get the parent of the first selected path
+            if (!sourcePaths.empty()) {
+                AIArtHandle parent = nullptr;
+                result = sAIArt->GetArtParent(sourcePaths[0], &parent);
+                if (result == kNoErr && parent) {
+                    short parentType = 0;
+                    sAIArt->GetArtType(parent, &parentType);
+                    if (parentType == kGroupArt) {
+                        // Check if all selected paths share this parent
+                        bool allSameParent = true;
+                        for (size_t pi = 1; pi < sourcePaths.size(); pi++) {
+                            AIArtHandle otherParent = nullptr;
+                            sAIArt->GetArtParent(sourcePaths[pi], &otherParent);
+                            if (otherParent != parent) { allSameParent = false; break; }
+                        }
+                        if (allSameParent) {
+                            fSourceGroup = parent;
+                            ai::UnicodeString groupName;
+                            ASBoolean isDefault = false;
+                            if (sAIArt->GetArtName(parent, groupName, &isDefault) == kNoErr && !isDefault) {
+                                fSourceGroupName = groupName.as_Platform();
+                            }
+                        }
+                    }
+                }
+
+                // Get the layer name
+                AILayerHandle srcLayer = nullptr;
+                result = sAIArt->GetLayerOfArt(sourcePaths[0], &srcLayer);
+                if (result == kNoErr && srcLayer) {
+                    ai::UnicodeString layerTitle;
+                    sAILayer->GetLayerTitle(srcLayer, layerTitle);
+                    fSourceLayerName = layerTitle.as_Platform();
+                }
+            }
+
+            if (fSourceGroup) {
+                fprintf(stderr, "[CleanupModule] AverageSelection: source group='%s' layer='%s'\n",
+                        fSourceGroupName.c_str(), fSourceLayerName.c_str());
+            } else {
+                fprintf(stderr, "[CleanupModule] AverageSelection: no common group (document root)\n");
+            }
+        }
+
+        // Create working group inside the source group (or at document root)
+        AIArtHandle workParent = fSourceGroup;
+        if (!workParent) {
+            // Fallback: create on a Working layer
             AILayerHandle layer = nullptr;
             ai::UnicodeString workingTitle("Working");
             result = sAILayer->GetLayerByTitle(&layer, workingTitle);
             if (result != kNoErr || layer == nullptr) {
                 result = sAILayer->InsertLayer(nullptr, kPlaceAboveAll, &layer);
-                if (result != kNoErr || layer == nullptr) {
+                if (result != kNoErr || !layer) {
                     fprintf(stderr, "[CleanupModule] AverageSelection: failed to create Working layer\n");
                     return;
                 }
                 sAILayer->SetLayerTitle(layer, workingTitle);
             }
-            result = sAIArt->GetFirstArtOfLayer(layer, &layerGroup);
-            if (result != kNoErr || !layerGroup) {
+            sAIArt->GetFirstArtOfLayer(layer, &workParent);
+            if (!workParent) {
                 fprintf(stderr, "[CleanupModule] AverageSelection: failed to get layer group\n");
                 return;
             }
         }
 
         AIArtHandle workGroup = nullptr;
-        result = sAIArt->NewArt(kGroupArt, kPlaceInsideOnTop, layerGroup, &workGroup);
+        result = sAIArt->NewArt(kGroupArt, kPlaceInsideOnTop, workParent, &workGroup);
         if (result != kNoErr || !workGroup) {
             fprintf(stderr, "[CleanupModule] AverageSelection: failed to create working group\n");
             return;
         }
+        sAIArt->SetArtName(workGroup, ai::UnicodeString("__working__"));
 
-        // Dim and lock originals
+        // Dim and lock originals (keep visible at 30% for reference, matching CEP)
         fOriginalPaths.clear();
         for (AIArtHandle art : sourcePaths) {
             AIReal prevOpacity = 1.0;
             if (sAIBlendStyle) prevOpacity = sAIBlendStyle->GetOpacity(art);
             fOriginalPaths.push_back({art, prevOpacity});
             if (sAIBlendStyle) sAIBlendStyle->SetOpacity(art, 0.30);
-            sAIArt->SetArtUserAttr(art, kArtLocked | kArtHidden, kArtLocked | kArtHidden);
+            sAIArt->SetArtUserAttr(art, kArtLocked, kArtLocked);
         }
 
         // Step 6: Build the preview — ALWAYS minimal points
@@ -454,10 +813,12 @@ void CleanupModule::AverageSelection()
             previewClosed = false;
         }
 
-        // Perspective projection if enabled — delegate to PerspectiveModule
-        if (BridgeGetSnapToPerspective() && gPlugin) {
+        // Perspective projection — only when grid is LOCKED and snap is enabled.
+        // Without lock, perspective is still being adjusted and shouldn't affect cleanup.
+        if (BridgeGetSnapToPerspective() && BridgeGetPerspectiveLocked() && gPlugin) {
             auto* persp = gPlugin->GetModule<PerspectiveModule>();
             if (persp) {
+                fprintf(stderr, "[CleanupModule] Projecting preview through locked perspective grid\n");
                 previewPts = persp->ProjectPointsThroughPerspective(previewPts, 0);
                 for (auto& h : previewHandles) {
                     auto projL = persp->ProjectPointsThroughPerspective({h.left}, 0);
@@ -492,18 +853,9 @@ void CleanupModule::AverageSelection()
                 sAIPath->SetPathSegmentSelected(fPreviewPath, s, kSegmentPointSelected);
             }
 
-            // Activate Direct Selection tool
-            if (sAITool) {
-                AIToolType directSelectNum = 0;
-                ASErr toolErr = sAITool->GetToolNumberFromName(kDirectSelectTool, &directSelectNum);
-                if (toolErr == kNoErr) {
-                    AIToolHandle directSelectHandle = nullptr;
-                    toolErr = sAITool->GetToolHandleFromNumber(directSelectNum, &directSelectHandle);
-                    if (toolErr == kNoErr && directSelectHandle) {
-                        sAITool->SetSelectedTool(directSelectHandle);
-                    }
-                }
-            }
+            // Keep IllTool tool active — our annotator draws bbox (circle) and
+            // anchor (square) handles, and our ToolMouseDown/Drag/Up handles dragging.
+            // No tool switch needed.
         }
 
         // Compute rotated bounding box
@@ -541,19 +893,18 @@ void CleanupModule::ApplyLODLevel(int level)
     }
 
     if (fPreviewPath) {
-        sAIArt->DisposeArt(fPreviewPath);
-        fPreviewPath = nullptr;
-    }
-
-    fPreviewPath = PlacePreview(fWorkingGroup, best->points, best->handles,
-                                fCachedShapeFit.closed);
-
-    if (fPreviewPath) {
-        sAIArt->SetArtUserAttr(fPreviewPath, kArtSelected, kArtSelected);
+        UpdatePreviewSegments(fPreviewPath, best->points, best->handles,
+                              fCachedShapeFit.closed);
         ai::int16 segCount = 0;
         sAIPath->GetPathSegmentCount(fPreviewPath, &segCount);
         for (ai::int16 s = 0; s < segCount; s++) {
             sAIPath->SetPathSegmentSelected(fPreviewPath, s, kSegmentPointSelected);
+        }
+    } else {
+        fPreviewPath = PlacePreview(fWorkingGroup, best->points, best->handles,
+                                    fCachedShapeFit.closed);
+        if (fPreviewPath) {
+            sAIArt->SetArtUserAttr(fPreviewPath, kArtSelected, kArtSelected);
         }
     }
 
@@ -703,20 +1054,88 @@ void CleanupModule::ApplyWorkingMode(bool deleteOriginals)
     if (!fInWorkingMode) return;
 
     try {
-        // Exit isolation mode
+        // Suppress isolation re-entry notifier during Apply
+        fExitingWorkingMode = true;
+
+        // Step 1: Exit isolation mode FIRST (before any art changes)
         if (sAIIsolationMode && sAIIsolationMode->IsInIsolationMode()) {
             sAIIsolationMode->ExitIsolationMode();
+            fprintf(stderr, "[CleanupModule] ApplyWorkingMode: exited isolation\n");
         }
 
-        // Handle originals
+        // Step 2: Unlock and restore originals BEFORE moving preview
+        // (so moveTarget art handle is valid for ReorderArt)
         for (auto& rec : fOriginalPaths) {
-            if (deleteOriginals) {
-                sAIArt->SetArtUserAttr(rec.art, kArtLocked | kArtHidden, 0);
-                sAIArt->DisposeArt(rec.art);
-            } else {
-                if (sAIBlendStyle) sAIBlendStyle->SetOpacity(rec.art, rec.prevOpacity);
-                sAIArt->SetArtUserAttr(rec.art, kArtLocked | kArtHidden, 0);
+            short artType = 0;
+            if (sAIArt->GetArtType(rec.art, &artType) != kNoErr) {
+                fprintf(stderr, "[CleanupModule] Skipping stale original path handle in restore\n");
+                continue;
             }
+            sAIArt->SetArtUserAttr(rec.art, kArtLocked | kArtHidden, 0);
+            if (!deleteOriginals && sAIBlendStyle) {
+                sAIBlendStyle->SetOpacity(rec.art, rec.prevOpacity);
+            }
+        }
+
+        // Step 3: Move preview path out of working group into the source group
+        AIArtHandle savedPreview = fPreviewPath;
+        if (fPreviewPath && fWorkingGroup) {
+            // Validate fSourceGroup handle hasn't gone stale
+            if (fSourceGroup) {
+                short sgType = 0;
+                if (sAIArt->GetArtType(fSourceGroup, &sgType) != kNoErr) {
+                    fprintf(stderr, "[CleanupModule] ApplyWorkingMode: source group handle stale — falling back to root\n");
+                    fSourceGroup = nullptr;
+                }
+            }
+            ASErr moveErr = kNoErr;
+            if (fSourceGroup) {
+                if (!fOriginalPaths.empty()) {
+                    moveErr = sAIArt->ReorderArt(fPreviewPath, kPlaceAbove, fOriginalPaths[0].art);
+                } else {
+                    moveErr = sAIArt->ReorderArt(fPreviewPath, kPlaceInsideOnTop, fSourceGroup);
+                }
+            } else {
+                if (!fOriginalPaths.empty()) {
+                    moveErr = sAIArt->ReorderArt(fPreviewPath, kPlaceAbove, fOriginalPaths[0].art);
+                } else {
+                    moveErr = sAIArt->ReorderArt(fPreviewPath, kPlaceAboveAll, nullptr);
+                }
+            }
+
+            if (moveErr != kNoErr) {
+                fprintf(stderr, "[CleanupModule] ApplyWorkingMode: ReorderArt failed: %d — preview handle may be stale\n", (int)moveErr);
+                fPreviewPath = nullptr;
+            }
+
+            // Auto-name
+            std::string autoName;
+            if (!fSourceGroupName.empty()) {
+                autoName = fSourceGroupName + " — Cleaned";
+            } else if (!fSourceLayerName.empty()) {
+                autoName = fSourceLayerName + " — Cleaned";
+            } else {
+                autoName = "Cleaned";
+            }
+            sAIArt->SetArtName(fPreviewPath, ai::UnicodeString(autoName));
+            fprintf(stderr, "[CleanupModule] ApplyWorkingMode: preview promoted as '%s'\n", autoName.c_str());
+        }
+
+        // Step 4: Delete originals if requested
+        if (deleteOriginals) {
+            for (auto& rec : fOriginalPaths) {
+                short artType = 0;
+                if (sAIArt->GetArtType(rec.art, &artType) != kNoErr) {
+                    fprintf(stderr, "[CleanupModule] Skipping stale original path handle in delete\n");
+                    continue;
+                }
+                sAIArt->DisposeArt(rec.art);
+            }
+        }
+
+        // Step 5: Dispose the working group (now empty)
+        if (fWorkingGroup) {
+            sAIArt->DisposeArt(fWorkingGroup);
         }
 
         // Record simplification level in LearningEngine
@@ -740,9 +1159,17 @@ void CleanupModule::ApplyWorkingMode(bool deleteOriginals)
                 surfaceHint, lodLevel, pointsBefore, pointsAfter);
         }
 
+        // Select the final path
+        if (fPreviewPath) {
+            sAIArt->SetArtUserAttr(fPreviewPath, kArtSelected, kArtSelected);
+        }
+
         // Clear state
         fOriginalPaths.clear();
         fWorkingGroup = nullptr;
+        fSourceGroup = nullptr;
+        fSourceGroupName.clear();
+        fSourceLayerName.clear();
         fPreviewPath = nullptr;
         fInWorkingMode = false;
         fCachedSortedPoints.clear();
@@ -750,15 +1177,23 @@ void CleanupModule::ApplyWorkingMode(bool deleteOriginals)
         fLODCache.clear();
         fBBox.visible = false;
         fBBox.dragHandle = -1;
+        fDragAnchorIdx = -1;
+        fDragBezierIdx = -1;
+        fHoverAnchorIdx = -1;
+        fHoverBezierIdx = -1;
+        fHoverBBoxIdx = -1;
 
+        fExitingWorkingMode = false;
         sAIDocument->RedrawDocument();
         fprintf(stderr, "[CleanupModule] ApplyWorkingMode: complete (originals %s)\n",
                 deleteOriginals ? "deleted" : "restored");
     }
     catch (ai::Error& ex) {
+        fExitingWorkingMode = false;
         fprintf(stderr, "[CleanupModule] ApplyWorkingMode error: %d\n", (int)ex);
     }
     catch (...) {
+        fExitingWorkingMode = false;
         fprintf(stderr, "[CleanupModule] ApplyWorkingMode unknown error\n");
     }
 }
@@ -772,6 +1207,7 @@ void CleanupModule::CancelWorkingMode()
     if (!fInWorkingMode) return;
 
     try {
+        fExitingWorkingMode = true;  // Suppress isolation re-entry notifier
         if (sAIIsolationMode && sAIIsolationMode->IsInIsolationMode()) {
             sAIIsolationMode->ExitIsolationMode();
         }
@@ -781,12 +1217,20 @@ void CleanupModule::CancelWorkingMode()
         }
 
         for (auto& rec : fOriginalPaths) {
+            short artType = 0;
+            if (sAIArt->GetArtType(rec.art, &artType) != kNoErr) {
+                fprintf(stderr, "[CleanupModule] Skipping stale original path handle in cancel\n");
+                continue;
+            }
             if (sAIBlendStyle) sAIBlendStyle->SetOpacity(rec.art, rec.prevOpacity);
             sAIArt->SetArtUserAttr(rec.art, kArtLocked | kArtHidden, 0);
         }
 
         fOriginalPaths.clear();
         fWorkingGroup = nullptr;
+        fSourceGroup = nullptr;
+        fSourceGroupName.clear();
+        fSourceLayerName.clear();
         fPreviewPath = nullptr;
         fInWorkingMode = false;
         fCachedSortedPoints.clear();
@@ -794,14 +1238,22 @@ void CleanupModule::CancelWorkingMode()
         fLODCache.clear();
         fBBox.visible = false;
         fBBox.dragHandle = -1;
+        fDragAnchorIdx = -1;
+        fDragBezierIdx = -1;
+        fHoverAnchorIdx = -1;
+        fHoverBezierIdx = -1;
+        fHoverBBoxIdx = -1;
 
+        fExitingWorkingMode = false;
         sAIDocument->RedrawDocument();
         fprintf(stderr, "[CleanupModule] CancelWorkingMode: complete\n");
     }
     catch (ai::Error& ex) {
+        fExitingWorkingMode = false;
         fprintf(stderr, "[CleanupModule] CancelWorkingMode error: %d\n", (int)ex);
     }
     catch (...) {
+        fExitingWorkingMode = false;
         fprintf(stderr, "[CleanupModule] CancelWorkingMode unknown error\n");
     }
 }
@@ -887,20 +1339,38 @@ void CleanupModule::ReclassifyAs(BridgeShapeType shapeType)
         return;
     }
 
-    // CEP-style: if cached sorted points exist, re-fit and update preview
+    // If not in working mode, run AverageSelection first to collect + merge anchors
+    if (!fInWorkingMode || fCachedSortedPoints.empty()) {
+        fprintf(stderr, "[CleanupModule] ReclassifyAs: not in working mode — running AverageSelection first\n");
+        AverageSelection();
+        // If AverageSelection failed (no selection, etc.), bail
+        if (!fInWorkingMode || fCachedSortedPoints.empty()) {
+            fprintf(stderr, "[CleanupModule] ReclassifyAs: AverageSelection did not enter working mode — aborting\n");
+            return;
+        }
+    }
+
+    // CEP-style: re-fit cached sorted points and update preview in place
     if (!fCachedSortedPoints.empty() && fInWorkingMode && fWorkingGroup) {
         const char* autoShape = kShapeNames[(int)fCachedShapeFit.shape];
 
         ShapeFitResult newFit = FitPointsToShape(fCachedSortedPoints, shapeType);
         fCachedShapeFit = newFit;
 
+        // Update existing path in place (no flicker from destroy+create)
         if (fPreviewPath) {
-            sAIArt->DisposeArt(fPreviewPath);
-            fPreviewPath = nullptr;
-        }
-        fPreviewPath = PlacePreview(fWorkingGroup, newFit.points, newFit.handles, newFit.closed);
-        if (fPreviewPath) {
-            sAIArt->SetArtUserAttr(fPreviewPath, kArtSelected, kArtSelected);
+            UpdatePreviewSegments(fPreviewPath, newFit.points, newFit.handles, newFit.closed);
+            // Re-select all segments for handle visibility
+            ai::int16 segCount = 0;
+            sAIPath->GetPathSegmentCount(fPreviewPath, &segCount);
+            for (ai::int16 s = 0; s < segCount; s++) {
+                sAIPath->SetPathSegmentSelected(fPreviewPath, s, kSegmentPointSelected);
+            }
+        } else {
+            fPreviewPath = PlacePreview(fWorkingGroup, newFit.points, newFit.handles, newFit.closed);
+            if (fPreviewPath) {
+                sAIArt->SetArtUserAttr(fPreviewPath, kArtSelected, kArtSelected);
+            }
         }
 
         fLODCache = PrecomputeLOD(fCachedSortedPoints, 20, &fCachedShapeFit);
@@ -1198,6 +1668,21 @@ void CleanupModule::SelectSmall(double threshold)
 }
 
 //========================================================================================
+//  Helper: compute distance in screen pixels between two artwork points
+//  Used by all hit-tests so handle radius is consistent at any zoom level.
+//========================================================================================
+
+static double ViewSpaceDist(AIRealPoint a, AIRealPoint b)
+{
+    AIPoint va, vb;
+    if (sAIDocumentView->ArtworkPointToViewPoint(NULL, &a, &va) != kNoErr) return 1e20;
+    if (sAIDocumentView->ArtworkPointToViewPoint(NULL, &b, &vb) != kNoErr) return 1e20;
+    double dx = va.h - vb.h;
+    double dy = va.v - vb.v;
+    return sqrt(dx * dx + dy * dy);
+}
+
+//========================================================================================
 //  Bounding Box — PCA-rotated custom transform cage with circle handles
 //========================================================================================
 
@@ -1346,6 +1831,11 @@ void CleanupModule::DrawBoundingBoxOverlay(AIAnnotatorMessage* message)
     activeHandleFill.green = (ai::uint16)(0.6 * 65535);
     activeHandleFill.blue  = (ai::uint16)(0.1 * 65535);
 
+    AIRGBColor hoverHandleFill;
+    hoverHandleFill.red   = (ai::uint16)(0.7 * 65535);
+    hoverHandleFill.green = (ai::uint16)(0.9 * 65535);
+    hoverHandleFill.blue  = (ai::uint16)(1.0 * 65535);
+
     sAIAnnotatorDrawer->SetColor(drawer, edgeColor);
     sAIAnnotatorDrawer->SetOpacity(drawer, 0.7);
     sAIAnnotatorDrawer->SetLineWidth(drawer, 1.0);
@@ -1370,16 +1860,22 @@ void CleanupModule::DrawBoundingBoxOverlay(AIAnnotatorMessage* message)
     int midpointRadius = 4;
 
     for (int i = 0; i < 4; i++) {
-        const AIRGBColor& fill = (fBBox.dragHandle == i) ? activeHandleFill : handleFill;
-        DrawBBoxHandle(drawer, viewCorners[i], cornerRadius, fill, handleStroke);
+        bool active = (fBBox.dragHandle == i);
+        bool hovered = (fHoverBBoxIdx == i);
+        const AIRGBColor& fill = active ? activeHandleFill : (hovered ? hoverHandleFill : handleFill);
+        int r = hovered ? cornerRadius + 2 : cornerRadius;
+        DrawBBoxHandle(drawer, viewCorners[i], r, fill, handleStroke);
     }
 
     for (int i = 0; i < 4; i++) {
         AIPoint viewMid;
         if (sAIDocumentView->ArtworkPointToViewPoint(NULL, &fBBox.midpoints[i], &viewMid) != kNoErr) continue;
 
-        const AIRGBColor& fill = (fBBox.dragHandle == (i + 4)) ? activeHandleFill : handleFill;
-        DrawBBoxHandle(drawer, viewMid, midpointRadius, fill, handleStroke);
+        bool active = (fBBox.dragHandle == (i + 4));
+        bool hovered = (fHoverBBoxIdx == (i + 4));
+        const AIRGBColor& fill = active ? activeHandleFill : (hovered ? hoverHandleFill : handleFill);
+        int r = hovered ? midpointRadius + 2 : midpointRadius;
+        DrawBBoxHandle(drawer, viewMid, r, fill, handleStroke);
     }
 
     sAIAnnotatorDrawer->SetOpacity(drawer, 1.0);
@@ -1389,20 +1885,16 @@ void CleanupModule::DrawBoundingBoxOverlay(AIAnnotatorMessage* message)
 //  Hit-test bounding box handles
 //========================================================================================
 
-int CleanupModule::HitTestBBoxHandle(AIRealPoint artPt, double hitRadius)
+int CleanupModule::HitTestBBoxHandle(AIRealPoint artPt, double hitRadiusPx)
 {
     if (!fBBox.visible) return -1;
 
     for (int i = 0; i < 4; i++) {
-        double dx = artPt.h - fBBox.corners[i].h;
-        double dy = artPt.v - fBBox.corners[i].v;
-        if (sqrt(dx * dx + dy * dy) <= hitRadius) return i;
+        if (ViewSpaceDist(artPt, fBBox.corners[i]) <= hitRadiusPx) return i;
     }
 
     for (int i = 0; i < 4; i++) {
-        double dx = artPt.h - fBBox.midpoints[i].h;
-        double dy = artPt.v - fBBox.midpoints[i].v;
-        if (sqrt(dx * dx + dy * dy) <= hitRadius) return i + 4;
+        if (ViewSpaceDist(artPt, fBBox.midpoints[i]) <= hitRadiusPx) return i + 4;
     }
 
     return -1;
@@ -1485,4 +1977,313 @@ void CleanupModule::ApplyBBoxTransform(int handleIdx, AIRealPoint newPos)
 
     sAIPath->SetPathSegments(fPreviewPath, 0, segCount, segs.data());
     ComputeBoundingBox();
+}
+
+//========================================================================================
+//  Hit-test rotate zone — outside bbox near corners
+//========================================================================================
+
+bool CleanupModule::HitTestBBoxRotateZone(AIRealPoint artPt, double innerRadiusPx, double outerRadiusPx)
+{
+    if (!fBBox.visible) return false;
+
+    for (int i = 0; i < 4; i++) {
+        double dist = ViewSpaceDist(artPt, fBBox.corners[i]);
+        if (dist > innerRadiusPx && dist <= outerRadiusPx) return true;
+    }
+    return false;
+}
+
+//========================================================================================
+//  Apply rotation — rotate all path segments around bbox center
+//========================================================================================
+
+void CleanupModule::ApplyBBoxRotation(AIRealPoint newPos)
+{
+    if (!fPreviewPath) return;
+
+    double currentAngle = atan2(newPos.v - fBBox.center.v, newPos.h - fBBox.center.h);
+    double deltaAngle = currentAngle - fBBox.dragStartAngle;
+    fBBox.dragStartAngle = currentAngle;
+
+    double cosA = cos(deltaAngle);
+    double sinA = sin(deltaAngle);
+
+    ai::int16 segCount = 0;
+    sAIPath->GetPathSegmentCount(fPreviewPath, &segCount);
+    if (segCount < 2) return;
+
+    std::vector<AIPathSegment> segs(segCount);
+    sAIPath->GetPathSegments(fPreviewPath, 0, segCount, segs.data());
+
+    double cx = fBBox.center.h;
+    double cy = fBBox.center.v;
+
+    for (int i = 0; i < segCount; i++) {
+        AIRealPoint* pts[3] = { &segs[i].in, &segs[i].p, &segs[i].out };
+        for (int j = 0; j < 3; j++) {
+            double dx = pts[j]->h - cx;
+            double dy = pts[j]->v - cy;
+            pts[j]->h = (AIReal)(cx + dx * cosA - dy * sinA);
+            pts[j]->v = (AIReal)(cy + dx * sinA + dy * cosA);
+        }
+    }
+
+    sAIPath->SetPathSegments(fPreviewPath, 0, segCount, segs.data());
+    ComputeBoundingBox();
+    fprintf(stderr, "[CleanupModule] Rotation: delta=%.2f deg\n", deltaAngle * 180.0 / M_PI);
+}
+
+//========================================================================================
+//  Path Anchor Handles — square handles at each control point of the preview path
+//========================================================================================
+
+static void DrawSquareHandle(AIAnnotatorDrawer* drawer, AIPoint center, int halfSize,
+                             const AIRGBColor& fillColor, const AIRGBColor& strokeColor)
+{
+    AIRect r;
+    r.left   = center.h - halfSize;
+    r.top    = center.v - halfSize;
+    r.right  = center.h + halfSize;
+    r.bottom = center.v + halfSize;
+
+    sAIAnnotatorDrawer->SetColor(drawer, fillColor);
+    sAIAnnotatorDrawer->DrawRect(drawer, r, true);
+    sAIAnnotatorDrawer->SetColor(drawer, strokeColor);
+    sAIAnnotatorDrawer->DrawRect(drawer, r, false);
+}
+
+void CleanupModule::DrawPathAnchorHandles(AIAnnotatorMessage* message)
+{
+    if (!message || !message->drawer) return;
+    if (!fInWorkingMode || !fPreviewPath) return;
+
+    AIAnnotatorDrawer* drawer = message->drawer;
+
+    ai::int16 segCount = 0;
+    ASErr err = sAIPath->GetPathSegmentCount(fPreviewPath, &segCount);
+    if (err != kNoErr || segCount < 1) return;
+
+    std::vector<AIPathSegment> segs(segCount);
+    err = sAIPath->GetPathSegments(fPreviewPath, 0, segCount, segs.data());
+    if (err != kNoErr) return;
+
+    // Handle colors — same stroke as bbox, white fill (active = orange)
+    AIRGBColor handleFill;
+    handleFill.red   = (ai::uint16)(1.0 * 65535);
+    handleFill.green = (ai::uint16)(1.0 * 65535);
+    handleFill.blue  = (ai::uint16)(1.0 * 65535);
+
+    AIRGBColor handleStroke;
+    handleStroke.red   = (ai::uint16)(0.15 * 65535);
+    handleStroke.green = (ai::uint16)(0.15 * 65535);
+    handleStroke.blue  = (ai::uint16)(0.15 * 65535);
+
+    AIRGBColor activeFill;
+    activeFill.red   = (ai::uint16)(1.0 * 65535);
+    activeFill.green = (ai::uint16)(0.6 * 65535);
+    activeFill.blue  = (ai::uint16)(0.1 * 65535);
+
+    AIRGBColor handleLineColor;
+    handleLineColor.red   = (ai::uint16)(0.5 * 65535);
+    handleLineColor.green = (ai::uint16)(0.5 * 65535);
+    handleLineColor.blue  = (ai::uint16)(0.5 * 65535);
+
+    int handleSize = 5;  // half-size of square — matches bbox circle radius
+
+    sAIAnnotatorDrawer->SetOpacity(drawer, 0.9);
+    sAIAnnotatorDrawer->SetLineWidth(drawer, 1.0);
+    sAIAnnotatorDrawer->SetLineDashedEx(drawer, nullptr, 0);
+
+    for (ai::int16 i = 0; i < segCount; i++) {
+        AIPoint viewPt;
+        if (sAIDocumentView->ArtworkPointToViewPoint(NULL, &segs[i].p, &viewPt) != kNoErr) continue;
+
+        // Draw bezier handle lines (in → anchor → out)
+        bool hasIn  = (fabs(segs[i].in.h - segs[i].p.h) > 0.5 || fabs(segs[i].in.v - segs[i].p.v) > 0.5);
+        bool hasOut = (fabs(segs[i].out.h - segs[i].p.h) > 0.5 || fabs(segs[i].out.v - segs[i].p.v) > 0.5);
+
+        sAIAnnotatorDrawer->SetColor(drawer, handleLineColor);
+
+        if (hasIn) {
+            AIPoint viewIn;
+            if (sAIDocumentView->ArtworkPointToViewPoint(NULL, &segs[i].in, &viewIn) == kNoErr) {
+                sAIAnnotatorDrawer->DrawLine(drawer, viewIn, viewPt);
+                bool inHovered = (fHoverBezierIdx == (int)i * 2 + 0);
+                bool inDrag    = (fDragBezierIdx == (int)i * 2 + 0);
+                int inR = (inHovered || inDrag) ? 5 : 3;
+                AIRect inRect;
+                inRect.left = viewIn.h - inR; inRect.top = viewIn.v - inR;
+                inRect.right = viewIn.h + inR; inRect.bottom = viewIn.v + inR;
+                sAIAnnotatorDrawer->SetColor(drawer, (inHovered || inDrag) ? activeFill : handleFill);
+                sAIAnnotatorDrawer->DrawEllipse(drawer, inRect, true);
+                sAIAnnotatorDrawer->SetColor(drawer, handleLineColor);
+                sAIAnnotatorDrawer->DrawEllipse(drawer, inRect, false);
+            }
+        }
+
+        if (hasOut) {
+            AIPoint viewOut;
+            if (sAIDocumentView->ArtworkPointToViewPoint(NULL, &segs[i].out, &viewOut) == kNoErr) {
+                sAIAnnotatorDrawer->DrawLine(drawer, viewPt, viewOut);
+                bool outHovered = (fHoverBezierIdx == (int)i * 2 + 1);
+                bool outDrag    = (fDragBezierIdx == (int)i * 2 + 1);
+                int outR = (outHovered || outDrag) ? 5 : 3;
+                AIRect outRect;
+                outRect.left = viewOut.h - outR; outRect.top = viewOut.v - outR;
+                outRect.right = viewOut.h + outR; outRect.bottom = viewOut.v + outR;
+                sAIAnnotatorDrawer->SetColor(drawer, (outHovered || outDrag) ? activeFill : handleFill);
+                sAIAnnotatorDrawer->DrawEllipse(drawer, outRect, true);
+                sAIAnnotatorDrawer->SetColor(drawer, handleLineColor);
+                sAIAnnotatorDrawer->DrawEllipse(drawer, outRect, false);
+            }
+        }
+
+        // Draw square anchor handle with hover pre-highlight
+        AIRGBColor hoverFill;
+        hoverFill.red   = (ai::uint16)(0.7 * 65535);
+        hoverFill.green = (ai::uint16)(0.9 * 65535);
+        hoverFill.blue  = (ai::uint16)(1.0 * 65535);
+
+        bool active = (fDragAnchorIdx == (int)i);
+        bool hovered = (fHoverAnchorIdx == (int)i);
+        const AIRGBColor& fill = active ? activeFill : (hovered ? hoverFill : handleFill);
+        int hs = hovered ? handleSize + 2 : handleSize;
+        DrawSquareHandle(drawer, viewPt, hs, fill, handleStroke);
+    }
+
+    sAIAnnotatorDrawer->SetOpacity(drawer, 1.0);
+}
+
+//========================================================================================
+//  Hit-test path anchor handles
+//========================================================================================
+
+int CleanupModule::HitTestAnchorHandle(AIRealPoint artPt, double hitRadiusPx)
+{
+    if (!fInWorkingMode || !fPreviewPath) return -1;
+
+    ai::int16 segCount = 0;
+    sAIPath->GetPathSegmentCount(fPreviewPath, &segCount);
+    if (segCount < 1) return -1;
+
+    std::vector<AIPathSegment> segs(segCount);
+    sAIPath->GetPathSegments(fPreviewPath, 0, segCount, segs.data());
+
+    for (ai::int16 i = 0; i < segCount; i++) {
+        if (ViewSpaceDist(artPt, segs[i].p) <= hitRadiusPx) return (int)i;
+    }
+
+    return -1;
+}
+
+//========================================================================================
+//  Apply anchor drag — move anchor point + shift handles by same delta
+//========================================================================================
+
+void CleanupModule::ApplyAnchorDrag(int anchorIdx, AIRealPoint newPos)
+{
+    if (!fPreviewPath || anchorIdx < 0) return;
+
+    ai::int16 segCount = 0;
+    sAIPath->GetPathSegmentCount(fPreviewPath, &segCount);
+    if (anchorIdx >= segCount) return;
+
+    // Compute delta from original position
+    double dx = newPos.h - fAnchorDragStart.h;
+    double dy = newPos.v - fAnchorDragStart.v;
+
+    // Move anchor + handles by the same delta (preserves handle shape)
+    AIPathSegment seg = fAnchorDragOrigSeg;
+    seg.p.h   += (AIReal)dx;
+    seg.p.v   += (AIReal)dy;
+    seg.in.h  += (AIReal)dx;
+    seg.in.v  += (AIReal)dy;
+    seg.out.h += (AIReal)dx;
+    seg.out.v += (AIReal)dy;
+
+    sAIPath->SetPathSegments(fPreviewPath, anchorIdx, 1, &seg);
+}
+
+//========================================================================================
+//  Hit-test bezier handle endpoints (small circles at end of handle lines)
+//  Returns: seg*2+0 for "in" handle, seg*2+1 for "out" handle, -1 for miss
+//========================================================================================
+
+int CleanupModule::HitTestBezierHandle(AIRealPoint artPt, double hitRadiusPx)
+{
+    if (!fInWorkingMode || !fPreviewPath) return -1;
+
+    ai::int16 segCount = 0;
+    sAIPath->GetPathSegmentCount(fPreviewPath, &segCount);
+    if (segCount < 1) return -1;
+
+    std::vector<AIPathSegment> segs(segCount);
+    sAIPath->GetPathSegments(fPreviewPath, 0, segCount, segs.data());
+
+    for (ai::int16 i = 0; i < segCount; i++) {
+        bool hasIn = (fabs(segs[i].in.h - segs[i].p.h) > 0.5 || fabs(segs[i].in.v - segs[i].p.v) > 0.5);
+        if (hasIn) {
+            if (ViewSpaceDist(artPt, segs[i].in) <= hitRadiusPx) return (int)i * 2 + 0;
+        }
+        bool hasOut = (fabs(segs[i].out.h - segs[i].p.h) > 0.5 || fabs(segs[i].out.v - segs[i].p.v) > 0.5);
+        if (hasOut) {
+            if (ViewSpaceDist(artPt, segs[i].out) <= hitRadiusPx) return (int)i * 2 + 1;
+        }
+    }
+    return -1;
+}
+
+//========================================================================================
+//  Apply bezier handle drag — move just the handle, not the anchor
+//========================================================================================
+
+void CleanupModule::ApplyBezierDrag(int bezierIdx, AIRealPoint newPos)
+{
+    if (!fPreviewPath || bezierIdx < 0) return;
+
+    int segIdx = bezierIdx / 2;
+    bool isOut = (bezierIdx % 2) == 1;
+
+    ai::int16 segCount = 0;
+    sAIPath->GetPathSegmentCount(fPreviewPath, &segCount);
+    if (segIdx >= segCount) return;
+
+    AIPathSegment seg;
+    sAIPath->GetPathSegments(fPreviewPath, segIdx, 1, &seg);
+
+    if (isOut) {
+        seg.out = newPos;
+    } else {
+        seg.in = newPos;
+    }
+
+    // If the point is smooth (not corner), mirror the opposite handle
+    if (!seg.corner) {
+        double dx = newPos.h - seg.p.h;
+        double dy = newPos.v - seg.p.v;
+        if (isOut) {
+            // Mirror in handle
+            double inLen = sqrt((seg.in.h - seg.p.h) * (seg.in.h - seg.p.h) +
+                                (seg.in.v - seg.p.v) * (seg.in.v - seg.p.v));
+            double outLen = sqrt(dx * dx + dy * dy);
+            if (outLen > 1e-6) {
+                double scale = inLen / outLen;
+                seg.in.h = (AIReal)(seg.p.h - dx * scale);
+                seg.in.v = (AIReal)(seg.p.v - dy * scale);
+            }
+        } else {
+            // Mirror out handle
+            double outLen = sqrt((seg.out.h - seg.p.h) * (seg.out.h - seg.p.h) +
+                                 (seg.out.v - seg.p.v) * (seg.out.v - seg.p.v));
+            double inLen = sqrt(dx * dx + dy * dy);
+            if (inLen > 1e-6) {
+                double scale = outLen / inLen;
+                seg.out.h = (AIReal)(seg.p.h - dx * scale);
+                seg.out.v = (AIReal)(seg.p.v - dy * scale);
+            }
+        }
+    }
+
+    sAIPath->SetPathSegments(fPreviewPath, segIdx, 1, &seg);
 }
