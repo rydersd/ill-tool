@@ -294,6 +294,36 @@ ASErr IllToolPlugin::Message(char* caller, char* selector, void* message)
                         result = kNoErr;
                     }
                 }
+                else if (toolMsg->tool == fToolHandle) {
+                    // Main tool: perspective VP drag forwarding
+                    if (fPerspDragLine >= 0) {
+                        if (strcmp(selector, kSelectorAIToolMouseDrag) == 0) {
+                            PerspectiveToolMouseDrag(toolMsg);
+                            result = kNoErr;
+                        }
+                        else if (strcmp(selector, kSelectorAIToolMouseUp) == 0) {
+                            PerspectiveToolMouseUp(toolMsg);
+                            result = kNoErr;
+                        }
+                    }
+                    // Main tool: handle bbox drag/up
+                    else if (strcmp(selector, kSelectorAIToolMouseDrag) == 0) {
+                        if (fBBox.dragHandle >= 0) {
+                            ApplyBBoxTransform(fBBox.dragHandle, toolMsg->cursor);
+                            InvalidateFullView();
+                        }
+                        result = kNoErr;
+                    }
+                    else if (strcmp(selector, kSelectorAIToolMouseUp) == 0) {
+                        if (fBBox.dragHandle >= 0) {
+                            ApplyBBoxTransform(fBBox.dragHandle, toolMsg->cursor);
+                            fBBox.dragHandle = -1;
+                            InvalidateFullView();
+                            fprintf(stderr, "[IllTool BBox] Handle drag completed\n");
+                        }
+                        result = kNoErr;
+                    }
+                }
             }
             else if (strcmp(caller, kCallerAIAnnotation) == 0) {
                 if (strcmp(selector, kSelectorAIDrawAnnotation) == 0) {
@@ -551,6 +581,27 @@ ASErr IllToolPlugin::ToolMouseDown(AIToolMessage* message)
         if (message->tool == fPerspectiveToolHandle) {
             PerspectiveToolMouseDown(message);
             return kNoErr;
+        }
+
+        // Perspective VP handle hit-test: allow dragging VPs with any tool
+        if (fPerspectiveGrid.visible && !fPerspectiveGrid.locked) {
+            // Reuse the perspective tool's hit-test logic
+            PerspectiveToolMouseDown(message);
+            if (fPerspDragLine >= 0) {
+                return kNoErr;  // hit a VP handle, entering drag
+            }
+        }
+
+        // Bounding box handle hit-test: intercept clicks on bbox handles
+        // before other tool modes so the user can drag-transform
+        if (fBBox.visible && fInWorkingMode) {
+            int hitHandle = HitTestBBoxHandle(message->cursor, 8.0);
+            if (hitHandle >= 0) {
+                fBBox.dragHandle = hitHandle;
+                fBBox.dragStart = message->cursor;
+                fprintf(stderr, "[IllTool BBox] Started dragging handle %d\n", hitHandle);
+                return kNoErr;
+            }
         }
 
         // Blend pick mode: intercept clicks to store path A or B (P1 fix)
@@ -947,6 +998,30 @@ void IllToolPlugin::ProcessOperationQueue()
                 CancelDecompose();
                 InvalidateFullView();
                 break;
+
+            case OpType::PlaceVerticalVP:
+                fprintf(stderr, "[IllTool Timer] Place Vertical VP\n");
+                PlaceVerticalVP();
+                break;
+
+            case OpType::DeletePerspective:
+                fprintf(stderr, "[IllTool Timer] Delete Perspective Grid\n");
+                ClearPerspectiveGrid();
+                fPerspectiveGrid.visible = false;
+                BridgeSetPerspectiveVisible(false);
+                fPerspNextLineIndex = 0;
+                InvalidateFullView();
+                break;
+
+            case OpType::ActivatePerspectiveTool:
+                fprintf(stderr, "[IllTool Timer] Activate Perspective Tool — reset for fresh VP placement\n");
+                ClearPerspectiveGrid();
+                fPerspNextLineIndex = 0;
+                BridgeSetPerspectiveVisible(true);
+                if (sAITool) {
+                    sAITool->SetSelectedTool(fPerspectiveToolHandle);
+                }
+                break;
         }
     }
 
@@ -1062,8 +1137,10 @@ ASErr IllToolPlugin::DeselectTool(AIToolMessage* message)
             }
         }
 
-        result = sAIAnnotator->SetAnnotatorActive(fAnnotatorHandle, false);
-        aisdk::check_ai_error(result);
+        // Do NOT deactivate the annotator — perspective grid, bounding box,
+        // and other overlays must remain visible regardless of active tool.
+        // Visibility is controlled per-feature: fPerspectiveGrid.visible, fBBox.visible, etc.
+        InvalidateFullView();
     }
     catch (ai::Error& ex) {
         result = ex;
@@ -1353,6 +1430,9 @@ ASErr IllToolPlugin::DrawAnnotation(AIAnnotatorMessage* message)
         }
         // Stage 10: draw perspective grid overlay
         DrawPerspectiveOverlay(message);
+
+        // Custom bounding box overlay for working mode preview path
+        DrawBoundingBoxOverlay(message);
 
         // Stage 14: draw decompose cluster overlay
         DrawDecomposeOverlay(message);

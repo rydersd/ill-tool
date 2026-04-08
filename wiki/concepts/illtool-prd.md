@@ -343,6 +343,22 @@ After tracing, paths need to be organized by surface type, body part, or spatial
 
 ---
 
+## UI Skin File (IllTool-UI.ai)
+
+An Illustrator file that defines all plugin visual elements — handles, cursors, icons, bounding box shapes. The plugin reads this file at runtime. Editing the `.ai` file changes the plugin's appearance without recompiling.
+
+### Layers / Named Objects
+- **Cursors**: Named art objects per tool cursor (lasso, perspective, smart select, etc.). Each has a hotspot marker (small crosshair or dot) that defines the click point.
+- **Handles**: Shape handle (square), bbox handle (circle), perspective VP handle (circle, colored per VP), blend handle, shading handle.
+- **Icons**: Panel toolbar icons for each operation.
+- **Colors**: Named swatches for tool colors (orange edit stroke, 80% black final, VP1 red, VP2 green, VP3 blue, group orange, group blue).
+
+### Runtime Loading
+Plugin reads `~/Developer/ai-plugins/IllTool-UI.ai` (or bundled inside the .aip resources) on startup. Extracts named art objects and caches their geometry/colors. Falls back to hardcoded defaults if file missing.
+
+### Current Issue
+Lasso cursor hotspot is at upper-left corner instead of the actual click point. The UI skin file solves this — draw the cursor, place a hotspot marker, plugin reads the marker position.
+
 ## Cross-Cutting Requirements
 
 ### Plugin UX Standards

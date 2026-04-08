@@ -8,12 +8,29 @@
 #include "IllToolSuites.h"
 #include "HttpBridge.h"
 #include "VisionEngine.h"
+#include "LearningEngine.h"
 #include <cstdio>
 #include <cmath>
 #include <vector>
 #include <algorithm>
 
 extern IllToolPlugin* gPlugin;
+
+//========================================================================================
+//  Surface type name lookup — maps BridgeGetSurfaceType() int to LearningEngine string
+//========================================================================================
+
+static const char* SurfaceTypeName(int surfaceType)
+{
+    switch (surfaceType) {
+        case 0:  return "flat";
+        case 1:  return "convex";
+        case 2:  return "concave";
+        case 3:  return "saddle";
+        case 4:  return "cylindrical";
+        default: return "unknown";
+    }
+}
 
 //========================================================================================
 //  Static helpers for shape classification
@@ -995,6 +1012,19 @@ void IllToolPlugin::ClassifySelection()
         fprintf(stderr, "[IllTool Timer] ClassifySelection: %d paths → %s [votes: L=%d A=%d Ls=%d R=%d S=%d E=%d F=%d]\n",
                 pathCount, fLastDetectedShape,
                 votes[0], votes[1], votes[2], votes[3], votes[4], votes[5], votes[6]);
+
+        // LearningEngine: log prediction vs auto-detection (data capture, no behavior change)
+        {
+            const char* surfaceHint = SurfaceTypeName(BridgeGetSurfaceType());
+            std::string predicted = LearningEngine::Instance().PredictShape(surfaceHint, 0, 0.0);
+            const char* autoDetected = kShapeNames[(int)dominant];
+            if (!predicted.empty()) {
+                bool matches = (predicted == autoDetected);
+                fprintf(stderr, "[IllTool Learning] PredictShape(%s) → %s, auto=%s, %s\n",
+                        surfaceHint, predicted.c_str(), autoDetected,
+                        matches ? "MATCH" : "MISMATCH");
+            }
+        }
     }
     catch (ai::Error& ex) { fprintf(stderr, "[IllTool Timer] ClassifySelection error: %d\n", (int)ex); fLastDetectedShape = "ERROR"; }
     catch (...) { fprintf(stderr, "[IllTool Timer] ClassifySelection unknown error\n"); fLastDetectedShape = "ERROR"; }
@@ -1016,6 +1046,9 @@ void IllToolPlugin::ReclassifyAs(BridgeShapeType shapeType)
     // CEP-style reclassify: if we have cached sorted points (from AverageSelection),
     // re-fit them to the new shape and update the preview path.
     if (!fCachedSortedPoints.empty() && fInWorkingMode && fWorkingGroup) {
+        // Capture auto-detected shape before overwriting for LearningEngine
+        const char* autoShape = kShapeNames[(int)fCachedShapeFit.shape];
+
         ShapeFitResult newFit = FitPointsToShape(fCachedSortedPoints, shapeType);
         fCachedShapeFit = newFit;
 
@@ -1033,6 +1066,14 @@ void IllToolPlugin::ReclassifyAs(BridgeShapeType shapeType)
         fLODCache = PrecomputeLOD(fCachedSortedPoints, 20, &fCachedShapeFit);
 
         fLastDetectedShape = kShapeNames[(int)shapeType];
+
+        // Record shape override in LearningEngine
+        const char* surfaceHint = SurfaceTypeName(BridgeGetSurfaceType());
+        const char* userShape = kShapeNames[(int)shapeType];
+        LearningEngine::Instance().RecordShapeOverride(surfaceHint, autoShape, userShape);
+        fprintf(stderr, "[IllTool Learning] Shape override recorded: surface=%s auto=%s user=%s\n",
+                surfaceHint, autoShape, userShape);
+
         sAIDocument->RedrawDocument();
         fprintf(stderr, "[IllTool Timer] ReclassifyAs (cached): → %s (%d pts, conf=%.2f)\n",
                 fLastDetectedShape, (int)newFit.points.size(), newFit.confidence);
@@ -1054,6 +1095,14 @@ void IllToolPlugin::ReclassifyAs(BridgeShapeType shapeType)
 
         // Snapshot all paths before destructive modification (H3 UndoStack)
         fUndoStack.PushFrame();
+
+        // Classify the first selected path to capture auto-detected shape for LearningEngine
+        const char* autoShapeStr = "FREEFORM";
+        if (!selected.empty()) {
+            double autoConf = 0;
+            BridgeShapeType autoType = ClassifySinglePath(selected[0], autoConf);
+            autoShapeStr = kShapeNames[(int)autoType];
+        }
 
         // Tension scaling: slider 0-100, default 50 = no change (scale 1.0)
         double tensionScale = fmax(0.1, BridgeGetTension() / 50.0);
@@ -1206,6 +1255,16 @@ void IllToolPlugin::ReclassifyAs(BridgeShapeType shapeType)
         fLastDetectedShape = kShapeNames[(int)shapeType];
         fprintf(stderr, "[IllTool Timer] ReclassifyAs: modified %d/%d paths as %s\n",
                 modifiedCount, (int)selected.size(), fLastDetectedShape);
+
+        // Record shape override in LearningEngine
+        if (modifiedCount > 0) {
+            const char* surfaceHint = SurfaceTypeName(BridgeGetSurfaceType());
+            const char* userShape = kShapeNames[(int)shapeType];
+            LearningEngine::Instance().RecordShapeOverride(surfaceHint, autoShapeStr, userShape);
+            fprintf(stderr, "[IllTool Learning] Shape override recorded: surface=%s auto=%s user=%s\n",
+                    surfaceHint, autoShapeStr, userShape);
+        }
+
         if (modifiedCount > 0) sAIDocument->RedrawDocument();
     }
     catch (ai::Error& ex) { fprintf(stderr, "[IllTool Timer] ReclassifyAs error: %d\n", (int)ex); }
@@ -1366,6 +1425,32 @@ void IllToolPlugin::SelectSmall(double threshold)
             if (totalLen < threshold) {
                 sAIArt->SetArtUserAttr(art, kArtSelected, kArtSelected);
                 selectedCount++;
+
+                // Record noise candidate in LearningEngine
+                // Curvature variance: compute simple angle-change variance across segments
+                double curvVar = 0.0;
+                if (segCount >= 3) {
+                    std::vector<AIPathSegment> segsLE(segCount);
+                    sAIPath->GetPathSegments(art, 0, segCount, segsLE.data());
+                    std::vector<double> angles;
+                    for (ai::int16 s = 1; s < segCount - 1; s++) {
+                        double v1x = segsLE[s].p.h - segsLE[s-1].p.h;
+                        double v1y = segsLE[s].p.v - segsLE[s-1].p.v;
+                        double v2x = segsLE[s+1].p.h - segsLE[s].p.h;
+                        double v2y = segsLE[s+1].p.v - segsLE[s].p.v;
+                        double cross = v1x * v2y - v1y * v2x;
+                        double dot = v1x * v2x + v1y * v2y;
+                        angles.push_back(std::atan2(cross, dot));
+                    }
+                    if (!angles.empty()) {
+                        double mean = 0;
+                        for (double a : angles) mean += a;
+                        mean /= angles.size();
+                        for (double a : angles) curvVar += (a - mean) * (a - mean);
+                        curvVar /= angles.size();
+                    }
+                }
+                LearningEngine::Instance().RecordNoiseDelete(totalLen, (int)segCount, curvVar);
             }
         }
 

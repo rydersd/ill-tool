@@ -429,6 +429,10 @@ static std::atomic<int>   gDuplicateCount{3};
 static std::atomic<int>   gDuplicateSpacing{0};   // 0=equal in perspective, 1=equal on screen
 static std::atomic<int>   gPastePlane{0};          // 0=floor, 1=left wall, 2=right wall, 3=custom
 static std::atomic<float> gPasteScale{1.0f};
+static std::atomic<bool>  gSnapToPerspective{true}; // snap cleanup output to perspective grid
+
+void BridgeSetSnapToPerspective(bool snap) { gSnapToPerspective.store(snap); }
+bool BridgeGetSnapToPerspective()          { return gSnapToPerspective.load(); }
 
 void BridgeSetMirrorAxis(int axis)        { gMirrorAxis.store(axis); }
 int  BridgeGetMirrorAxis()                { return gMirrorAxis.load(); }
@@ -613,13 +617,18 @@ bool StartHttpBridge(int port)
                 sink.write(keepalive.data(), keepalive.size());
 
                 // Block until client disconnects or server stops
-                // The sink.write() calls from BridgeEmitEvent push data
+                // Check gRunning every 200ms so shutdown isn't blocked
+                int keepaliveCounter = 0;
                 while (gRunning.load()) {
-                    std::this_thread::sleep_for(std::chrono::seconds(15));
-                    // Periodic keepalive
-                    std::string ka = ": keepalive\n\n";
-                    if (!sink.write(ka.data(), ka.size())) {
-                        break;  // Client disconnected
+                    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                    keepaliveCounter++;
+                    // Send keepalive every ~15 seconds (75 * 200ms)
+                    if (keepaliveCounter >= 75) {
+                        keepaliveCounter = 0;
+                        std::string ka = ": keepalive\n\n";
+                        if (!sink.write(ka.data(), ka.size())) {
+                            break;  // Client disconnected
+                        }
                     }
                 }
 
@@ -1946,16 +1955,10 @@ void StopHttpBridge()
 
     if (gServer) {
         gServer->stop();
-        // Join with timeout — don't block Illustrator quit indefinitely
+        // Detach immediately — don't block Illustrator quit
         if (gServerThread.joinable()) {
-            // Use a detached watchdog: wait up to 2 seconds, then give up
-            auto future = std::async(std::launch::async, [] {
-                if (gServerThread.joinable()) gServerThread.join();
-            });
-            if (future.wait_for(std::chrono::seconds(2)) == std::future_status::timeout) {
-                fprintf(stderr, "[IllTool] HTTP bridge thread join timed out — detaching\n");
-                gServerThread.detach();
-            }
+            gServerThread.detach();
+            fprintf(stderr, "[IllTool] HTTP bridge thread detached\n");
         }
         delete gServer;
         gServer = nullptr;

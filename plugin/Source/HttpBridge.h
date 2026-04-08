@@ -79,7 +79,10 @@ enum class OpType : int {
     DecomposeAcceptOne,  // intParam = cluster index
     DecomposeSplit,      // intParam = cluster index to split
     DecomposeMergeGroups,// intParam = clusterA, param1 = (double)clusterB
-    DecomposeCancel      // cancel decompose overlay
+    DecomposeCancel,     // cancel decompose overlay
+    PlaceVerticalVP,     // place VP3 at center of viewport
+    DeletePerspective,   // clear grid and delete entirely
+    ActivatePerspectiveTool  // clear existing lines and activate the perspective tool
 };
 
 /** A queued operation with parameters. Pushed by panels/HTTP, popped by timer. */
@@ -403,6 +406,10 @@ int  BridgeGetPastePlane();
 /** Set/get paste scale factor. Thread-safe. */
 void BridgeSetPasteScale(float scale);
 float BridgeGetPasteScale();
+
+/** Snap-to-perspective toggle — when true, cleanup output is projected through perspective grid. */
+void BridgeSetSnapToPerspective(bool snap);
+bool BridgeGetSnapToPerspective();
 
 /** Request mirror in perspective. Thread-safe. */
 void BridgeRequestMirrorPerspective(int axis, bool replace);

@@ -188,6 +188,23 @@ AIRealPoint IllToolPlugin::PerspectiveGrid::ProjectToPlane(AIRealPoint artPt, in
     return result;
 }
 
+//========================================================================================
+//  Project a set of points through the perspective grid
+//  Used by AverageSelection when snap-to-perspective is on
+//========================================================================================
+
+std::vector<AIRealPoint> IllToolPlugin::ProjectPointsThroughPerspective(
+    const std::vector<AIRealPoint>& points, int plane)
+{
+    if (!fPerspectiveGrid.valid || points.empty()) return points;
+
+    std::vector<AIRealPoint> projected(points.size());
+    for (int i = 0; i < (int)points.size(); i++) {
+        projected[i] = fPerspectiveGrid.ProjectToPlane(points[i], plane);
+    }
+    return projected;
+}
+
 AIRealPoint IllToolPlugin::PerspectiveGrid::MirrorInPerspective(AIRealPoint artPt, bool axisVertical) const
 {
     if (!valid) return artPt;
@@ -631,9 +648,11 @@ void IllToolPlugin::DrawPerspectiveOverlay(AIAnnotatorMessage* message)
         sAIAnnotatorDrawer->SetLineDashedEx(drawer, nullptr, 0);
         sAIAnnotatorDrawer->DrawLine(drawer, vh1, vh2);
 
-        // Circle handles — same color as line
-        DrawHandleCircle(drawer, vh1, 5, color);
-        DrawHandleCircle(drawer, vh2, 5, color);
+        // Circle handles — same color as line; hidden when grid is locked
+        if (!fPerspectiveGrid.locked) {
+            DrawHandleCircle(drawer, vh1, 5, color);
+            DrawHandleCircle(drawer, vh2, 5, color);
+        }
 
         // Dotted extension lines (extend far in both directions) — dimmed version of line color
         double dx = line.handle2.h - line.handle1.h;
@@ -1380,6 +1399,51 @@ static double PerspDist(AIRealPoint a, AIRealPoint b) {
     return std::sqrt(dx * dx + dy * dy);
 }
 
+//========================================================================================
+//  Place VP3 (vertical vanishing point) at center of viewport
+//  Called from the "Add Vertical" panel button.
+//========================================================================================
+
+void IllToolPlugin::PlaceVerticalVP()
+{
+    if (fPerspectiveGrid.verticalVP.active) {
+        fprintf(stderr, "[IllTool Persp] PlaceVerticalVP: VP3 already placed\n");
+        return;
+    }
+
+    // Get viewport bounds to find center
+    AIRealRect viewBounds = {0, 0, 0, 0};
+    if (sAIDocumentView) {
+        sAIDocumentView->GetDocumentViewBounds(NULL, &viewBounds);
+    }
+    double viewCenterX = (viewBounds.left + viewBounds.right) * 0.5;
+    double horizY = fPerspectiveGrid.horizonY;
+
+    // Fallback if bounds are zero
+    if (std::abs(viewBounds.right - viewBounds.left) < 1.0) viewCenterX = 400.0;
+
+    // VP3 placed above horizon at center X, with a short vertical line
+    // handle1 above horizon, handle2 below — line tilted slightly from vertical
+    double yAbove = horizY - 200.0;  // above the horizon
+    double yBelow = horizY + 50.0;   // slightly below horizon
+
+    fPerspectiveGrid.verticalVP.handle1 = { (AIReal)viewCenterX, (AIReal)yAbove };
+    fPerspectiveGrid.verticalVP.handle2 = { (AIReal)(viewCenterX + 10.0), (AIReal)yBelow };
+    fPerspectiveGrid.verticalVP.active = true;
+
+    BridgeSetPerspectiveLine(2,
+        fPerspectiveGrid.verticalVP.handle1.h, fPerspectiveGrid.verticalVP.handle1.v,
+        fPerspectiveGrid.verticalVP.handle2.h, fPerspectiveGrid.verticalVP.handle2.v);
+
+    BridgeSetPerspectiveVisible(true);
+
+    fPerspectiveGrid.Recompute();
+    InvalidateFullView();
+
+    fprintf(stderr, "[IllTool Persp] PlaceVerticalVP: VP3 at center (%.0f, %.0f)-(%.0f, %.0f)\n",
+            viewCenterX, yAbove, viewCenterX + 10.0, yBelow);
+}
+
 void IllToolPlugin::PerspectiveToolMouseDown(AIToolMessage* message)
 {
     AIRealPoint click = message->cursor;
@@ -1421,33 +1485,63 @@ void IllToolPlugin::PerspectiveToolMouseDown(AIToolMessage* message)
         }
     }
 
-    // No handle hit — create a new perspective line at click point
-    int lineIdx = fPerspNextLineIndex;
-    if (lineIdx > 2) {
-        fprintf(stderr, "[IllTool Persp Tool] All 3 lines already placed\n");
+    // No handle hit — place VP1 and auto-mirror VP2 across horizontal center of viewport
+    // Only VP1/VP2 are placed on click; VP3 uses "Add Vertical" button in the panel.
+    if (fPerspNextLineIndex >= 2) {
+        fprintf(stderr, "[IllTool Persp Tool] VP1+VP2 already placed (use Add Vertical for VP3)\n");
         return;
     }
 
-    // Place both handles at the click point; user will drag handle2 outward
-    lines[lineIdx]->handle1 = click;
-    lines[lineIdx]->handle2 = { (AIReal)(click.h + 100.0), click.v };
-    lines[lineIdx]->active = true;
+    // Get the viewport (artboard) bounds to find the horizontal center
+    AIRealRect viewBounds = {0, 0, 0, 0};
+    if (sAIDocumentView) {
+        sAIDocumentView->GetDocumentViewBounds(NULL, &viewBounds);
+    }
+    double viewCenterX = (viewBounds.left + viewBounds.right) * 0.5;
+    // Fallback if bounds are zero (shouldn't happen in practice)
+    if (std::abs(viewBounds.right - viewBounds.left) < 1.0) viewCenterX = 400.0;
 
-    // Sync to bridge
-    BridgeSetPerspectiveLine(lineIdx,
-        lines[lineIdx]->handle1.h, lines[lineIdx]->handle1.v,
-        lines[lineIdx]->handle2.h, lines[lineIdx]->handle2.v);
+    // VP1: place line at the click position (handle1=click, handle2 offset along direction)
+    lines[0]->handle1 = click;
+    lines[0]->handle2 = { (AIReal)(click.h + 100.0), click.v };
+    lines[0]->active = true;
+    BridgeSetPerspectiveLine(0,
+        lines[0]->handle1.h, lines[0]->handle1.v,
+        lines[0]->handle2.h, lines[0]->handle2.v);
 
-    // Enter drag on handle2 of the new line
-    fPerspDragLine = lineIdx;
-    fPerspDragHandle = 2;
+    // VP2: auto-mirror across horizontal center of viewport
+    // Mirror X positions: mirrorX = 2*viewCenterX - originalX
+    AIRealPoint mirH1 = { (AIReal)(2.0 * viewCenterX - click.h), click.v };
+    AIRealPoint mirH2 = { (AIReal)(2.0 * viewCenterX - (click.h + 100.0)), click.v };
+    lines[1]->handle1 = mirH1;
+    lines[1]->handle2 = mirH2;
+    lines[1]->active = true;
+    BridgeSetPerspectiveLine(1,
+        lines[1]->handle1.h, lines[1]->handle1.v,
+        lines[1]->handle2.h, lines[1]->handle2.v);
 
-    fPerspNextLineIndex = lineIdx + 1;
-    fprintf(stderr, "[IllTool Persp Tool] Created new line %d, dragging handle2\n", lineIdx);
+    // Ensure visibility
+    BridgeSetPerspectiveVisible(true);
+
+    fPerspDragLine = -1;
+    fPerspDragHandle = 0;
+
+    fPerspNextLineIndex = 2;  // VP1 and VP2 both placed
+    fprintf(stderr, "[IllTool Persp Tool] Placed VP1 at (%.0f,%.0f), auto-mirrored VP2 at (%.0f,%.0f), viewCenterX=%.0f\n",
+            click.h, click.v, mirH1.h, mirH1.v, viewCenterX);
 
     // Recompute and invalidate
     fPerspectiveGrid.Recompute();
     InvalidateFullView();
+
+    // Switch back to arrow tool so user can immediately drag VPs or select paths
+    if (sAITool) {
+        AIToolHandle arrowTool = nullptr;
+        AIToolType toolNum = 0;
+        sAITool->GetToolNumberFromName("Adobe Select Tool", &toolNum);
+        sAITool->GetToolHandleFromNumber(toolNum, &arrowTool);
+        if (arrowTool) sAITool->SetSelectedTool(arrowTool);
+    }
 }
 
 void IllToolPlugin::PerspectiveToolMouseDrag(AIToolMessage* message)

@@ -97,8 +97,11 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
 
 // Toolbar controls
 @property (nonatomic, strong) NSButton *setPerspectiveButton;
+@property (nonatomic, strong) NSButton *addVerticalButton;
 @property (nonatomic, strong) NSButton *lockToggle;
 @property (nonatomic, strong) NSButton *showToggle;
+@property (nonatomic, strong) NSButton *deleteGridButton;
+@property (nonatomic, strong) NSButton *snapToggle;
 
 // Grid tab — status and VP readouts
 @property (nonatomic, strong) NSTextField *statusLabel;
@@ -210,13 +213,17 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     self.showToggle.state = visible ? NSControlStateValueOn : NSControlStateValueOff;
 
     // Update Set Perspective button title based on state
-    if (activeCount >= 3) {
+    if (activeCount >= 2) {
         self.setPerspectiveButton.title = @"Reset Perspective";
-    } else if (activeCount > 0) {
-        self.setPerspectiveButton.title = @"Set Perspective";
     } else {
         self.setPerspectiveButton.title = @"Set Perspective";
     }
+
+    // Disable "Add Vertical" if VP3 is already placed or VP1/VP2 not yet placed
+    self.addVerticalButton.enabled = (activeCount >= 2 && !vert.active);
+
+    // Disable "Delete Grid" if no grid is placed
+    self.deleteGridButton.enabled = (activeCount > 0);
 }
 
 - (void)updateVPCoord:(NSTextField *)label line:(BridgePerspectiveLine)line label:(NSString *)prefix
@@ -239,7 +246,8 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
 
 - (void)buildUI
 {
-    CGFloat totalHeight = 440.0;
+    CGFloat totalHeight = 500.0;  // must match panel height in IllToolPanels.mm
+    // Use a flipped NSView subclass so (0,0) is top-left and content doesn't clip from the top
     NSView *root = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, kPanelWidth, totalHeight)];
     root.wantsLayer = YES;
     root.layer.backgroundColor = ITBGColor().CGColor;
@@ -247,45 +255,64 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     self.rootViewInternal = root;
     [root release];  // strong property retains
 
-    CGFloat y = totalHeight - kPadding;
+    // Cocoa NSView origin is bottom-left. Illustrator clips from the top when
+    // the panel is shorter than the content. So we lay out BOTTOM-UP: important
+    // buttons go at low y (bottom = always visible), less critical info at high y.
+    //
+    // y starts near the bottom and we work upward.
 
-    // --- Title ---
-    NSTextField *title = MakeLabel(@"Perspective", [NSFont boldSystemFontOfSize:12], ITTextColor());
-    title.frame = NSMakeRect(kPadding, y - 16, kPanelWidth - 2*kPadding, 16);
-    [root addSubview:title];
-    y -= 24;
+    CGFloat y = kPadding;
 
-    // --- Toolbar row: [Set Perspective] [Lock] [Show] ---
-    CGFloat btnW = (kPanelWidth - 2*kPadding - 8) / 3.0;  // 3 buttons with 4px gaps
+    // --- Bottom: [Snap to Perspective] ---
+    NSButton *snapChk = MakeCheckbox(@"Snap to Perspective", self, @selector(onSnapToggle:));
+    snapChk.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kRowHeight);
+    snapChk.state = NSControlStateValueOn;
+    [root addSubview:snapChk];
+    self.snapToggle = snapChk;
+    y += (kRowHeight + 4);
 
-    NSButton *setBtn = MakeButton(@"Set Perspective", self, @selector(onSetPerspective:));
-    setBtn.frame = NSMakeRect(kPadding, y - kRowHeight, btnW + 20, kRowHeight);
-    [root addSubview:setBtn];
-    self.setPerspectiveButton = setBtn;
-
+    // --- Row: [Lock] [Show] [Delete Grid] ---
     NSButton *lockChk = MakeCheckbox(@"Lock", self, @selector(onLockToggle:));
-    lockChk.frame = NSMakeRect(kPadding + btnW + 24, y - kRowHeight, 52, kRowHeight);
+    lockChk.frame = NSMakeRect(kPadding, y, 52, kRowHeight);
     [root addSubview:lockChk];
     self.lockToggle = lockChk;
 
     NSButton *showChk = MakeCheckbox(@"Show", self, @selector(onShowToggle:));
-    showChk.frame = NSMakeRect(kPadding + btnW + 80, y - kRowHeight, 52, kRowHeight);
-    showChk.state = NSControlStateValueOn;  // default visible
+    showChk.frame = NSMakeRect(kPadding + 56, y, 52, kRowHeight);
+    showChk.state = NSControlStateValueOn;
     [root addSubview:showChk];
     self.showToggle = showChk;
 
-    y -= (kRowHeight + kPadding);
+    NSButton *delBtn = MakeButton(@"Delete Grid", self, @selector(onDeleteGrid:));
+    delBtn.frame = NSMakeRect(kPadding + 112, y, kPanelWidth - 2*kPadding - 112, kRowHeight);
+    [root addSubview:delBtn];
+    self.deleteGridButton = delBtn;
+    y += (kRowHeight + 4);
+
+    // --- Row: [Set Perspective] [Add Vertical] ---
+    CGFloat halfBtnW = (kPanelWidth - 2*kPadding - 4) / 2.0;
+
+    NSButton *setBtn = MakeButton(@"Set Perspective", self, @selector(onSetPerspective:));
+    setBtn.frame = NSMakeRect(kPadding, y, halfBtnW, kRowHeight);
+    [root addSubview:setBtn];
+    self.setPerspectiveButton = setBtn;
+
+    NSButton *addVertBtn = MakeButton(@"Add Vertical", self, @selector(onAddVertical:));
+    addVertBtn.frame = NSMakeRect(kPadding + halfBtnW + 4, y, halfBtnW, kRowHeight);
+    [root addSubview:addVertBtn];
+    self.addVerticalButton = addVertBtn;
+    y += (kRowHeight + kPadding);
 
     // --- Per-line color legend ---
     NSTextField *colorTitle = MakeLabel(@"Line Colors:", ITLabelFont(), ITDimColor());
-    colorTitle.frame = NSMakeRect(kPadding, y - 14, kPanelWidth - 2*kPadding, 14);
+    colorTitle.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, 14);
     [root addSubview:colorTitle];
-    y -= (14 + 4);
+    y += (14 + 4);
 
     CGFloat colW = (kPanelWidth - 2*kPadding) / 3.0;
 
     // VP1 swatch + label
-    NSView *sw1 = [[NSView alloc] initWithFrame:NSMakeRect(kPadding, y - 12, 10, 10)];
+    NSView *sw1 = [[NSView alloc] initWithFrame:NSMakeRect(kPadding, y, 10, 10)];
     sw1.wantsLayer = YES;
     sw1.layer.backgroundColor = ITVP1Color().CGColor;
     sw1.layer.cornerRadius = 5.0;
@@ -293,11 +320,11 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     [sw1 release];
 
     NSTextField *vp1Lbl = MakeLabel(@"VP1", ITMonoFont(), ITVP1Color());
-    vp1Lbl.frame = NSMakeRect(kPadding + 14, y - 12, colW - 14, 12);
+    vp1Lbl.frame = NSMakeRect(kPadding + 14, y, colW - 14, 12);
     [root addSubview:vp1Lbl];
 
     // VP2 swatch + label
-    NSView *sw2 = [[NSView alloc] initWithFrame:NSMakeRect(kPadding + colW, y - 12, 10, 10)];
+    NSView *sw2 = [[NSView alloc] initWithFrame:NSMakeRect(kPadding + colW, y, 10, 10)];
     sw2.wantsLayer = YES;
     sw2.layer.backgroundColor = ITVP2Color().CGColor;
     sw2.layer.cornerRadius = 5.0;
@@ -305,11 +332,11 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     [sw2 release];
 
     NSTextField *vp2Lbl = MakeLabel(@"VP2", ITMonoFont(), ITVP2Color());
-    vp2Lbl.frame = NSMakeRect(kPadding + colW + 14, y - 12, colW - 14, 12);
+    vp2Lbl.frame = NSMakeRect(kPadding + colW + 14, y, colW - 14, 12);
     [root addSubview:vp2Lbl];
 
     // VP3 swatch + label
-    NSView *sw3 = [[NSView alloc] initWithFrame:NSMakeRect(kPadding + 2*colW, y - 12, 10, 10)];
+    NSView *sw3 = [[NSView alloc] initWithFrame:NSMakeRect(kPadding + 2*colW, y, 10, 10)];
     sw3.wantsLayer = YES;
     sw3.layer.backgroundColor = ITVP3Color().CGColor;
     sw3.layer.cornerRadius = 5.0;
@@ -317,32 +344,33 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     [sw3 release];
 
     NSTextField *vp3Lbl = MakeLabel(@"VP3", ITMonoFont(), ITVP3Color());
-    vp3Lbl.frame = NSMakeRect(kPadding + 2*colW + 14, y - 12, colW - 14, 12);
+    vp3Lbl.frame = NSMakeRect(kPadding + 2*colW + 14, y, colW - 14, 12);
     [root addSubview:vp3Lbl];
 
-    y -= (12 + kPadding);
+    y += (12 + kPadding);
 
     // --- Tab Segment Control ---
     NSArray *tabs = @[@"Grid", @"Mirror", @"Duplicate", @"Paste"];
     NSSegmentedControl *seg = [NSSegmentedControl segmentedControlWithLabels:tabs
         trackingMode:NSSegmentSwitchTrackingSelectOne
         target:self action:@selector(onTabChanged:)];
-    seg.frame = NSMakeRect(kPadding, y - kRowHeight, kPanelWidth - 2*kPadding, kRowHeight);
+    seg.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kRowHeight);
     seg.font = [NSFont systemFontOfSize:10];
     seg.selectedSegment = 0;
     [root addSubview:seg];
     self.tabSegment = seg;
-    y -= (kRowHeight + kPadding);
+    y += (kRowHeight + kPadding);
 
     // --- Separator ---
     NSBox *sep = [[NSBox alloc] initWithFrame:NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, 1)];
     sep.boxType = NSBoxSeparator;
     [root addSubview:sep];
     [sep release];
-    y -= (1 + kPadding);
+    y += (1 + kPadding);
 
-    CGFloat contentH = y;
-    NSRect contentFrame = NSMakeRect(0, 0, kPanelWidth, contentH);
+    // Tab content starts here and fills remaining space upward
+    CGFloat contentH = totalHeight - y;
+    NSRect contentFrame = NSMakeRect(0, y, kPanelWidth, contentH);
 
     // --- Grid Tab ---
     self.gridTabView = [self buildGridTab:contentFrame];
@@ -630,25 +658,43 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
 }
 
 //----------------------------------------------------------------------------------------
-//  Set Perspective — places all 3 VP lines at once
+//  Set Perspective — activates the perspective tool for VP1 placement on canvas
+//  VP2 is auto-mirrored across viewport center when VP1 is placed.
 //----------------------------------------------------------------------------------------
 
 - (void)onSetPerspective:(id)sender
 {
-    double horizon = BridgeGetHorizonY();
+    PluginOp op;
+    op.type = OpType::ActivatePerspectiveTool;
+    BridgeEnqueueOp(op);
+    fprintf(stderr, "[IllTool Panel] Set Perspective — activating tool for VP placement\n");
+}
 
-    // Place all 3 lines in one action — user drags them into position
-    // Left VP line: angled upper-left to lower-right
-    BridgeSetPerspectiveLine(0, 200, horizon + 100, 400, horizon + 200);
-    // Right VP line: angled upper-right to lower-left
-    BridgeSetPerspectiveLine(1, 600, horizon + 200, 400, horizon + 100);
-    // Vertical VP line: tilted slightly from vertical
-    BridgeSetPerspectiveLine(2, 400, horizon + 50, 410, horizon + 250);
+//----------------------------------------------------------------------------------------
+//  Add Vertical — places VP3 at center of viewport
+//----------------------------------------------------------------------------------------
 
-    // Ensure visibility
-    BridgeSetPerspectiveVisible(true);
+- (void)onAddVertical:(id)sender
+{
+    PluginOp op;
+    op.type = OpType::PlaceVerticalVP;
+    BridgeEnqueueOp(op);
+    fprintf(stderr, "[IllTool Panel] Add Vertical VP\n");
+}
 
-    fprintf(stderr, "[IllTool Panel] Set Perspective — all 3 lines placed\n");
+//----------------------------------------------------------------------------------------
+//  Delete Grid — clear grid and hide everything
+//----------------------------------------------------------------------------------------
+
+- (void)onDeleteGrid:(id)sender
+{
+    PluginOp op;
+    op.type = OpType::DeletePerspective;
+    BridgeEnqueueOp(op);
+    for (int i = 0; i < 3; i++) BridgeClearPerspectiveLine(i);
+    BridgeSetPerspectiveLocked(false);
+    BridgeSetPerspectiveVisible(false);
+    fprintf(stderr, "[IllTool Panel] Delete Grid\n");
 }
 
 //----------------------------------------------------------------------------------------
@@ -671,6 +717,13 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     bool newVisible = (sender.state == NSControlStateValueOn);
     BridgeSetPerspectiveVisible(newVisible);
     fprintf(stderr, "[IllTool Panel] %s grid\n", newVisible ? "Show" : "Hide");
+}
+
+- (void)onSnapToggle:(NSButton *)sender
+{
+    bool snap = (sender.state == NSControlStateValueOn);
+    BridgeSetSnapToPerspective(snap);
+    fprintf(stderr, "[IllTool Panel] Snap to perspective: %s\n", snap ? "ON" : "OFF");
 }
 
 //----------------------------------------------------------------------------------------
@@ -827,3 +880,24 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
 }
 
 @end
+
+//========================================================================================
+//  C-callable wrappers
+//========================================================================================
+
+void PluginPlaceVerticalVP(void)
+{
+    PluginOp op;
+    op.type = OpType::PlaceVerticalVP;
+    BridgeEnqueueOp(op);
+}
+
+void PluginDeletePerspective(void)
+{
+    PluginOp op;
+    op.type = OpType::DeletePerspective;
+    BridgeEnqueueOp(op);
+    for (int i = 0; i < 3; i++) BridgeClearPerspectiveLine(i);
+    BridgeSetPerspectiveLocked(false);
+    BridgeSetPerspectiveVisible(false);
+}

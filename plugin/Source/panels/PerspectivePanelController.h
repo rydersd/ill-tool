@@ -28,6 +28,12 @@
 /** Update grid status display. */
 - (void)updateGridStatus:(BOOL)valid vpCount:(int)count density:(int)density;
 
+/** C-callable: place VP3 at center of viewport (called from "Add Vertical" button). */
+void PluginPlaceVerticalVP(void);
+
+/** C-callable: delete perspective grid entirely. */
+void PluginDeletePerspective(void);
+
 @end
 
 #endif // __OBJC__

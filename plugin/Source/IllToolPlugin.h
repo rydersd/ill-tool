@@ -285,6 +285,42 @@ private:
     AIArtHandle                  fPreviewPath = nullptr;
 
     //------------------------------------------------------------------------------------
+    //  Custom bounding box with circle handles (auto-rotated to PCA axis)
+    //------------------------------------------------------------------------------------
+
+public:
+    /** State for the custom rotated bounding box drawn via annotator overlay. */
+    struct BoundingBoxState {
+        AIRealPoint corners[4];     ///< Rotated bbox corners (artwork coords)
+        AIRealPoint midpoints[4];   ///< Midpoints of each edge
+        AIRealPoint center;         ///< Center of the bbox
+        double rotation = 0;        ///< Rotation angle in radians (from PCA eigenvector)
+        bool visible = false;       ///< Shown when in working mode with preview path
+        int dragHandle = -1;        ///< -1=none, 0-3=corners, 4-7=midpoints
+        AIRealPoint dragStart;      ///< Mouse position at drag start (artwork coords)
+    };
+
+    BoundingBoxState fBBox;
+
+    /** Compute the rotated bounding box from the preview path's PCA rotation.
+        Called after creating or updating the preview path. */
+    void ComputeBoundingBox();
+
+    /** Draw the custom bounding box overlay via AIAnnotatorDrawerSuite. */
+    void DrawBoundingBoxOverlay(AIAnnotatorMessage* message);
+
+    /** Hit-test a point against the bounding box handles.
+        @return Handle index (0-3=corners, 4-7=midpoints) or -1 if no hit. */
+    int HitTestBBoxHandle(AIRealPoint artPt, double hitRadius = 6.0);
+
+    /** Apply an affine transform to the preview path based on bbox handle drag.
+        @param handleIdx  Which handle is being dragged (0-7).
+        @param newPos     Current mouse position in artwork coords. */
+    void ApplyBBoxTransform(int handleIdx, AIRealPoint newPos);
+
+private:
+
+    //------------------------------------------------------------------------------------
     //  Merge endpoint scan state (Stage 6)
     //------------------------------------------------------------------------------------
 
@@ -670,6 +706,15 @@ public:
     /** Check if an art handle is (or is inside) a blend group.
         If so, returns the blend group handle. Otherwise returns nullptr. */
     AIArtHandle FindBlendGroupForArt(AIArtHandle art);
+
+    /** Project a set of points through the perspective grid.
+        @param plane 0=floor, 1=left wall, 2=right wall. */
+    std::vector<AIRealPoint> ProjectPointsThroughPerspective(
+        const std::vector<AIRealPoint>& points, int plane = 0);
+
+    /** Place VP3 (vertical vanishing point) at the center of the viewport.
+        Called from the "Add Vertical" panel button. */
+    void PlaceVerticalVP();
 
     /** Sync perspective grid state from bridge state variables.
         Called from ProcessOperationQueue before drawing. */
