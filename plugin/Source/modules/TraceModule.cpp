@@ -863,19 +863,31 @@ void TraceModule::CreatePathsFromSVG(const std::string& svgContent)
     fprintf(stderr, "[TraceModule] SVG dims: %.0fx%.0f, Art bounds: L=%.0f T=%.0f R=%.0f B=%.0f\n",
             fSvgWidth, fSvgHeight, fArtLeft, fArtTop, fArtRight, fArtBottom);
 
+    // Create luminance-based groups for organization
+    // Paths sorted by fill brightness: Background > Highlights > Midtones > Shadows > Outlines
+    const char* groupNames[] = {"Trace — Background", "Trace — Highlights",
+                                 "Trace — Midtones", "Trace — Shadows", "Trace — Outlines"};
+    AIArtHandle groups[5] = {};
+    for (int g = 0; g < 5; g++) {
+        ASErr gErr = sAIArt->NewArt(kGroupArt, kPlaceAboveAll, nullptr, &groups[g]);
+        if (gErr == kNoErr && groups[g]) {
+            sAIArt->SetArtName(groups[g], ai::UnicodeString(groupNames[g]));
+        }
+    }
+
     // Extract all <path> elements with d="..." and optional fill="..." attributes
     int created = 0;
+    int skipped = 0;
     size_t pos = 0;
+    bool firstPath = true;
 
     while (true) {
         size_t pathStart = svgContent.find("<path", pos);
         if (pathStart == std::string::npos) break;
 
-        // Find the closing > of this <path ... > element
         size_t pathEnd = svgContent.find(">", pathStart);
         if (pathEnd == std::string::npos) break;
 
-        // Extract the full element text for attribute parsing
         std::string pathElement = svgContent.substr(pathStart, pathEnd - pathStart + 1);
 
         std::string pathData;
@@ -884,17 +896,36 @@ void TraceModule::CreatePathsFromSVG(const std::string& svgContent)
             continue;
         }
 
-        // Extract fill="..." attribute (hex color from vtracer output)
+        // Extract fill and transform
         std::string fillColor;
         ExtractSVGAttribute(pathElement, "fill", fillColor);
 
         std::string transformValue;
         ExtractSVGAttribute(pathElement, "transform", transformValue);
-        double translateX = 0.0;
-        double translateY = 0.0;
+        double translateX = 0.0, translateY = 0.0;
         ParseSVGTranslate(transformValue, translateX, translateY);
 
         pos = pathEnd;
+
+        // Skip first path — vtracer background rectangle covering entire image
+        if (firstPath) {
+            firstPath = false;
+            skipped++;
+            continue;
+        }
+
+        // Parse fill color for grouping
+        double fr = 0, fg = 0, fb = 0;
+        bool hasFill = !fillColor.empty() && fillColor != "none" && ParseHexColor(fillColor, fr, fg, fb);
+
+        // Compute luminance (0=black, 1=white) for group assignment
+        double luminance = hasFill ? (0.299 * fr + 0.587 * fg + 0.114 * fb) : 0.0;
+        int groupIdx;
+        if (luminance > 0.85)      groupIdx = 0;  // Background (near-white)
+        else if (luminance > 0.60) groupIdx = 1;  // Highlights
+        else if (luminance > 0.35) groupIdx = 2;  // Midtones
+        else if (luminance > 0.10) groupIdx = 3;  // Shadows
+        else                       groupIdx = 4;  // Outlines (near-black)
 
         std::vector<AIPathSegment> segs;
         bool closed = false;
@@ -903,8 +934,10 @@ void TraceModule::CreatePathsFromSVG(const std::string& svgContent)
                                 fArtLeft, fArtTop, fArtRight, fArtBottom,
                                 fSvgWidth, fSvgHeight);
 
+            // Place path inside its luminance group
+            AIArtHandle parentGroup = groups[groupIdx];
             AIArtHandle newPath = nullptr;
-            ASErr err = sAIArt->NewArt(kPathArt, kPlaceAboveAll, nullptr, &newPath);
+            ASErr err = sAIArt->NewArt(kPathArt, kPlaceInsideOnTop, parentGroup, &newPath);
             if (err == kNoErr && newPath) {
                 ai::int16 nc = (ai::int16)segs.size();
                 sAIPath->SetPathSegmentCount(newPath, nc);
@@ -913,13 +946,9 @@ void TraceModule::CreatePathsFromSVG(const std::string& svgContent)
 
                 AIPathStyle style;
                 memset(&style, 0, sizeof(style));
-
-                // Parse fill color from SVG — vtracer outputs fill="#RRGGBB" for color regions
-                double fr = 0, fg = 0, fb = 0;
-                bool hasFill = !fillColor.empty() && fillColor != "none" && ParseHexColor(fillColor, fr, fg, fb);
+                style.stroke.miterLimit = (AIReal)4.0;
 
                 if (hasFill) {
-                    // Filled color region — match the vtracer output appearance
                     style.fillPaint = true;
                     style.fill.color.kind = kThreeColor;
                     style.fill.color.c.rgb.red   = (AIReal)fr;
@@ -927,14 +956,10 @@ void TraceModule::CreatePathsFromSVG(const std::string& svgContent)
                     style.fill.color.c.rgb.blue  = (AIReal)fb;
                     style.strokePaint = false;
                 } else {
-                    // No fill or fill="none" — use 1pt black stroke (stroke-only paths)
                     style.fillPaint = false;
                     style.strokePaint = true;
                     style.stroke.width = (AIReal)1.0;
                     style.stroke.color.kind = kThreeColor;
-                    style.stroke.color.c.rgb.red   = (AIReal)0.0;
-                    style.stroke.color.c.rgb.green = (AIReal)0.0;
-                    style.stroke.color.c.rgb.blue  = (AIReal)0.0;
                 }
 
                 sAIPathStyle->SetPathStyle(newPath, &style);
@@ -943,8 +968,20 @@ void TraceModule::CreatePathsFromSVG(const std::string& svgContent)
         }
     }
 
-    fprintf(stderr, "[TraceModule] Created %d paths from SVG\n", created);
-    BridgeSetTraceStatus("Traced: " + std::to_string(created) + " paths");
+    // Delete empty groups
+    for (int g = 0; g < 5; g++) {
+        if (groups[g]) {
+            AIArtHandle child = nullptr;
+            sAIArt->GetArtFirstChild(groups[g], &child);
+            if (!child) {
+                sAIArt->DisposeArt(groups[g]);
+                groups[g] = nullptr;
+            }
+        }
+    }
+
+    fprintf(stderr, "[TraceModule] Created %d paths in 5 groups (skipped %d)\n", created, skipped);
+    BridgeSetTraceStatus("Traced: " + std::to_string(created) + " paths in groups");
 }
 
 //========================================================================================
