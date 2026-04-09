@@ -31,6 +31,7 @@
 #include "AICursorSnap_Wrapper.h"  // AICursorSnapSuite — custom snap constraints
 #include "AIPreference.h"  // AIPreferenceSuite — boolean preference get/put
 #include "AIArtboard.h"    // AIArtboardSuite — artboard list, bounds, active index
+#include "AIRaster.h"      // AIRasterSuite — raster pixel data access
 
 extern  "C" AIUnicodeStringSuite*       sAIUnicodeString;
 extern  "C" SPBlocksSuite*              sSPBlocks;
@@ -62,5 +63,6 @@ extern  "C" AIPlacedSuite*            sAIPlaced;
 extern  "C" AICursorSnapSuite*        sAICursorSnap;
 extern  "C" AIPreferenceSuite*        sAIPreference;
 extern  "C" AIArtboardSuite*         sAIArtboard;
+extern  "C" AIRasterSuite*           sAIRaster;
 
 #endif // __ILLTOOLSUITES_H__

@@ -3,7 +3,8 @@
 //  IllTool — Ill Trace Panel Controller (Objective-C++)
 //
 //  Programmatic Cocoa layout for tracing raster images via multiple MCP backends.
-//  Checkboxes for each backend — run selected simultaneously.
+//  Organized into collapsible accordion sections by category.
+//  Scrollable — content can exceed panel height.
 //  No XIB — all NSViews built in code.
 //
 //========================================================================================
@@ -32,7 +33,7 @@ static const CGFloat kSliderH     = 18.0;
 //  Backend checkbox helper
 //========================================================================================
 
-static NSButton* MakeCheckbox(NSString *title, id target, SEL action, BOOL checked)
+static NSButton* MakeTraceCheckbox(NSString *title, id target, SEL action, BOOL checked)
 {
     NSButton *cb = [NSButton checkboxWithTitle:title target:target action:action];
     cb.font = ITLabelFont();
@@ -52,27 +53,44 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action, BOOL check
 }
 
 //========================================================================================
+//  Accordion section: disclosure button + container view holding checkboxes
+//========================================================================================
+
+@interface TraceAccordionSection : NSObject
+@property (nonatomic, strong) NSButton   *disclosureButton;
+@property (nonatomic, strong) NSView     *container;
+@property (nonatomic, assign) BOOL        expanded;
+@property (nonatomic, assign) CGFloat     containerHeight;
+@end
+
+@implementation TraceAccordionSection
+@end
+
+//========================================================================================
 //  TracePanelController
 //========================================================================================
 
 @interface TracePanelController ()
 
-@property (nonatomic, strong) NSView *rootViewInternal;
+@property (nonatomic, strong) NSScrollView *scrollView;
+@property (nonatomic, strong) TraceFlippedView *contentView;
 
-// Backend checkboxes (13 backends)
+// Accordion sections (4 groups)
+@property (nonatomic, strong) NSMutableArray<TraceAccordionSection*> *sections;
+
+// Backend checkboxes (12 backends — no image_trace)
 @property (nonatomic, strong) NSButton *cbVtracer;
 @property (nonatomic, strong) NSButton *cbOpenCV;
 @property (nonatomic, strong) NSButton *cbStarVector;
-@property (nonatomic, strong) NSButton *cbCartoonSeg;
-@property (nonatomic, strong) NSButton *cbImageTrace;
 @property (nonatomic, strong) NSButton *cbDiffVG;
+@property (nonatomic, strong) NSButton *cbCartoonSeg;
+@property (nonatomic, strong) NSButton *cbNormalRef;
+@property (nonatomic, strong) NSButton *cbFormEdge;
+@property (nonatomic, strong) NSButton *cbAnalyzeRef;
 @property (nonatomic, strong) NSButton *cbContourScan;
 @property (nonatomic, strong) NSButton *cbContourPath;
 @property (nonatomic, strong) NSButton *cbContourLabel;
 @property (nonatomic, strong) NSButton *cbContourNest;
-@property (nonatomic, strong) NSButton *cbFormEdge;
-@property (nonatomic, strong) NSButton *cbNormalRef;
-@property (nonatomic, strong) NSButton *cbAnalyzeRef;
 
 // Parameter controls
 @property (nonatomic, strong) NSSlider *speckleSlider;
@@ -83,6 +101,13 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action, BOOL check
 @property (nonatomic, strong) NSButton *traceButton;
 @property (nonatomic, strong) NSTimer *statusTimer;
 
+// Views that come after the accordion (need repositioning on toggle)
+@property (nonatomic, strong) NSBox *paramSeparator;
+@property (nonatomic, strong) NSTextField *paramTitle;
+@property (nonatomic, strong) NSTextField *speckleTitleLabel;
+@property (nonatomic, strong) NSTextField *colorPrecTitleLabel;
+@property (nonatomic, strong) NSBox *buttonSeparator;
+
 @end
 
 @implementation TracePanelController
@@ -92,181 +117,239 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action, BOOL check
     self = [super init];
     if (!self) return nil;
 
-    CGFloat y = kPadding;
+    self.sections = [NSMutableArray array];
+
+    // Create the scroll view wrapper
+    self.scrollView = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, kPanelWidth, 660)];
+    self.scrollView.hasVerticalScroller = YES;
+    self.scrollView.hasHorizontalScroller = NO;
+    self.scrollView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    self.scrollView.drawsBackground = YES;
+    self.scrollView.backgroundColor = ITBGColor();
+    self.scrollView.borderType = NSNoBorder;
+
+    // Content view inside the scroll view
+    self.contentView = [[TraceFlippedView alloc] initWithFrame:NSMakeRect(0, 0, kPanelWidth, 800)];
+    self.contentView.wantsLayer = YES;
+    self.contentView.layer.backgroundColor = ITBGColor().CGColor;
+    self.scrollView.documentView = self.contentView;
+
     CGFloat contentW = kPanelWidth - 2*kPadding;
 
-    TraceFlippedView *root = [[TraceFlippedView alloc] initWithFrame:
-                              NSMakeRect(0, 0, kPanelWidth, 660)];
-    root.wantsLayer = YES;
-    root.layer.backgroundColor = ITBGColor().CGColor;
+    // Build controls into contentView — initial positions will be set by relayout
+    CGFloat y = kPadding;
 
-    // Section title
+    // --- Panel title ---
     NSTextField *title = MakeLabel(@"Ill Trace", ITLabelFont(), ITAccentColor());
     title.frame = NSMakeRect(kPadding, y, contentW, kRowHeight);
     title.font = [NSFont boldSystemFontOfSize:12];
-    [root addSubview:title];
+    [self.contentView addSubview:title];
     y += kRowHeight + 6;
 
-    // --- Backend checkboxes ---
-    NSTextField *backendTitle = MakeLabel(@"Backends:", ITLabelFont(), ITDimColor());
-    backendTitle.frame = NSMakeRect(kPadding, y, contentW, kRowHeight);
-    [root addSubview:backendTitle];
-    y += kRowHeight + 2;
+    // ==========================================
+    //  Section 1: Vector Tracing
+    // ==========================================
+    {
+        TraceAccordionSection *sec = [[TraceAccordionSection alloc] init];
+        sec.expanded = YES;
 
-    self.cbVtracer = MakeCheckbox(@"vtracer (Rust — clean SVG)", self, @selector(backendToggled:), YES);
-    self.cbVtracer.frame = NSMakeRect(kPadding + 8, y, contentW - 8, 18);
-    self.cbVtracer.tag = 0;
-    [root addSubview:self.cbVtracer];
-    y += 20;
+        sec.disclosureButton = [self makeDisclosureButton:@"Vector Tracing" tag:0];
+        [self.contentView addSubview:sec.disclosureButton];
 
-    self.cbOpenCV = MakeCheckbox(@"OpenCV Contours", self, @selector(backendToggled:), NO);
-    self.cbOpenCV.frame = NSMakeRect(kPadding + 8, y, contentW - 8, 18);
-    self.cbOpenCV.tag = 1;
-    [root addSubview:self.cbOpenCV];
-    y += 20;
+        sec.container = [[TraceFlippedView alloc] initWithFrame:NSZeroRect];
+        [self.contentView addSubview:sec.container];
 
-    self.cbStarVector = MakeCheckbox(@"StarVector (ML)", self, @selector(backendToggled:), NO);
-    self.cbStarVector.frame = NSMakeRect(kPadding + 8, y, contentW - 8, 18);
-    self.cbStarVector.tag = 2;
-    [root addSubview:self.cbStarVector];
-    y += 20;
+        CGFloat cy = 0;
+        self.cbVtracer = MakeTraceCheckbox(@"vtracer (clean SVG)", self, @selector(backendToggled:), YES);
+        self.cbVtracer.tag = 0;
+        self.cbVtracer.frame = NSMakeRect(8, cy, contentW - 16, 18);
+        [sec.container addSubview:self.cbVtracer];
+        cy += 20;
 
-    self.cbCartoonSeg = MakeCheckbox(@"CartoonSeg (Instance Seg)", self, @selector(backendToggled:), NO);
-    self.cbCartoonSeg.frame = NSMakeRect(kPadding + 8, y, contentW - 8, 18);
-    self.cbCartoonSeg.tag = 3;
-    [root addSubview:self.cbCartoonSeg];
-    y += 20;
+        self.cbOpenCV = MakeTraceCheckbox(@"OpenCV Contours", self, @selector(backendToggled:), NO);
+        self.cbOpenCV.tag = 1;
+        self.cbOpenCV.frame = NSMakeRect(8, cy, contentW - 16, 18);
+        [sec.container addSubview:self.cbOpenCV];
+        cy += 20;
 
-    self.cbImageTrace = MakeCheckbox(@"Illustrator Image Trace", self, @selector(backendToggled:), NO);
-    self.cbImageTrace.frame = NSMakeRect(kPadding + 8, y, contentW - 8, 18);
-    self.cbImageTrace.tag = 4;
-    [root addSubview:self.cbImageTrace];
-    y += 20;
+        self.cbStarVector = MakeTraceCheckbox(@"StarVector (ML)", self, @selector(backendToggled:), NO);
+        self.cbStarVector.tag = 2;
+        self.cbStarVector.frame = NSMakeRect(8, cy, contentW - 16, 18);
+        [sec.container addSubview:self.cbStarVector];
+        cy += 20;
 
-    self.cbContourScan = MakeCheckbox(@"Axis Contour Scanner", self, @selector(backendToggled:), NO);
-    self.cbContourScan.frame = NSMakeRect(kPadding + 8, y, contentW - 8, 18);
-    self.cbContourScan.tag = 5;
-    [root addSubview:self.cbContourScan];
-    y += 20;
+        self.cbDiffVG = MakeTraceCheckbox(@"DiffVG Correction", self, @selector(backendToggled:), NO);
+        self.cbDiffVG.tag = 3;
+        self.cbDiffVG.frame = NSMakeRect(8, cy, contentW - 16, 18);
+        [sec.container addSubview:self.cbDiffVG];
+        cy += 20;
 
-    self.cbDiffVG = MakeCheckbox(@"DiffVG Correction", self, @selector(backendToggled:), NO);
-    self.cbDiffVG.frame = NSMakeRect(kPadding + 8, y, contentW - 8, 18);
-    self.cbDiffVG.tag = 5;
-    [root addSubview:self.cbDiffVG];
-    y += 20;
+        sec.containerHeight = cy;
+        [self.sections addObject:sec];
+    }
 
-    self.cbContourScan = MakeCheckbox(@"Axis Contour Scanner", self, @selector(backendToggled:), NO);
-    self.cbContourScan.frame = NSMakeRect(kPadding + 8, y, contentW - 8, 18);
-    self.cbContourScan.tag = 6;
-    [root addSubview:self.cbContourScan];
-    y += 20;
+    // ==========================================
+    //  Section 2: Segmentation
+    // ==========================================
+    {
+        TraceAccordionSection *sec = [[TraceAccordionSection alloc] init];
+        sec.expanded = NO;
 
-    self.cbContourPath = MakeCheckbox(@"Contour to Path", self, @selector(backendToggled:), NO);
-    self.cbContourPath.frame = NSMakeRect(kPadding + 8, y, contentW - 8, 18);
-    self.cbContourPath.tag = 7;
-    [root addSubview:self.cbContourPath];
-    y += 20;
+        sec.disclosureButton = [self makeDisclosureButton:@"Segmentation" tag:1];
+        [self.contentView addSubview:sec.disclosureButton];
 
-    self.cbContourLabel = MakeCheckbox(@"Contour Labeler", self, @selector(backendToggled:), NO);
-    self.cbContourLabel.frame = NSMakeRect(kPadding + 8, y, contentW - 8, 18);
-    self.cbContourLabel.tag = 8;
-    [root addSubview:self.cbContourLabel];
-    y += 20;
+        sec.container = [[TraceFlippedView alloc] initWithFrame:NSZeroRect];
+        [self.contentView addSubview:sec.container];
 
-    self.cbContourNest = MakeCheckbox(@"Contour Nesting", self, @selector(backendToggled:), NO);
-    self.cbContourNest.frame = NSMakeRect(kPadding + 8, y, contentW - 8, 18);
-    self.cbContourNest.tag = 9;
-    [root addSubview:self.cbContourNest];
-    y += 20;
+        CGFloat cy = 0;
+        self.cbCartoonSeg = MakeTraceCheckbox(@"CartoonSeg (parts)", self, @selector(backendToggled:), NO);
+        self.cbCartoonSeg.tag = 4;
+        self.cbCartoonSeg.frame = NSMakeRect(8, cy, contentW - 16, 18);
+        [sec.container addSubview:self.cbCartoonSeg];
+        cy += 20;
 
-    self.cbFormEdge = MakeCheckbox(@"Form Edge Extract", self, @selector(backendToggled:), NO);
-    self.cbFormEdge.frame = NSMakeRect(kPadding + 8, y, contentW - 8, 18);
-    self.cbFormEdge.tag = 10;
-    [root addSubview:self.cbFormEdge];
-    y += 20;
+        sec.containerHeight = cy;
+        [self.sections addObject:sec];
+    }
 
-    self.cbNormalRef = MakeCheckbox(@"Normal Reference", self, @selector(backendToggled:), NO);
-    self.cbNormalRef.frame = NSMakeRect(kPadding + 8, y, contentW - 8, 18);
-    self.cbNormalRef.tag = 11;
-    [root addSubview:self.cbNormalRef];
-    y += 20;
+    // ==========================================
+    //  Section 3: Normal Analysis
+    // ==========================================
+    {
+        TraceAccordionSection *sec = [[TraceAccordionSection alloc] init];
+        sec.expanded = NO;
 
-    self.cbAnalyzeRef = MakeCheckbox(@"Analyze Reference", self, @selector(backendToggled:), NO);
-    self.cbAnalyzeRef.frame = NSMakeRect(kPadding + 8, y, contentW - 8, 18);
-    self.cbAnalyzeRef.tag = 12;
-    [root addSubview:self.cbAnalyzeRef];
-    y += 24;
+        sec.disclosureButton = [self makeDisclosureButton:@"Normal Analysis" tag:2];
+        [self.contentView addSubview:sec.disclosureButton];
 
-    // --- Separator ---
-    NSBox *sep = [[NSBox alloc] initWithFrame:NSMakeRect(kPadding, y, contentW, 1)];
-    sep.boxType = NSBoxSeparator;
-    [root addSubview:sep];
-    [sep release];
-    y += 8;
+        sec.container = [[TraceFlippedView alloc] initWithFrame:NSZeroRect];
+        [self.contentView addSubview:sec.container];
 
-    // --- Parameters ---
-    NSTextField *paramTitle = MakeLabel(@"Parameters:", ITLabelFont(), ITDimColor());
-    paramTitle.frame = NSMakeRect(kPadding, y, contentW, kRowHeight);
-    [root addSubview:paramTitle];
-    y += kRowHeight + 2;
+        CGFloat cy = 0;
+        self.cbNormalRef = MakeTraceCheckbox(@"Normal Reference", self, @selector(backendToggled:), NO);
+        self.cbNormalRef.tag = 5;
+        self.cbNormalRef.frame = NSMakeRect(8, cy, contentW - 16, 18);
+        [sec.container addSubview:self.cbNormalRef];
+        cy += 20;
 
-    // Speckle filter slider
-    NSTextField *speckleTitleLabel = MakeLabel(@"Speckle Filter:", ITLabelFont(), ITTextColor());
-    speckleTitleLabel.frame = NSMakeRect(kPadding, y, 100, kRowHeight);
-    [root addSubview:speckleTitleLabel];
+        self.cbFormEdge = MakeTraceCheckbox(@"Form Edge Extract", self, @selector(backendToggled:), NO);
+        self.cbFormEdge.tag = 6;
+        self.cbFormEdge.frame = NSMakeRect(8, cy, contentW - 16, 18);
+        [sec.container addSubview:self.cbFormEdge];
+        cy += 20;
+
+        self.cbAnalyzeRef = MakeTraceCheckbox(@"Analyze Reference", self, @selector(backendToggled:), NO);
+        self.cbAnalyzeRef.tag = 7;
+        self.cbAnalyzeRef.frame = NSMakeRect(8, cy, contentW - 16, 18);
+        [sec.container addSubview:self.cbAnalyzeRef];
+        cy += 20;
+
+        sec.containerHeight = cy;
+        [self.sections addObject:sec];
+    }
+
+    // ==========================================
+    //  Section 4: Contour Tools
+    // ==========================================
+    {
+        TraceAccordionSection *sec = [[TraceAccordionSection alloc] init];
+        sec.expanded = NO;
+
+        sec.disclosureButton = [self makeDisclosureButton:@"Contour Tools" tag:3];
+        [self.contentView addSubview:sec.disclosureButton];
+
+        sec.container = [[TraceFlippedView alloc] initWithFrame:NSZeroRect];
+        [self.contentView addSubview:sec.container];
+
+        CGFloat cy = 0;
+        self.cbContourScan = MakeTraceCheckbox(@"Contour Scanner", self, @selector(backendToggled:), NO);
+        self.cbContourScan.tag = 8;
+        self.cbContourScan.frame = NSMakeRect(8, cy, contentW - 16, 18);
+        [sec.container addSubview:self.cbContourScan];
+        cy += 20;
+
+        self.cbContourPath = MakeTraceCheckbox(@"Contour to Path", self, @selector(backendToggled:), NO);
+        self.cbContourPath.tag = 9;
+        self.cbContourPath.frame = NSMakeRect(8, cy, contentW - 16, 18);
+        [sec.container addSubview:self.cbContourPath];
+        cy += 20;
+
+        self.cbContourLabel = MakeTraceCheckbox(@"Contour Labeler", self, @selector(backendToggled:), NO);
+        self.cbContourLabel.tag = 10;
+        self.cbContourLabel.frame = NSMakeRect(8, cy, contentW - 16, 18);
+        [sec.container addSubview:self.cbContourLabel];
+        cy += 20;
+
+        self.cbContourNest = MakeTraceCheckbox(@"Contour Nesting", self, @selector(backendToggled:), NO);
+        self.cbContourNest.tag = 11;
+        self.cbContourNest.frame = NSMakeRect(8, cy, contentW - 16, 18);
+        [sec.container addSubview:self.cbContourNest];
+        cy += 20;
+
+        sec.containerHeight = cy;
+        [self.sections addObject:sec];
+    }
+
+    // ==========================================
+    //  Parameters section (below accordion)
+    // ==========================================
+
+    self.paramSeparator = [[NSBox alloc] initWithFrame:NSMakeRect(kPadding, 0, contentW, 1)];
+    self.paramSeparator.boxType = NSBoxSeparator;
+    [self.contentView addSubview:self.paramSeparator];
+
+    self.paramTitle = MakeLabel(@"Parameters:", ITLabelFont(), ITDimColor());
+    [self.contentView addSubview:self.paramTitle];
+
+    // Speckle filter
+    self.speckleTitleLabel = MakeLabel(@"Speckle Filter:", ITLabelFont(), ITTextColor());
+    [self.contentView addSubview:self.speckleTitleLabel];
 
     self.speckleLabel = MakeLabel(@"4", ITLabelFont(), ITDimColor());
-    self.speckleLabel.frame = NSMakeRect(kPanelWidth - kPadding - 30, y, 30, kRowHeight);
     self.speckleLabel.alignment = NSTextAlignmentRight;
-    [root addSubview:self.speckleLabel];
-    y += kRowHeight;
+    [self.contentView addSubview:self.speckleLabel];
 
-    self.speckleSlider = [[NSSlider alloc] initWithFrame:
-                          NSMakeRect(kPadding, y, contentW, kSliderH)];
+    self.speckleSlider = [[NSSlider alloc] initWithFrame:NSZeroRect];
     self.speckleSlider.minValue = 1;
     self.speckleSlider.maxValue = 100;
     self.speckleSlider.intValue = 4;
     self.speckleSlider.target = self;
     self.speckleSlider.action = @selector(speckleChanged:);
-    [root addSubview:self.speckleSlider];
-    y += kSliderH + 6;
+    [self.contentView addSubview:self.speckleSlider];
 
-    // Color precision slider
-    NSTextField *colorPrecTitleLabel = MakeLabel(@"Color Precision:", ITLabelFont(), ITTextColor());
-    colorPrecTitleLabel.frame = NSMakeRect(kPadding, y, 110, kRowHeight);
-    [root addSubview:colorPrecTitleLabel];
+    // Color precision
+    self.colorPrecTitleLabel = MakeLabel(@"Color Precision:", ITLabelFont(), ITTextColor());
+    [self.contentView addSubview:self.colorPrecTitleLabel];
 
     self.colorPrecLabel = MakeLabel(@"6", ITLabelFont(), ITDimColor());
-    self.colorPrecLabel.frame = NSMakeRect(kPanelWidth - kPadding - 30, y, 30, kRowHeight);
     self.colorPrecLabel.alignment = NSTextAlignmentRight;
-    [root addSubview:self.colorPrecLabel];
-    y += kRowHeight;
+    [self.contentView addSubview:self.colorPrecLabel];
 
-    self.colorPrecSlider = [[NSSlider alloc] initWithFrame:
-                            NSMakeRect(kPadding, y, contentW, kSliderH)];
+    self.colorPrecSlider = [[NSSlider alloc] initWithFrame:NSZeroRect];
     self.colorPrecSlider.minValue = 1;
     self.colorPrecSlider.maxValue = 10;
     self.colorPrecSlider.intValue = 6;
     self.colorPrecSlider.target = self;
     self.colorPrecSlider.action = @selector(colorPrecChanged:);
-    [root addSubview:self.colorPrecSlider];
-    y += kSliderH + 12;
+    [self.contentView addSubview:self.colorPrecSlider];
 
-    // --- Run button ---
+    // ==========================================
+    //  Run button + status
+    // ==========================================
+
+    self.buttonSeparator = [[NSBox alloc] initWithFrame:NSMakeRect(kPadding, 0, contentW, 1)];
+    self.buttonSeparator.boxType = NSBoxSeparator;
+    [self.contentView addSubview:self.buttonSeparator];
+
     self.traceButton = MakeButton(@"Run Selected", self, @selector(traceClicked:));
-    self.traceButton.frame = NSMakeRect(kPadding, y, contentW, 28);
-    [root addSubview:self.traceButton];
-    y += 28 + 8;
+    [self.contentView addSubview:self.traceButton];
 
-    // Status label
     self.statusLabel = MakeLabel(@"Select backends, place an image, click Run", ITLabelFont(), ITDimColor());
-    self.statusLabel.frame = NSMakeRect(kPadding, y, contentW, kRowHeight * 3);
     self.statusLabel.maximumNumberOfLines = 3;
-    [root addSubview:self.statusLabel];
-    y += kRowHeight * 3 + kPadding;
+    [self.contentView addSubview:self.statusLabel];
 
-    root.frame = NSMakeRect(0, 0, kPanelWidth, y);
-    self.rootViewInternal = root;
+    // Perform initial layout
+    [self relayoutContent];
 
     // Status polling timer
     self.statusTimer = [NSTimer scheduledTimerWithTimeInterval:0.5
@@ -287,34 +370,173 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action, BOOL check
 
 - (NSView *)rootView
 {
-    return self.rootViewInternal;
+    return self.scrollView;
+}
+
+//----------------------------------------------------------------------------------------
+//  Disclosure button factory
+//----------------------------------------------------------------------------------------
+
+- (NSButton *)makeDisclosureButton:(NSString *)title tag:(NSInteger)tag
+{
+    // Borderless push-on/push-off button with triangle prefix as section header
+    NSButton *header = [[NSButton alloc] initWithFrame:NSZeroRect];
+    header.bordered = NO;
+    header.buttonType = NSButtonTypeOnOff;
+    header.state = (tag == 0) ? NSControlStateValueOn : NSControlStateValueOff;
+    header.target = self;
+    header.action = @selector(sectionToggled:);
+    header.tag = tag;
+
+    // Build attributed title with triangle prefix (down=expanded, right=collapsed)
+    NSString *prefix = (tag == 0) ? @"\u25BC " : @"\u25B6 ";
+    NSString *fullTitle = [NSString stringWithFormat:@"%@%@", prefix, title];
+    NSMutableAttributedString *attrTitle = [[NSMutableAttributedString alloc]
+        initWithString:fullTitle];
+    [attrTitle addAttribute:NSForegroundColorAttributeName
+                      value:ITAccentColor()
+                      range:NSMakeRange(0, attrTitle.length)];
+    [attrTitle addAttribute:NSFontAttributeName
+                      value:[NSFont boldSystemFontOfSize:11]
+                      range:NSMakeRange(0, attrTitle.length)];
+    header.attributedTitle = attrTitle;
+    header.alignment = NSTextAlignmentLeft;
+    [attrTitle release];
+
+    return [header autorelease];
+}
+
+//----------------------------------------------------------------------------------------
+//  Relayout — recalculates y-positions for all sections and trailing controls
+//----------------------------------------------------------------------------------------
+
+- (void)relayoutContent
+{
+    CGFloat contentW = kPanelWidth - 2*kPadding;
+    CGFloat y = kPadding + kRowHeight + 6;  // skip past title
+
+    for (TraceAccordionSection *sec in self.sections) {
+        // Disclosure button
+        sec.disclosureButton.frame = NSMakeRect(kPadding, y, contentW, 20);
+        y += 22;
+
+        // Container
+        if (sec.expanded) {
+            sec.container.frame = NSMakeRect(kPadding, y, contentW, sec.containerHeight);
+            sec.container.hidden = NO;
+            y += sec.containerHeight + 2;
+        } else {
+            sec.container.hidden = YES;
+        }
+
+        y += 2;  // spacing between sections
+    }
+
+    y += 4;
+
+    // --- Parameter separator ---
+    self.paramSeparator.frame = NSMakeRect(kPadding, y, contentW, 1);
+    y += 8;
+
+    self.paramTitle.frame = NSMakeRect(kPadding, y, contentW, kRowHeight);
+    y += kRowHeight + 2;
+
+    // Speckle filter
+    self.speckleTitleLabel.frame = NSMakeRect(kPadding, y, 100, kRowHeight);
+    self.speckleLabel.frame = NSMakeRect(kPanelWidth - kPadding - 30, y, 30, kRowHeight);
+    y += kRowHeight;
+
+    self.speckleSlider.frame = NSMakeRect(kPadding, y, contentW, kSliderH);
+    y += kSliderH + 6;
+
+    // Color precision
+    self.colorPrecTitleLabel.frame = NSMakeRect(kPadding, y, 110, kRowHeight);
+    self.colorPrecLabel.frame = NSMakeRect(kPanelWidth - kPadding - 30, y, 30, kRowHeight);
+    y += kRowHeight;
+
+    self.colorPrecSlider.frame = NSMakeRect(kPadding, y, contentW, kSliderH);
+    y += kSliderH + 12;
+
+    // --- Button separator ---
+    self.buttonSeparator.frame = NSMakeRect(kPadding, y, contentW, 1);
+    y += 8;
+
+    // Run button
+    self.traceButton.frame = NSMakeRect(kPadding, y, contentW, 28);
+    y += 28 + 8;
+
+    // Status label
+    self.statusLabel.frame = NSMakeRect(kPadding, y, contentW, kRowHeight * 3);
+    y += kRowHeight * 3 + kPadding;
+
+    // Resize contentView to fit
+    self.contentView.frame = NSMakeRect(0, 0, kPanelWidth, y);
 }
 
 //----------------------------------------------------------------------------------------
 //  Actions
 //----------------------------------------------------------------------------------------
 
+- (void)sectionToggled:(NSButton *)sender
+{
+    NSInteger idx = sender.tag;
+    if (idx < 0 || idx >= (NSInteger)self.sections.count) return;
+
+    TraceAccordionSection *sec = self.sections[idx];
+    sec.expanded = !sec.expanded;
+
+    // Update the disclosure triangle character in the button title
+    NSString *currentTitle = sender.title;
+    // Strip the first 2 characters (triangle + space) to get the section name
+    NSString *sectionName = [currentTitle substringFromIndex:2];
+    NSString *prefix = sec.expanded ? @"\u25BC " : @"\u25B6 ";
+    NSString *newTitle = [NSString stringWithFormat:@"%@%@", prefix, sectionName];
+
+    NSMutableAttributedString *attrTitle = [[NSMutableAttributedString alloc]
+        initWithString:newTitle];
+    [attrTitle addAttribute:NSForegroundColorAttributeName
+                      value:ITAccentColor()
+                      range:NSMakeRange(0, attrTitle.length)];
+    [attrTitle addAttribute:NSFontAttributeName
+                      value:[NSFont boldSystemFontOfSize:11]
+                      range:NSMakeRange(0, attrTitle.length)];
+    sender.attributedTitle = attrTitle;
+    [attrTitle release];
+
+    // Animate the relayout
+    [NSAnimationContext runAnimationGroup:^(NSAnimationContext *ctx) {
+        ctx.duration = 0.15;
+        ctx.allowsImplicitAnimation = YES;
+        [self relayoutContent];
+    }];
+
+    fprintf(stderr, "[TracePanel] Section %d %s\n",
+            (int)idx, sec.expanded ? "expanded" : "collapsed");
+}
+
 - (void)backendToggled:(NSButton *)sender
 {
-    // Just log — the actual selection is read at trace time
     fprintf(stderr, "[TracePanel] Backend %d toggled to %s\n",
             (int)sender.tag, sender.state == NSControlStateValueOn ? "ON" : "OFF");
 }
 
 - (void)traceClicked:(id)sender
 {
-    // Collect all checked backends
+    // Collect all checked backends — ordered by tag
+    // Tags: 0=vtracer, 1=opencv, 2=starvector, 3=diffvg,
+    //        4=cartoonseg, 5=normal_ref, 6=form_edge, 7=analyze_ref,
+    //        8=contour_scan, 9=contour_path, 10=contour_label, 11=contour_nest
     NSArray<NSButton*> *checkboxes = @[
-        self.cbVtracer, self.cbOpenCV, self.cbStarVector,
-        self.cbCartoonSeg, self.cbImageTrace, self.cbDiffVG,
-        self.cbContourScan, self.cbContourPath, self.cbContourLabel,
-        self.cbContourNest, self.cbFormEdge, self.cbNormalRef, self.cbAnalyzeRef
+        self.cbVtracer, self.cbOpenCV, self.cbStarVector, self.cbDiffVG,
+        self.cbCartoonSeg,
+        self.cbNormalRef, self.cbFormEdge, self.cbAnalyzeRef,
+        self.cbContourScan, self.cbContourPath, self.cbContourLabel, self.cbContourNest
     ];
     NSArray<NSString*> *backendNames = @[
-        @"vtracer", @"opencv", @"starvector",
-        @"cartoonseg", @"image_trace", @"diffvg",
-        @"contour_scan", @"contour_path", @"contour_label",
-        @"contour_nest", @"form_edge", @"normal_ref", @"analyze_ref"
+        @"vtracer", @"opencv", @"starvector", @"diffvg",
+        @"cartoonseg",
+        @"normal_ref", @"form_edge", @"analyze_ref",
+        @"contour_scan", @"contour_path", @"contour_label", @"contour_nest"
     ];
 
     NSMutableArray<NSString*> *selected = [NSMutableArray array];

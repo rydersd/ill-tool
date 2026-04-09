@@ -43,6 +43,7 @@ extern "C"
     AICursorSnapSuite*          sAICursorSnap = NULL;
     AIPreferenceSuite*          sAIPreference = NULL;
     AIArtboardSuite*            sAIArtboard = NULL;
+    AIRasterSuite*              sAIRaster = NULL;
 }
 
 ImportSuite gImportSuites[] =
@@ -77,6 +78,7 @@ ImportSuite gImportSuites[] =
     kAICursorSnapSuite, kAICursorSnapVersion, &sAICursorSnap,
     kAIPreferenceSuite, kAIPreferenceVersion, &sAIPreference,
     kAIArtboardSuite, kAIArtboardSuiteVersion, &sAIArtboard,
+    kAIRasterSuite, kAIRasterSuiteVersion, &sAIRaster,
     nullptr, 0, nullptr
 };
 // End IllToolSuites.cpp

@@ -14,6 +14,7 @@ rm -f "$SDK_SRC/modules/"*.cpp "$SDK_SRC/modules/"*.h
 cp plugin/Source/*.cpp plugin/Source/*.h plugin/Source/*.mm "$SDK_SRC/"
 cp plugin/Source/modules/*.cpp plugin/Source/modules/*.h "$SDK_SRC/modules/"
 cp plugin/Source/panels/*.mm plugin/Source/panels/*.h "$SDK_SRC/panels/"
+cp plugin/Source/vendor/*.h "$SDK_SRC/vendor/" 2>/dev/null || true
 # Copy resource files (cursor SVGs, etc.)
 if [ -d "plugin/Resources/raw" ]; then
     cp plugin/Resources/raw/*.svg "$SDK/Resources/raw/" 2>/dev/null || true
