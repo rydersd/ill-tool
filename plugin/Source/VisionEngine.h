@@ -207,6 +207,31 @@ public:
     std::vector<ContourGroup> SuggestGroups(const std::vector<Contour>& contours);
 
     //------------------------------------------------------------------------------------
+    //  Vanishing point estimation
+    //------------------------------------------------------------------------------------
+
+    /** Estimated vanishing point from line clustering. */
+    struct VanishingPointEstimate {
+        double x = 0, y = 0;       // VP position in image pixel coordinates
+        double confidence = 0;     // 0-1 based on cluster size relative to total lines
+        int lineCount = 0;         // number of lines in this cluster
+        double dominantAngle = 0;  // average theta of the line cluster (radians)
+    };
+
+    /** Estimate vanishing points from line convergence in the loaded image.
+        Runs Canny + Hough, clusters lines by angle, intersects pairs within
+        each cluster, and takes the median intersection point.
+        @param maxVPs        Maximum number of VPs to return (default 2).
+        @param cannyLow      Canny lower threshold.
+        @param cannyHigh     Canny upper threshold.
+        @param houghThreshold Minimum Hough accumulator votes.
+        @return Vector of VPs sorted by confidence (largest cluster first). */
+    std::vector<VanishingPointEstimate> EstimateVanishingPoints(
+        int maxVPs = 2,
+        double cannyLow = 50.0, double cannyHigh = 150.0,
+        int houghThreshold = 30);
+
+    //------------------------------------------------------------------------------------
     //  Surface type inference
     //------------------------------------------------------------------------------------
 
@@ -246,6 +271,31 @@ public:
         @param h  Height of the region in pixels.
         @return SurfaceHint with type, confidence, and dominant gradient angle. */
     SurfaceHint InferSurfaceType(int x, int y, int w, int h);
+
+    /** Result of normal direction clustering — a dominant surface plane. */
+    struct PlaneCluster {
+        double normalAngle = 0;    // Dominant gradient direction (radians, 0-pi)
+        double strength = 0;       // Fraction of pixels in this cluster (0-1)
+        int    pixelCount = 0;     // Number of pixels in cluster
+    };
+
+    /** Cluster gradient directions into dominant planes using k-means on angle histogram.
+        Returns up to maxPlanes clusters sorted by strength (largest first).
+        Each cluster represents a surface plane whose edges converge at a VP
+        perpendicular to the cluster's dominant gradient angle.
+        @param maxPlanes  Maximum number of plane clusters to return.
+        @return Vector of PlaneCluster sorted by strength. */
+    std::vector<PlaneCluster> ClusterNormalDirections(int maxPlanes = 3);
+
+    /** Estimate vanishing points from normal direction clustering.
+        Unlike Hough-based VP detection (which looks for line convergence),
+        this derives VPs from surface plane orientations:
+        - Cluster gradient directions into dominant planes
+        - Each plane's edge direction is perpendicular to its gradient
+        - Parallel edges from the same plane family converge at a VP
+        @param maxVPs  Maximum number of VPs to return.
+        @return Vector of VanishingPointEstimate derived from normal clusters. */
+    std::vector<VanishingPointEstimate> EstimateVPsFromNormals(int maxVPs = 2);
 
     /** Set the artwork-to-pixel coordinate mapping.
         Called after loading an image and determining where it's placed on the artboard. */

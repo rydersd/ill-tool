@@ -123,6 +123,10 @@ private:
 
     PerspectiveGrid fGrid;
 
+    /** Cached artboard bounds — set on document open, stable across zoom/pan.
+        Used for horizon % → Y conversion instead of view bounds. */
+    AIRealRect fCachedArtboardBounds = {0, 0, 0, 0};
+
     //------------------------------------------------------------------------------------
     //  Drag interaction state
     //------------------------------------------------------------------------------------
@@ -145,6 +149,9 @@ private:
         (which gets immediately deselected when the panel takes focus). */
     bool fPlacementMode = false;
 
+    /** True if Smart Guides were enabled before we disabled them on grid lock. */
+    bool fSmartGuidesWasEnabled = true;
+
     /** Hit-test radius for perspective handles in artwork-space points. */
     static constexpr double kHandleHitRadius = 8.0;
 
@@ -165,10 +172,17 @@ private:
     void DeleteGrid();
     void ActivatePerspectiveTool();
 
+    void RegisterSnapConstraints();
+    void ClearSnapConstraints();
+
     void SyncFromBridge();
     void SaveToDocument();
     void LoadFromDocument();
+    void SavePreset(const std::string& name);
+    void LoadPreset(const std::string& name);
+    std::vector<std::string> ListPresets();
 
+    void AutoMatchPerspective();
     void MirrorInPerspective(int axis, bool replace);
     void DuplicateInPerspective(int count, int spacing);
     void PasteInPerspective(int plane, float scale);

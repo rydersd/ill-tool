@@ -12,6 +12,7 @@
 #define __HTTPBRIDGE_H__
 
 #include <string>
+#include <condition_variable>
 
 /** Start the HTTP bridge server on the given port.
     Returns true if the server started successfully.
@@ -74,6 +75,8 @@ enum class OpType : int {
     PastePerspective,    // intParam = plane (0-3), param1 = scale
     PerspectiveSave,     // save grid to document dictionary
     PerspectiveLoad,     // load grid from document dictionary
+    PerspectivePresetSave,  // strParam = preset name; save current grid as named preset
+    PerspectivePresetLoad,  // strParam = preset name; load named preset into grid
     // Stage 14: Decompose
     Decompose,           // param1 = sensitivity (0.0-1.0)
     DecomposeAccept,     // accept all clusters → create named groups
@@ -83,7 +86,25 @@ enum class OpType : int {
     DecomposeCancel,     // cancel decompose overlay
     PlaceVerticalVP,     // place VP3 at center of viewport
     DeletePerspective,   // clear grid and delete entirely
-    ActivatePerspectiveTool  // clear existing lines and activate the perspective tool
+    ActivatePerspectiveTool, // clear existing lines and activate the perspective tool
+    AutoMatchPerspective,    // auto-detect VPs from placed reference image
+    InvalidateOverlay,       // force annotator redraw (used by sliders that set bridge values directly)
+    Resmooth,                // re-smooth preview path with current tension slider value
+    ShadingEyedropper,       // intParam = target (0=highlight, 1=shadow); sample fill color from selection
+    // Stage 15: Transform All
+    TransformApply,          // apply batch transform to all selected shapes
+    // Stage 16: Trace
+    Trace,                   // strParam = backend ("vtracer","opencv","starvector"); execute trace on placed image
+    // Stage 17: Surface Extraction
+    SurfaceExtract,          // param1 = x, param2 = y (click point); strParam = action (click_extract/region_extract)
+    SurfaceExtractToggle,    // boolParam1 = enable/disable extract mode
+    // MCP Tool Integration (synchronous request/response ops)
+    McpInspect,              // synchronous: returns document + selection info as JSON
+    McpCreatePath,           // strParam = JSON body (points, stroke, fill, name)
+    McpCreateShape,          // strParam = JSON body (shape type, position, size, colors)
+    McpLayers,               // strParam = JSON body (action: list/create/rename)
+    McpSelect,               // strParam = JSON body (action: all/none/by_name/by_type)
+    McpModify                // strParam = JSON body (action: move/scale/rotate/set_stroke/set_fill/set_name/delete)
 };
 
 /** A queued operation with parameters. Pushed by panels/HTTP, popped by timer. */
@@ -103,6 +124,10 @@ void BridgeEnqueueOp(PluginOp op);
 /** Dequeue the next operation. Returns false if queue is empty.
     Called from ProcessOperationQueue (timer/SDK context only). */
 bool BridgeDequeueOp(PluginOp& out);
+
+/** Re-enqueue an operation at the front of the queue (for retry on next tick).
+    Used when an op can't be processed yet (e.g. drag in progress). */
+void BridgeRequeueOp(PluginOp op);
 
 //----------------------------------------------------------------------------------------
 //  Result Queue (H2) — replaces per-feature readout variables
@@ -380,6 +405,14 @@ int  BridgeGetShadingBlendSteps();
 void BridgeSetShadingMeshGrid(int size);
 int  BridgeGetShadingMeshGrid();
 
+/** Set/get shading eyedropper mode (true = active, next click samples). Thread-safe. */
+void BridgeSetShadingEyedropperMode(bool active);
+bool BridgeGetShadingEyedropperMode();
+
+/** Set/get shading eyedropper target (0=highlight, 1=shadow). Thread-safe. */
+void BridgeSetShadingEyedropperTarget(int target);
+int  BridgeGetShadingEyedropperTarget();
+
 //----------------------------------------------------------------------------------------
 //  Perspective mirror/duplicate/paste state (Stage 10b-d)
 //----------------------------------------------------------------------------------------
@@ -444,5 +477,103 @@ void BridgeRequestDecomposeAcceptOne(int clusterIndex);
 void BridgeRequestDecomposeSplit(int clusterIndex);
 void BridgeRequestDecomposeMergeGroups(int clusterA, int clusterB);
 void BridgeRequestDecomposeCancel();
+
+//----------------------------------------------------------------------------------------
+//  Transform state (Stage 15)
+//----------------------------------------------------------------------------------------
+
+/** Set/get transform width value. Thread-safe. */
+void BridgeSetTransformWidth(double w);
+double BridgeGetTransformWidth();
+
+/** Set/get transform height value. Thread-safe. */
+void BridgeSetTransformHeight(double h);
+double BridgeGetTransformHeight();
+
+/** Set/get transform rotation in degrees. Thread-safe. */
+void BridgeSetTransformRotation(double deg);
+double BridgeGetTransformRotation();
+
+/** Set/get transform mode (0=absolute, 1=relative). Thread-safe. */
+void BridgeSetTransformMode(int mode);
+int BridgeGetTransformMode();
+
+/** Set/get transform random variance toggle. Thread-safe. */
+void BridgeSetTransformRandom(bool random);
+bool BridgeGetTransformRandom();
+
+/** Set/get transform size unit (0=px, 1=%). Thread-safe. */
+void BridgeSetTransformUnitSize(int unit);
+int BridgeGetTransformUnitSize();
+
+/** Set/get transform rotation unit (0=degrees, 1=%). Thread-safe. */
+void BridgeSetTransformUnitRotation(int unit);
+int BridgeGetTransformUnitRotation();
+
+/** Set/get transform aspect ratio lock (true = uniform scale). Thread-safe. */
+void BridgeSetTransformLockAspectRatio(bool lock);
+bool BridgeGetTransformLockAspectRatio();
+
+//----------------------------------------------------------------------------------------
+//  Trace state (Stage 16) — backend selection + parameters
+//----------------------------------------------------------------------------------------
+
+/** Request trace operation with current settings. Thread-safe. */
+void BridgeRequestTrace(const std::string& backend);
+
+/** Set/get trace speckle filter size (1-100). Thread-safe. */
+void BridgeSetTraceSpeckle(int size);
+int  BridgeGetTraceSpeckle();
+
+/** Set/get trace color precision (1-10). Thread-safe. */
+void BridgeSetTraceColorPrecision(int precision);
+int  BridgeGetTraceColorPrecision();
+
+/** Set/get trace status text (written from SDK context, read by panel). Thread-safe. */
+void BridgeSetTraceStatus(const std::string& status);
+std::string BridgeGetTraceStatus();
+
+//----------------------------------------------------------------------------------------
+//  Surface extraction state (Stage 17) — click-to-extract mode
+//----------------------------------------------------------------------------------------
+
+/** Request surface extraction at click point. Thread-safe. */
+void BridgeRequestSurfaceExtract(double x, double y, const std::string& action);
+
+/** Toggle surface extraction mode. Thread-safe. */
+void BridgeRequestSurfaceExtractToggle(bool enable);
+
+/** Set/get extraction sensitivity (0.0-1.0). Thread-safe. */
+void BridgeSetExtractionSensitivity(double sensitivity);
+double BridgeGetExtractionSensitivity();
+
+/** Set/get extraction status text. Thread-safe. */
+void BridgeSetExtractionStatus(const std::string& status);
+std::string BridgeGetExtractionStatus();
+
+/** Set/get surface extraction mode active. Thread-safe. */
+void BridgeSetSurfaceExtractMode(bool active);
+bool BridgeGetSurfaceExtractMode();
+
+//----------------------------------------------------------------------------------------
+//  MCP Synchronous Request/Response — HTTP thread enqueues op, waits on condvar,
+//  ProcessOperationQueue fills result and signals. Timeout = 5 seconds.
+//----------------------------------------------------------------------------------------
+
+/** Enqueue an MCP operation and block until the timer callback posts a result.
+    Returns the JSON result string, or an error JSON on timeout.
+    Thread-safe. Called from HTTP handler threads only. */
+std::string BridgeMcpSyncRequest(PluginOp op, int timeoutMs = 5000);
+
+/** Called from ProcessOperationQueue (SDK timer context) to post a result
+    for a pending synchronous MCP request. Wakes the waiting HTTP thread. */
+void BridgeMcpPostResponse(const std::string& jsonResult);
+
+/** Check if there is a pending synchronous MCP request. Returns false if none.
+    If true, fills 'out' with the pending op. Called from ProcessOperationQueue only. */
+bool BridgeMcpPeekRequest(PluginOp& out);
+
+/** Clear the pending request after processing. Called from ProcessOperationQueue only. */
+void BridgeMcpClearRequest();
 
 #endif // __HTTPBRIDGE_H__

@@ -26,6 +26,11 @@
 #include "AIPathStyle.h" // AIPathStyleSuite — read/write fill+stroke styles
 #include "AIDictionary.h" // AIDictionarySuite — per-art metadata storage
 #include "AIMesh.h"      // AIMeshSuite, AIMeshVertexIteratorSuite — mesh gradient creation
+#include "AIUndo.h"      // AIUndoSuite — undo context management
+#include "AIPlaced.h"    // AIPlacedSuite — placed image file path and transform
+#include "AICursorSnap_Wrapper.h"  // AICursorSnapSuite — custom snap constraints
+#include "AIPreference.h"  // AIPreferenceSuite — boolean preference get/put
+#include "AIArtboard.h"    // AIArtboardSuite — artboard list, bounds, active index
 
 extern  "C" AIUnicodeStringSuite*       sAIUnicodeString;
 extern  "C" SPBlocksSuite*              sSPBlocks;
@@ -52,5 +57,10 @@ extern  "C" AIPathStyleSuite*           sAIPathStyle;
 extern  "C" AIDictionarySuite*          sAIDictionary;
 extern  "C" AIMeshSuite*               sAIMesh;
 extern  "C" AIMeshVertexIteratorSuite*  sAIMeshVertex;
+extern  "C" AIUndoSuite*              sAIUndo;
+extern  "C" AIPlacedSuite*            sAIPlaced;
+extern  "C" AICursorSnapSuite*        sAICursorSnap;
+extern  "C" AIPreferenceSuite*        sAIPreference;
+extern  "C" AIArtboardSuite*         sAIArtboard;
 
 #endif // __ILLTOOLSUITES_H__

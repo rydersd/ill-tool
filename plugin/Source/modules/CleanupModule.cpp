@@ -11,6 +11,7 @@
 #include "ShapeUtils.h"
 #include "PerspectiveModule.h"
 #include "LearningEngine.h"
+#include "VisionEngine.h"
 #include "HttpBridge.h"
 #include "AIToolNames.h"
 
@@ -19,7 +20,55 @@
 #include <algorithm>
 #include <vector>
 
+#import <AppKit/NSEvent.h>
+
 extern IllToolPlugin* gPlugin;
+
+//========================================================================================
+//  Cmd+Z interceptor — NSEvent local monitor that eats Cmd+Z during working mode
+//  to prevent Illustrator's native undo from corrupting our cached art handles.
+//========================================================================================
+
+static id InstallUndoInterceptor(CleanupModule* cleanup)
+{
+    id monitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown
+        handler:^NSEvent*(NSEvent* event) {
+            if (!cleanup || !cleanup->IsInWorkingMode()) return event;
+
+            unsigned short keyCode = [event keyCode];
+
+            // Cmd+Z/Cmd+Shift+Z: let Illustrator handle undo natively.
+            // The SDK bundles tool mouse selectors into a single undo context,
+            // so each drag is automatically undoable. No interception needed.
+
+            // Enter/Return (keyCode 36 or 76) → Apply working mode
+            if (keyCode == 36 || keyCode == 76) {
+                BridgeRequestWorkingApply(true);
+                fprintf(stderr, "[CleanupModule] Enter intercepted → enqueued Apply\n");
+                return nil;
+            }
+
+            // Escape (keyCode 53) → Cancel working mode
+            if (keyCode == 53) {
+                BridgeRequestWorkingCancel();
+                fprintf(stderr, "[CleanupModule] Escape intercepted → enqueued Cancel\n");
+                return nil;
+            }
+
+            return event;  // pass through
+        }];
+    fprintf(stderr, "[CleanupModule] Undo interceptor installed\n");
+    return monitor;
+}
+
+static void RemoveUndoInterceptor(void*& monitor)
+{
+    if (monitor) {
+        [NSEvent removeMonitor:(id)monitor];
+        monitor = nullptr;
+        fprintf(stderr, "[CleanupModule] Undo interceptor removed\n");
+    }
+}
 
 // Forward declaration — defined after bounding box section
 static double ViewSpaceDist(AIRealPoint a, AIRealPoint b);
@@ -57,12 +106,35 @@ int UndoStack::Undo()
     auto& frame = stack.back();
     int restored = 0;
     for (auto& snap : frame) {
+        if (!snap.art) {
+            fprintf(stderr, "[UndoStack] skipping null art handle in frame\n");
+            continue;
+        }
         short artType = 0;
         ASErr err = sAIArt->GetArtType(snap.art, &artType);
-        if (err != kNoErr || artType != kPathArt) continue;
+        if (err != kNoErr) {
+            fprintf(stderr, "[UndoStack] stale art handle (err=%d) — skipping\n", (int)err);
+            continue;
+        }
+        if (artType != kPathArt) {
+            fprintf(stderr, "[UndoStack] art is type %d, not path — skipping\n", (int)artType);
+            continue;
+        }
+        if (snap.segments.empty()) {
+            fprintf(stderr, "[UndoStack] empty segments in snapshot — skipping\n");
+            continue;
+        }
         ai::int16 nc = (ai::int16)snap.segments.size();
-        sAIPath->SetPathSegmentCount(snap.art, nc);
-        sAIPath->SetPathSegments(snap.art, 0, nc, snap.segments.data());
+        err = sAIPath->SetPathSegmentCount(snap.art, nc);
+        if (err != kNoErr) {
+            fprintf(stderr, "[UndoStack] SetPathSegmentCount failed (err=%d) — skipping\n", (int)err);
+            continue;
+        }
+        err = sAIPath->SetPathSegments(snap.art, 0, nc, snap.segments.data());
+        if (err != kNoErr) {
+            fprintf(stderr, "[UndoStack] SetPathSegments failed (err=%d)\n", (int)err);
+            continue;
+        }
         sAIPath->SetPathClosed(snap.art, snap.closed);
         restored++;
     }
@@ -126,6 +198,8 @@ bool CleanupModule::HandleOp(const PluginOp& op)
     switch (op.type) {
         case OpType::AverageSelection:
             AverageSelection();
+            LearningEngine::Instance().JournalLog("average_selection",
+                "\"shape\":\"auto\"");
             return true;
 
         case OpType::Classify:
@@ -134,6 +208,11 @@ bool CleanupModule::HandleOp(const PluginOp& op)
 
         case OpType::Reclassify:
             ReclassifyAs(static_cast<BridgeShapeType>(op.intParam));
+            {
+                char jbuf[128];
+                snprintf(jbuf, sizeof(jbuf), "\"shape_type\":%d", op.intParam);
+                LearningEngine::Instance().JournalLog("reclassify", jbuf);
+            }
             return true;
 
         case OpType::Simplify:
@@ -146,14 +225,32 @@ bool CleanupModule::HandleOp(const PluginOp& op)
 
         case OpType::WorkingApply:
             ApplyWorkingMode(op.boolParam1);
+            LearningEngine::Instance().JournalLog("apply",
+                op.boolParam1 ? "\"delete_originals\":true" : "\"delete_originals\":false");
             return true;
 
         case OpType::WorkingCancel:
             CancelWorkingMode();
+            LearningEngine::Instance().JournalLog("cancel", "");
             return true;
 
         case OpType::UndoShape:
-            if (fInWorkingMode) {
+            if (fInWorkingMode && fUndoStack.CanUndo()) {
+                // Validate: top frame must target the current preview path
+                if (!fPreviewPath || !fUndoStack.TopFrameTargets(fPreviewPath)) {
+                    fprintf(stderr, "[CleanupModule] UndoShape: stale frame — clearing + cancel\n");
+                    fUndoStack.Clear();
+                    CancelWorkingMode();
+                    return true;
+                }
+                {
+                    int restored = fUndoStack.Undo();
+                    fprintf(stderr, "[CleanupModule] UndoShape in working mode: restored %d paths (%zu remain)\n",
+                            restored, fUndoStack.FrameCount());
+                    ComputeBoundingBox();
+                    InvalidateFullView();
+                }
+            } else if (fInWorkingMode) {
                 CancelWorkingMode();
             } else if (fUndoStack.CanUndo()) {
                 int restored = fUndoStack.Undo();
@@ -163,7 +260,27 @@ bool CleanupModule::HandleOp(const PluginOp& op)
             return true;
 
         case OpType::SelectSmall:
-            SelectSmall(op.param1);
+            SelectSmall(op.param1, op.intParam);
+            return true;
+
+        case OpType::Resmooth:
+            if (fInWorkingMode && fPreviewPath) {
+                ai::int16 segCount = 0;
+                sAIPath->GetPathSegmentCount(fPreviewPath, &segCount);
+                std::vector<AIPathSegment> segs(segCount);
+                sAIPath->GetPathSegments(fPreviewPath, 0, segCount, segs.data());
+                std::vector<AIRealPoint> pts(segCount);
+                for (int i = 0; i < segCount; i++) pts[i] = segs[i].p;
+                AIBoolean closed = false;
+                sAIPath->GetPathClosed(fPreviewPath, &closed);
+                double tension = BridgeGetTension() / 300.0;  // 0-100 → 0-0.33
+                auto handles = ComputeSmoothHandles(pts, closed, tension);
+                UpdatePreviewSegments(fPreviewPath, pts, handles, closed);
+                ComputeBoundingBox();
+                InvalidateFullView();
+                sAIDocument->RedrawDocument();
+                fprintf(stderr, "[CleanupModule] Resmooth: tension=%.3f\n", tension);
+            }
             return true;
 
         default:
@@ -194,6 +311,54 @@ bool CleanupModule::HandleMouseDown(AIToolMessage* msg)
     AIRealPoint artPt = msg->cursor;
     bool optionKey = msg->event && (msg->event->modifiers & aiEventModifiers_optionKey) != 0;
     bool shiftKey  = msg->event && (msg->event->modifiers & aiEventModifiers_shiftKey) != 0;
+
+    // Double-click on an anchor: toggle handles in/out (same as Shift-click but no modifier needed)
+    if (!optionKey && !shiftKey && fPreviewPath) {
+        int anchorHit = HitTestAnchorHandle(artPt, 7.0);
+        if (anchorHit >= 0) {
+            auto now = std::chrono::steady_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - fLastClickTime).count();
+            if (anchorHit == fLastClickedAnchor && elapsed < 400) {
+                // Double-click detected — toggle handles
+                fLastClickedAnchor = -1;  // reset to prevent triple-click
+                ai::int16 segCount = 0;
+                sAIPath->GetPathSegmentCount(fPreviewPath, &segCount);
+                if (anchorHit < segCount) {
+                    AIPathSegment seg;
+                    sAIPath->GetPathSegments(fPreviewPath, anchorHit, 1, &seg);
+                    if (seg.corner) {
+                        seg.corner = false;
+                        std::vector<AIPathSegment> allSegs(segCount);
+                        sAIPath->GetPathSegments(fPreviewPath, 0, segCount, allSegs.data());
+                        AIRealPoint prev = (anchorHit > 0) ? allSegs[anchorHit-1].p : seg.p;
+                        AIRealPoint next = (anchorHit < segCount-1) ? allSegs[anchorHit+1].p : seg.p;
+                        double dx = next.h - prev.h, dy = next.v - prev.v;
+                        double tn = 1.0 / 6.0;
+                        seg.in.h  = (AIReal)(seg.p.h - dx * tn);
+                        seg.in.v  = (AIReal)(seg.p.v - dy * tn);
+                        seg.out.h = (AIReal)(seg.p.h + dx * tn);
+                        seg.out.v = (AIReal)(seg.p.v + dy * tn);
+                    } else {
+                        seg.corner = true;
+                        seg.in = seg.p;
+                        seg.out = seg.p;
+                    }
+                    fUndoStack.PushFrame();
+                    fUndoStack.SnapshotPath(fPreviewPath);
+                    sAIPath->SetPathSegments(fPreviewPath, anchorHit, 1, &seg);
+                    InvalidateFullView();
+                    sAIDocument->RedrawDocument();
+                    fprintf(stderr, "[CleanupModule] Double-click toggled point %d to %s\n",
+                            anchorHit, seg.corner ? "sharp" : "smooth");
+                    return true;
+                }
+            }
+            fLastClickedAnchor = anchorHit;
+            fLastClickTime = now;
+        } else {
+            fLastClickedAnchor = -1;
+        }
+    }
 
     // Shift-click on an anchor: toggle sharp/smooth
     if (shiftKey && !optionKey && fPreviewPath) {
@@ -318,9 +483,12 @@ bool CleanupModule::HandleMouseDown(AIToolMessage* msg)
     {
         int bezierHit = HitTestBezierHandle(artPt);
         if (bezierHit >= 0) {
+            // Push undo frame before bezier handle drag
+            fUndoStack.PushFrame();
+            fUndoStack.SnapshotPath(fPreviewPath);
             fDragBezierIdx = bezierHit;
             fBezierDragStart = artPt;
-            fprintf(stderr, "[CleanupModule] Bezier handle drag start: %s of seg %d\n",
+            fprintf(stderr, "[CleanupModule] Bezier handle drag start: %s of seg %d (undo frame pushed)\n",
                     (bezierHit % 2 == 0) ? "in" : "out", bezierHit / 2);
             return true;
         }
@@ -331,13 +499,16 @@ bool CleanupModule::HandleMouseDown(AIToolMessage* msg)
     if (anchorHit >= 0) {
         fDragAnchorIdx = anchorHit;
         fAnchorDragStart = artPt;
-        // Snapshot the original segment for undo
+        // Push undo frame BEFORE drag so Cmd+Z can restore
+        fUndoStack.PushFrame();
+        fUndoStack.SnapshotPath(fPreviewPath);
+        // Snapshot the original segment for drag delta computation
         ai::int16 segCount = 0;
         sAIPath->GetPathSegmentCount(fPreviewPath, &segCount);
         if (anchorHit < segCount) {
             sAIPath->GetPathSegments(fPreviewPath, anchorHit, 1, &fAnchorDragOrigSeg);
         }
-        fprintf(stderr, "[CleanupModule] Anchor drag start: idx=%d\n", anchorHit);
+        fprintf(stderr, "[CleanupModule] Anchor drag start: idx=%d (undo frame pushed)\n", anchorHit);
         return true;
     }
 
@@ -345,6 +516,9 @@ bool CleanupModule::HandleMouseDown(AIToolMessage* msg)
     if (fBBox.visible) {
         int bboxHit = HitTestBBoxHandle(artPt);
         if (bboxHit >= 0) {
+            // Push undo frame BEFORE drag so Cmd+Z can restore
+            fUndoStack.PushFrame();
+            fUndoStack.SnapshotPath(fPreviewPath);
             fBBox.dragHandle = bboxHit;
             fBBox.dragStart = artPt;
             fprintf(stderr, "[CleanupModule] BBox drag start: handle=%d\n", bboxHit);
@@ -353,10 +527,13 @@ bool CleanupModule::HandleMouseDown(AIToolMessage* msg)
 
         // Priority 3: rotate zone — outside bbox near corners
         if (HitTestBBoxRotateZone(artPt)) {
+            // Push undo frame BEFORE rotation drag
+            fUndoStack.PushFrame();
+            fUndoStack.SnapshotPath(fPreviewPath);
             fBBox.dragHandle = 8;  // 8 = rotating
             fBBox.dragStart = artPt;
             fBBox.dragStartAngle = atan2(artPt.v - fBBox.center.v, artPt.h - fBBox.center.h);
-            fprintf(stderr, "[CleanupModule] Rotation drag start\n");
+            fprintf(stderr, "[CleanupModule] Rotation drag start (undo frame pushed)\n");
             return true;
         }
     }
@@ -368,6 +545,17 @@ bool CleanupModule::HandleMouseDrag(AIToolMessage* msg)
 {
     // Bezier handle drag
     if (fDragBezierIdx >= 0) {
+        // Check snap-to-anchor proximity for visual feedback
+        int segIdx = fDragBezierIdx / 2;
+        if (fPreviewPath && segIdx >= 0) {
+            ai::int16 sc = 0;
+            sAIPath->GetPathSegmentCount(fPreviewPath, &sc);
+            if (segIdx < sc) {
+                AIPathSegment seg;
+                sAIPath->GetPathSegments(fPreviewPath, segIdx, 1, &seg);
+                fBezierSnapPreview = (ViewSpaceDist(msg->cursor, seg.p) <= 5.0);
+            }
+        }
         ApplyBezierDrag(fDragBezierIdx, msg->cursor);
         InvalidateFullView();
         return true;
@@ -411,6 +599,7 @@ bool CleanupModule::HandleMouseUp(AIToolMessage* msg)
         fprintf(stderr, "[CleanupModule] Bezier handle drag end: %s of seg %d\n",
                 (fDragBezierIdx % 2 == 0) ? "in" : "out", fDragBezierIdx / 2);
         fDragBezierIdx = -1;
+        fBezierSnapPreview = false;
         sAIDocument->RedrawDocument();
         return true;
     }
@@ -444,6 +633,25 @@ bool CleanupModule::HandleMouseUp(AIToolMessage* msg)
                         fHoverBezierIdx = -1;
                         break;
                     }
+                }
+            }
+        }
+
+        // Record correction delta for LearningEngine
+        if (fPreviewPath) {
+            AIPathSegment finalSeg;
+            ai::int16 sc = 0;
+            sAIPath->GetPathSegmentCount(fPreviewPath, &sc);
+            if (fDragAnchorIdx < sc) {
+                sAIPath->GetPathSegments(fPreviewPath, fDragAnchorIdx, 1, &finalSeg);
+                double dx = finalSeg.p.h - fAnchorDragOrigSeg.p.h;
+                double dy = finalSeg.p.v - fAnchorDragOrigSeg.p.v;
+                if (fabs(dx) > 0.5 || fabs(dy) > 0.5) {
+                    const char* surfHint = SurfaceTypeName(BridgeGetSurfaceType());
+                    const char* shapeNames[] = {"line","arc","l","rect","s","ellipse","free"};
+                    int si = (int)fCachedShapeFit.shape;
+                    const char* shapeHint = (si >= 0 && si < 7) ? shapeNames[si] : "unknown";
+                    LearningEngine::Instance().RecordCorrection(surfHint, dx, dy, shapeHint);
                 }
             }
         }
@@ -494,9 +702,10 @@ void CleanupModule::HandleCursorTrack(AIRealPoint artPt)
     }
 
     if (fHoverAnchorIdx < 0 && fHoverBezierIdx < 0) {
-        // Check bbox handles
-        fHoverBBoxIdx = HitTestBBoxHandle(artPt, 8.0);
-        if (fHoverBBoxIdx < 0 && HitTestBBoxRotateZone(artPt)) {
+        // Check bbox handles — use same hit radius as HandleMouseDown (6.0)
+        // so cursor feedback matches click behavior
+        fHoverBBoxIdx = HitTestBBoxHandle(artPt, 6.0);
+        if (fHoverBBoxIdx < 0 && HitTestBBoxRotateZone(artPt, 6.0, 20.0)) {
             fHoverBBoxIdx = 8;
         }
     }
@@ -534,8 +743,18 @@ void CleanupModule::OnSelectionChanged()
     }
 }
 
+CleanupModule::~CleanupModule()
+{
+    // Belt-and-suspenders: remove NSEvent monitor if still installed
+    // (normally removed in Cancel/Apply/OnDocumentChanged, but this catches plugin unload)
+    RemoveUndoInterceptor(fUndoEventMonitor);
+}
+
 void CleanupModule::OnDocumentChanged()
 {
+    // Clean up Enter/Escape interceptor across documents
+    RemoveUndoInterceptor(fUndoEventMonitor);
+
     // Clear all cached state on document change
     fCachedSortedPoints.clear();
     fCachedShapeFit = ShapeFitResult{};
@@ -564,7 +783,19 @@ bool CleanupModule::CanUndo()
 
 void CleanupModule::Undo()
 {
+    // Don't undo mid-drag — the drag-in-progress guard in ProcessOperationQueue
+    // should have deferred this, but belt-and-suspenders here too.
+    if (fDragAnchorIdx >= 0 || fBBox.dragHandle >= 0 || fDragBezierIdx >= 0) {
+        fprintf(stderr, "[CleanupModule] Undo blocked: drag in progress\n");
+        return;
+    }
+
     if (fInWorkingMode) {
+        // Cmd+Z in working mode = cancel the session.
+        // Custom UndoStack segment restoration crashes because Illustrator's internal
+        // undo state becomes inconsistent with our direct SetPathSegments calls,
+        // even with SetSilent(true). Disabling per-drag undo until a safer approach
+        // is found (e.g., using AIUndoSuite::UndoChanges instead of manual restore).
         CancelWorkingMode();
     } else if (fUndoStack.CanUndo()) {
         int restored = fUndoStack.Undo();
@@ -659,6 +890,15 @@ void CleanupModule::AverageSelection()
         fprintf(stderr, "[CleanupModule] AverageSelection: classified as %s (conf=%.2f, %d pts)\n",
                 kShapeNames[(int)fCachedShapeFit.shape], fCachedShapeFit.confidence,
                 (int)fCachedShapeFit.points.size());
+
+        // Record shape detection in LearningEngine (user accepted auto-detection)
+        {
+            const char* surfaceHint = SurfaceTypeName(BridgeGetSurfaceType());
+            LearningEngine::Instance().RecordShapeOverride(
+                surfaceHint,
+                kShapeNames[(int)fCachedShapeFit.shape],
+                "");  // empty = user accepted auto-detection
+        }
 
         // Step 4: Precompute LOD levels
         fLODCache = PrecomputeLOD(fCachedSortedPoints, 20, &fCachedShapeFit);
@@ -814,17 +1054,62 @@ void CleanupModule::AverageSelection()
         }
 
         // Perspective projection — only when grid is LOCKED and snap is enabled.
-        // Without lock, perspective is still being adjusted and shouldn't affect cleanup.
+        // Shape-aware: circles become perspective ellipses, rects become perspective quads.
         if (BridgeGetSnapToPerspective() && BridgeGetPerspectiveLocked() && gPlugin) {
             auto* persp = gPlugin->GetModule<PerspectiveModule>();
             if (persp) {
-                fprintf(stderr, "[CleanupModule] Projecting preview through locked perspective grid\n");
-                previewPts = persp->ProjectPointsThroughPerspective(previewPts, 0);
-                for (auto& h : previewHandles) {
-                    auto projL = persp->ProjectPointsThroughPerspective({h.left}, 0);
-                    auto projR = persp->ProjectPointsThroughPerspective({h.right}, 0);
-                    if (!projL.empty()) h.left = projL[0];
-                    if (!projR.empty()) h.right = projR[0];
+                int plane = 0;  // floor plane by default
+
+                if (fCachedShapeFit.shape == BridgeShapeType::Ellipse &&
+                    previewPts.size() >= 4) {
+                    // Circle/Ellipse → perspective ellipse: project 12 points around the
+                    // ellipse through the grid, then fit a smooth closed bezier.
+                    double cx = 0, cy = 0;
+                    for (auto& p : previewPts) { cx += p.h; cy += p.v; }
+                    cx /= previewPts.size(); cy /= previewPts.size();
+                    double rx = 0, ry = 0;
+                    for (auto& p : previewPts) {
+                        rx = std::max(rx, fabs(p.h - cx));
+                        ry = std::max(ry, fabs(p.v - cy));
+                    }
+
+                    const int N = 12;
+                    std::vector<AIRealPoint> circlePts(N);
+                    for (int i = 0; i < N; i++) {
+                        double angle = 2.0 * M_PI * i / N;
+                        circlePts[i].h = (AIReal)(cx + rx * cos(angle));
+                        circlePts[i].v = (AIReal)(cy + ry * sin(angle));
+                    }
+
+                    previewPts = persp->ProjectPointsThroughPerspective(circlePts, plane);
+                    previewHandles = ComputeSmoothHandles(previewPts, true, 1.0 / 6.0);
+                    previewClosed = true;
+                    fprintf(stderr, "[CleanupModule] Perspective: ellipse → %d-point projected ellipse\n", N);
+
+                } else if (fCachedShapeFit.shape == BridgeShapeType::Rect &&
+                           previewPts.size() == 4) {
+                    // Rectangle → perspective quad: project 4 corners
+                    previewPts = persp->ProjectPointsThroughPerspective(previewPts, plane);
+                    previewHandles.clear();
+                    previewHandles.resize(4);
+                    for (int i = 0; i < 4; i++) {
+                        previewHandles[i].left = previewPts[i];
+                        previewHandles[i].right = previewPts[i];
+                    }
+                    previewClosed = true;
+                    fprintf(stderr, "[CleanupModule] Perspective: rect → projected quad\n");
+
+                } else {
+                    // Generic projection for other shapes (line, arc, S-curve, freeform)
+                    previewPts = persp->ProjectPointsThroughPerspective(previewPts, plane);
+                    for (auto& h : previewHandles) {
+                        auto projL = persp->ProjectPointsThroughPerspective({h.left}, plane);
+                        auto projR = persp->ProjectPointsThroughPerspective({h.right}, plane);
+                        if (!projL.empty()) h.left = projL[0];
+                        if (!projR.empty()) h.right = projR[0];
+                    }
+                    fprintf(stderr, "[CleanupModule] Perspective: generic %d-point projection\n",
+                            (int)previewPts.size());
                 }
             }
         }
@@ -833,6 +1118,22 @@ void CleanupModule::AverageSelection()
 
         fWorkingGroup = workGroup;
         fInWorkingMode = true;
+
+        // Clear undo stack — stale frames from prior sessions have disposed art handles
+        fUndoStack.Clear();
+
+        // Let Illustrator manage undo natively — the SDK bundles tool mouse
+        // selectors into a single undo context per drag. Each drag is undoable.
+        // Set undo text so Edit menu shows "Undo Shape Cleanup"
+        if (sAIUndo) {
+            sAIUndo->SetUndoTextUS(ai::UnicodeString("Undo Shape Cleanup"),
+                                    ai::UnicodeString("Redo Shape Cleanup"));
+        }
+
+        // Install Enter/Escape interceptor (does NOT intercept Cmd+Z anymore)
+        if (!fUndoEventMonitor) {
+            fUndoEventMonitor = (void*)InstallUndoInterceptor(this);
+        }
 
         // Enter isolation mode on the working group
         if (sAIIsolationMode && !sAIIsolationMode->IsInIsolationMode()) {
@@ -892,17 +1193,33 @@ void CleanupModule::ApplyLODLevel(int level)
         if (lod.value <= level) best = &lod;
     }
 
+    // At high LOD levels with perspective active, project through the grid
+    std::vector<AIRealPoint> lodPts = best->points;
+    std::vector<HandlePair> lodHandles = best->handles;
+    bool lodClosed = fCachedShapeFit.closed;
+
+    if (level >= 80 && BridgeGetSnapToPerspective() && BridgeGetPerspectiveLocked() && gPlugin) {
+        auto* persp = gPlugin->GetModule<PerspectiveModule>();
+        if (persp) {
+            lodPts = persp->ProjectPointsThroughPerspective(lodPts, 0);
+            for (auto& h : lodHandles) {
+                auto projL = persp->ProjectPointsThroughPerspective({h.left}, 0);
+                auto projR = persp->ProjectPointsThroughPerspective({h.right}, 0);
+                if (!projL.empty()) h.left = projL[0];
+                if (!projR.empty()) h.right = projR[0];
+            }
+        }
+    }
+
     if (fPreviewPath) {
-        UpdatePreviewSegments(fPreviewPath, best->points, best->handles,
-                              fCachedShapeFit.closed);
+        UpdatePreviewSegments(fPreviewPath, lodPts, lodHandles, lodClosed);
         ai::int16 segCount = 0;
         sAIPath->GetPathSegmentCount(fPreviewPath, &segCount);
         for (ai::int16 s = 0; s < segCount; s++) {
             sAIPath->SetPathSegmentSelected(fPreviewPath, s, kSegmentPointSelected);
         }
     } else {
-        fPreviewPath = PlacePreview(fWorkingGroup, best->points, best->handles,
-                                    fCachedShapeFit.closed);
+        fPreviewPath = PlacePreview(fWorkingGroup, lodPts, lodHandles, lodClosed);
         if (fPreviewPath) {
             sAIArt->SetArtUserAttr(fPreviewPath, kArtSelected, kArtSelected);
         }
@@ -910,8 +1227,9 @@ void CleanupModule::ApplyLODLevel(int level)
 
     ComputeBoundingBox();
     sAIDocument->RedrawDocument();
-    fprintf(stderr, "[CleanupModule] ApplyLODLevel: level=%d → %d points\n",
-            level, (int)best->points.size());
+    fprintf(stderr, "[CleanupModule] ApplyLODLevel: level=%d → %d points%s\n",
+            level, (int)lodPts.size(),
+            (level >= 80 && BridgeGetSnapToPerspective()) ? " (perspective-projected)" : "");
 }
 
 //========================================================================================
@@ -950,6 +1268,15 @@ void CleanupModule::EnterWorkingMode()
 {
     if (fInWorkingMode) return;
     if (!sAIBlendStyle) return;
+
+    // Mutual exclusion: exit perspective edit mode when entering cleanup
+    if (gPlugin) {
+        auto* persp = gPlugin->GetModule<PerspectiveModule>();
+        if (persp && persp->IsInEditMode()) {
+            persp->SetEditMode(false);
+            fprintf(stderr, "[CleanupModule] EnterWorkingMode: exited perspective edit mode\n");
+        }
+    }
 
     try {
         AIMatchingArtSpec spec(kPathArt, 0, 0);
@@ -999,12 +1326,13 @@ void CleanupModule::EnterWorkingMode()
 
         fOriginalPaths.clear();
         for (AIArtHandle art : selectedPaths) {
-            AIReal prevOpacity = sAIBlendStyle->GetOpacity(art);
-            fOriginalPaths.push_back({art, prevOpacity});
-
             AIArtHandle dupe = nullptr;
             result = sAIArt->DuplicateArt(art, kPlaceInsideOnTop, workGroup, &dupe);
             if (result != kNoErr) continue;
+
+            // Only track original AFTER duplication succeeds — prevents
+            // ApplyWorkingMode from disposing user art that was never duplicated
+            AIReal prevOpacity = sAIBlendStyle->GetOpacity(art);
 
             // Copy selection state
             ai::int16 origSegCount = 0;
@@ -1024,10 +1352,25 @@ void CleanupModule::EnterWorkingMode()
             // Dim and lock the original
             sAIBlendStyle->SetOpacity(art, 0.30);
             sAIArt->SetArtUserAttr(art, kArtLocked, kArtLocked);
+
+            fOriginalPaths.push_back({art, prevOpacity});
         }
 
         fWorkingGroup = workGroup;
         fInWorkingMode = true;
+
+        // Clear stale undo frames from prior sessions
+        fUndoStack.Clear();
+
+        // Native undo — SDK bundles tool mouse events into one undo context per drag
+        if (sAIUndo) {
+            sAIUndo->SetUndoTextUS(ai::UnicodeString("Undo Shape Cleanup"),
+                                    ai::UnicodeString("Redo Shape Cleanup"));
+        }
+
+        if (!fUndoEventMonitor) {
+            fUndoEventMonitor = (void*)InstallUndoInterceptor(this);
+        }
 
         if (sAIIsolationMode && !sAIIsolationMode->IsInIsolationMode()) {
             if (sAIIsolationMode->CanIsolateArt(workGroup)) {
@@ -1056,6 +1399,16 @@ void CleanupModule::ApplyWorkingMode(bool deleteOriginals)
     try {
         // Suppress isolation re-entry notifier during Apply
         fExitingWorkingMode = true;
+
+        // Clear undo stack IMMEDIATELY — before any art disposal.
+        // Frames hold raw AIArtHandle pointers that become dangling after DisposeArt.
+        fUndoStack.Clear();
+
+        // Set undo text for the Apply action
+        if (sAIUndo) {
+            sAIUndo->SetUndoTextUS(ai::UnicodeString("Undo Shape Cleanup"),
+                                    ai::UnicodeString("Redo Shape Cleanup"));
+        }
 
         // Step 1: Exit isolation mode FIRST (before any art changes)
         if (sAIIsolationMode && sAIIsolationMode->IsInIsolationMode()) {
@@ -1108,17 +1461,39 @@ void CleanupModule::ApplyWorkingMode(bool deleteOriginals)
                 fPreviewPath = nullptr;
             }
 
-            // Auto-name
-            std::string autoName;
-            if (!fSourceGroupName.empty()) {
-                autoName = fSourceGroupName + " — Cleaned";
-            } else if (!fSourceLayerName.empty()) {
-                autoName = fSourceLayerName + " — Cleaned";
-            } else {
-                autoName = "Cleaned";
-            }
-            sAIArt->SetArtName(fPreviewPath, ai::UnicodeString(autoName));
-            fprintf(stderr, "[CleanupModule] ApplyWorkingMode: preview promoted as '%s'\n", autoName.c_str());
+            // Auto-name + stroke copy — only if preview handle is still valid
+            if (fPreviewPath) {
+                std::string autoName;
+                if (!fSourceGroupName.empty()) {
+                    autoName = fSourceGroupName + " — Cleaned";
+                } else if (!fSourceLayerName.empty()) {
+                    autoName = fSourceLayerName + " — Cleaned";
+                } else {
+                    autoName = "Cleaned";
+                }
+                sAIArt->SetArtName(fPreviewPath, ai::UnicodeString(autoName));
+                fprintf(stderr, "[CleanupModule] ApplyWorkingMode: preview promoted as '%s'\n", autoName.c_str());
+
+                // Copy stroke style from first original path to preserve line weight/color
+                if (!fOriginalPaths.empty() && sAIPathStyle) {
+                    AIPathStyle srcStyle;
+                    AIBoolean srcHasAdvFill = false;
+                    short srcArtType = 0;
+                    if (sAIArt->GetArtType(fOriginalPaths[0].art, &srcArtType) == kNoErr &&
+                        srcArtType == kPathArt &&
+                        sAIPathStyle->GetPathStyle(fOriginalPaths[0].art, &srcStyle, &srcHasAdvFill) == kNoErr) {
+                        AIPathStyle dstStyle;
+                        AIBoolean dstHasAdvFill = false;
+                        if (sAIPathStyle->GetPathStyle(fPreviewPath, &dstStyle, &dstHasAdvFill) == kNoErr) {
+                            dstStyle.stroke = srcStyle.stroke;
+                            dstStyle.strokePaint = srcStyle.strokePaint;
+                            sAIPathStyle->SetPathStyle(fPreviewPath, &dstStyle);
+                            fprintf(stderr, "[CleanupModule] ApplyWorkingMode: copied stroke from original (width=%.1f)\n",
+                                    srcStyle.stroke.width);
+                        }
+                    }
+                }
+            }  // end if (fPreviewPath)
         }
 
         // Step 4: Delete originals if requested
@@ -1164,7 +1539,7 @@ void CleanupModule::ApplyWorkingMode(bool deleteOriginals)
             sAIArt->SetArtUserAttr(fPreviewPath, kArtSelected, kArtSelected);
         }
 
-        // Clear state
+        // Clear state (undo stack already cleared at top of Apply)
         fOriginalPaths.clear();
         fWorkingGroup = nullptr;
         fSourceGroup = nullptr;
@@ -1184,16 +1559,19 @@ void CleanupModule::ApplyWorkingMode(bool deleteOriginals)
         fHoverBBoxIdx = -1;
 
         fExitingWorkingMode = false;
+        RemoveUndoInterceptor(fUndoEventMonitor);
         sAIDocument->RedrawDocument();
         fprintf(stderr, "[CleanupModule] ApplyWorkingMode: complete (originals %s)\n",
                 deleteOriginals ? "deleted" : "restored");
     }
     catch (ai::Error& ex) {
         fExitingWorkingMode = false;
+        RemoveUndoInterceptor(fUndoEventMonitor);
         fprintf(stderr, "[CleanupModule] ApplyWorkingMode error: %d\n", (int)ex);
     }
     catch (...) {
         fExitingWorkingMode = false;
+        RemoveUndoInterceptor(fUndoEventMonitor);
         fprintf(stderr, "[CleanupModule] ApplyWorkingMode unknown error\n");
     }
 }
@@ -1208,6 +1586,10 @@ void CleanupModule::CancelWorkingMode()
 
     try {
         fExitingWorkingMode = true;  // Suppress isolation re-entry notifier
+
+        // Clear undo stack IMMEDIATELY — before any art disposal
+        fUndoStack.Clear();
+
         if (sAIIsolationMode && sAIIsolationMode->IsInIsolationMode()) {
             sAIIsolationMode->ExitIsolationMode();
         }
@@ -1226,6 +1608,7 @@ void CleanupModule::CancelWorkingMode()
             sAIArt->SetArtUserAttr(rec.art, kArtLocked | kArtHidden, 0);
         }
 
+        // (undo stack already cleared at top of Cancel)
         fOriginalPaths.clear();
         fWorkingGroup = nullptr;
         fSourceGroup = nullptr;
@@ -1245,15 +1628,18 @@ void CleanupModule::CancelWorkingMode()
         fHoverBBoxIdx = -1;
 
         fExitingWorkingMode = false;
+        RemoveUndoInterceptor(fUndoEventMonitor);
         sAIDocument->RedrawDocument();
         fprintf(stderr, "[CleanupModule] CancelWorkingMode: complete\n");
     }
     catch (ai::Error& ex) {
         fExitingWorkingMode = false;
+        RemoveUndoInterceptor(fUndoEventMonitor);
         fprintf(stderr, "[CleanupModule] CancelWorkingMode error: %d\n", (int)ex);
     }
     catch (...) {
         fExitingWorkingMode = false;
+        RemoveUndoInterceptor(fUndoEventMonitor);
         fprintf(stderr, "[CleanupModule] CancelWorkingMode unknown error\n");
     }
 }
@@ -1311,7 +1697,36 @@ void CleanupModule::ClassifySelection()
         fprintf(stderr, "[CleanupModule] ClassifySelection: %d paths → %s\n",
                 pathCount, fLastDetectedShape);
 
-        // LearningEngine: log prediction vs auto-detection
+        // Surface type inference from VisionEngine (if image loaded)
+        {
+            VisionEngine& ve = VisionEngine::Instance();
+            if (ve.IsLoaded()) {
+                // Compute selection centroid from the first selected path
+                AIArtHandle firstPath = selected[0];
+                ai::int16 sc = 0;
+                sAIPath->GetPathSegmentCount(firstPath, &sc);
+                if (sc > 0) {
+                    std::vector<AIPathSegment> segs(sc);
+                    sAIPath->GetPathSegments(firstPath, 0, sc, segs.data());
+                    double centerX = 0, centerY = 0;
+                    for (ai::int16 s = 0; s < sc; s++) {
+                        centerX += segs[s].p.h;
+                        centerY += segs[s].p.v;
+                    }
+                    centerX /= sc;
+                    centerY /= sc;
+                    VisionEngine::SurfaceHint hint = ve.InferSurfaceType(
+                        (int)centerX, (int)centerY, 50, 50);
+                    if (hint.type != VisionEngine::SurfaceType::Unknown) {
+                        BridgeSetSurfaceHint((int)hint.type, hint.confidence, hint.gradientAngle);
+                        fprintf(stderr, "[CleanupModule] Surface type inferred: %d (conf=%.2f)\n",
+                                (int)hint.type, hint.confidence);
+                    }
+                }
+            }
+        }
+
+        // LearningEngine: prediction → UI suggestion
         {
             const char* surfaceHint = SurfaceTypeName(BridgeGetSurfaceType());
             std::string predicted = LearningEngine::Instance().PredictShape(surfaceHint, 0, 0.0);
@@ -1321,6 +1736,21 @@ void CleanupModule::ClassifySelection()
                 fprintf(stderr, "[CleanupModule Learning] PredictShape(%s) → %s, auto=%s, %s\n",
                         surfaceHint, predicted.c_str(), autoDetected,
                         match ? "MATCH" : "MISMATCH");
+                // If prediction differs from auto-detection, show suggestion in label
+                if (!match) {
+                    static char suggestBuf[128];
+                    snprintf(suggestBuf, sizeof(suggestBuf), "%s (try: %s)",
+                             labelBuf, predicted.c_str());
+                    fLastDetectedShape = suggestBuf;
+                }
+            }
+
+            // Set initial simplification level from learned preference
+            double predLevel = LearningEngine::Instance().PredictSimplifyLevel(surfaceHint);
+            if (predLevel >= 0) {
+                BridgeSetTension(predLevel);
+                fprintf(stderr, "[CleanupModule Learning] PredictSimplifyLevel(%s) → %.0f\n",
+                        surfaceHint, predLevel);
             }
         }
     }
@@ -1570,7 +2000,7 @@ void CleanupModule::SimplifySelection(double tolerance)
 //  SelectSmall — select paths with arc length below threshold
 //========================================================================================
 
-void CleanupModule::SelectSmall(double threshold)
+void CleanupModule::SelectSmall(double threshold, int maxPoints)
 {
     try {
         AIMatchingArtSpec spec(kPathArt, 0, 0);
@@ -1601,6 +2031,9 @@ void CleanupModule::SelectSmall(double threshold)
             AIBoolean closed = false;
             sAIPath->GetPathClosed(art, &closed);
 
+            // Point-count threshold: select paths with few anchors (if maxPoints > 0)
+            bool belowPointThreshold = (maxPoints > 0 && segCount <= maxPoints);
+
             // Use MeasureSegments for accurate bezier arc length
             ai::int16 numPieces = closed ? segCount : (ai::int16)(segCount - 1);
             double totalLen = 0;
@@ -1627,7 +2060,7 @@ void CleanupModule::SelectSmall(double threshold)
                 }
             }
 
-            if (totalLen < threshold) {
+            if (totalLen < threshold || belowPointThreshold) {
                 sAIArt->SetArtUserAttr(art, kArtSelected, kArtSelected);
                 selectedCount++;
 
@@ -1659,8 +2092,8 @@ void CleanupModule::SelectSmall(double threshold)
         }
 
         if (matches) sAIMdMemory->MdMemoryDisposeHandle((AIMdMemoryHandle)matches);
-        fprintf(stderr, "[CleanupModule] SelectSmall: selected %d paths below %.1f pt\n",
-                selectedCount, threshold);
+        fprintf(stderr, "[CleanupModule] SelectSmall: selected %d paths below %.1f pt (maxPoints=%d)\n",
+                selectedCount, threshold, maxPoints);
         if (selectedCount > 0) sAIDocument->RedrawDocument();
     }
     catch (ai::Error& ex) { fprintf(stderr, "[CleanupModule] SelectSmall error: %d\n", (int)ex); }
@@ -1785,7 +2218,8 @@ void CleanupModule::ComputeBoundingBox()
     fBBox.center.h = (AIReal)cx;
     fBBox.center.v = (AIReal)cy;
     fBBox.visible = true;
-    fBBox.dragHandle = -1;
+    // NOTE: do NOT reset fBBox.dragHandle here — that kills mid-drag updates.
+    // dragHandle is managed by HandleMouseDown (set) and HandleMouseUp (clear).
 }
 
 //========================================================================================
@@ -2145,10 +2579,17 @@ void CleanupModule::DrawPathAnchorHandles(AIAnnotatorMessage* message)
         hoverFill.green = (ai::uint16)(0.9 * 65535);
         hoverFill.blue  = (ai::uint16)(1.0 * 65535);
 
+        // Snap highlight: when dragging a bezier handle near this anchor, show magenta
+        AIRGBColor snapFill;
+        snapFill.red   = (ai::uint16)(1.0 * 65535);
+        snapFill.green = (ai::uint16)(0.2 * 65535);
+        snapFill.blue  = (ai::uint16)(0.6 * 65535);
+
         bool active = (fDragAnchorIdx == (int)i);
         bool hovered = (fHoverAnchorIdx == (int)i);
-        const AIRGBColor& fill = active ? activeFill : (hovered ? hoverFill : handleFill);
-        int hs = hovered ? handleSize + 2 : handleSize;
+        bool snapTarget = (fBezierSnapPreview && fDragBezierIdx >= 0 && fDragBezierIdx / 2 == (int)i);
+        const AIRGBColor& fill = snapTarget ? snapFill : (active ? activeFill : (hovered ? hoverFill : handleFill));
+        int hs = (hovered || snapTarget) ? handleSize + 2 : handleSize;
         DrawSquareHandle(drawer, viewPt, hs, fill, handleStroke);
     }
 
@@ -2251,6 +2692,17 @@ void CleanupModule::ApplyBezierDrag(int bezierIdx, AIRealPoint newPos)
 
     AIPathSegment seg;
     sAIPath->GetPathSegments(fPreviewPath, segIdx, 1, &seg);
+
+    // Snap-to-anchor: if handle is dragged within 5px of its anchor, collapse to corner
+    double snapDist = ViewSpaceDist(newPos, seg.p);
+    if (snapDist <= 5.0) {
+        seg.in = seg.p;
+        seg.out = seg.p;
+        seg.corner = true;
+        sAIPath->SetPathSegments(fPreviewPath, segIdx, 1, &seg);
+        fprintf(stderr, "[CleanupModule] Bezier handle snapped to anchor — collapsed to corner (seg %d)\n", segIdx);
+        return;
+    }
 
     if (isOut) {
         seg.out = newPos;

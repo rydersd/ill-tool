@@ -113,6 +113,7 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
 @property (nonatomic, strong) NSButton *lockToggle;
 @property (nonatomic, strong) NSButton *showToggle;
 @property (nonatomic, strong) NSButton *deleteGridButton;
+@property (nonatomic, strong) NSButton *autoMatchButton;
 @property (nonatomic, strong) NSButton *snapToggle;
 
 // Grid tab — status and VP readouts
@@ -126,6 +127,11 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
 @property (nonatomic, strong) NSTextField *densityValueLabel;
 @property (nonatomic, strong) NSSlider *horizonSlider;
 @property (nonatomic, strong) NSTextField *horizonValueLabel;
+
+// Grid tab — preset controls
+@property (nonatomic, strong) NSTextField *presetNameField;
+@property (nonatomic, strong) NSButton *presetSaveButton;
+@property (nonatomic, strong) NSButton *presetLoadButton;
 
 // Mirror tab
 @property (nonatomic, strong) NSSegmentedControl *mirrorAxisSegment;
@@ -258,7 +264,7 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
 
 - (void)buildUI
 {
-    CGFloat totalHeight = 500.0;  // must match panel height in IllToolPanels.mm
+    CGFloat totalHeight = 530.0;  // must match panel height in IllToolPanels.mm
     // Flipped view: y=0 at top, content builds top-down. If panel is shorter,
     // bottom gets clipped (less important) rather than top (buttons).
     PerspFlippedView *root = [[PerspFlippedView alloc] initWithFrame:NSMakeRect(0, 0, kPanelWidth, totalHeight)];
@@ -308,6 +314,13 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     addVertBtn.frame = NSMakeRect(kPadding + halfBtnW + 4, y, halfBtnW, kRowHeight);
     [root addSubview:addVertBtn];
     self.addVerticalButton = addVertBtn;
+    y += (kRowHeight + 4);
+
+    // --- Row: [Auto Match] — detect VPs from placed reference image ---
+    NSButton *autoMatchBtn = MakeButton(@"Auto Match", self, @selector(onAutoMatch:));
+    autoMatchBtn.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kRowHeight);
+    [root addSubview:autoMatchBtn];
+    self.autoMatchButton = autoMatchBtn;
     y += (kRowHeight + kPadding);
 
     // --- Per-line color legend ---
@@ -481,6 +494,47 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     sep2.boxType = NSBoxSeparator;
     [container addSubview:sep2];
     [sep2 release];
+    y += (1 + kPadding);
+
+    // --- Preset section ---
+    NSTextField *presetLbl = MakeLabel(@"Preset", ITLabelFont(), ITTextColor());
+    presetLbl.frame = NSMakeRect(kPadding, y, 50, 14);
+    [container addSubview:presetLbl];
+    y += (14 + 4);
+
+    // Preset name text field (editable)
+    NSTextField *presetField = [[NSTextField alloc] initWithFrame:NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kRowHeight)];
+    presetField.font = ITMonoFont();
+    presetField.textColor = ITTextColor();
+    presetField.backgroundColor = [NSColor colorWithRed:0.15 green:0.15 blue:0.15 alpha:1.0];
+    presetField.drawsBackground = YES;
+    presetField.bordered = YES;
+    presetField.editable = YES;
+    presetField.placeholderString = @"preset1";
+    [container addSubview:presetField];
+    self.presetNameField = presetField;
+    [presetField release];
+    y += (kRowHeight + 4);
+
+    // Save / Load buttons side by side
+    CGFloat halfW = (kPanelWidth - 2*kPadding - 4) / 2.0;
+
+    NSButton *saveBtn = MakeButton(@"Save Preset", self, @selector(onPresetSave:));
+    saveBtn.frame = NSMakeRect(kPadding, y, halfW, kRowHeight);
+    [container addSubview:saveBtn];
+    self.presetSaveButton = saveBtn;
+
+    NSButton *loadBtn = MakeButton(@"Load Preset", self, @selector(onPresetLoad:));
+    loadBtn.frame = NSMakeRect(kPadding + halfW + 4, y, halfW, kRowHeight);
+    [container addSubview:loadBtn];
+    self.presetLoadButton = loadBtn;
+    y += (kRowHeight + kPadding);
+
+    // --- Separator ---
+    NSBox *sep3 = [[NSBox alloc] initWithFrame:NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, 1)];
+    sep3.boxType = NSBoxSeparator;
+    [container addSubview:sep3];
+    [sep3 release];
     y += (1 + kPadding);
 
     // --- Clear Grid button ---
@@ -690,6 +744,18 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
 }
 
 //----------------------------------------------------------------------------------------
+//  Auto Match — detect VPs from placed reference image
+//----------------------------------------------------------------------------------------
+
+- (void)onAutoMatch:(id)sender
+{
+    PluginOp op;
+    op.type = OpType::AutoMatchPerspective;
+    BridgeEnqueueOp(op);
+    fprintf(stderr, "[IllTool Panel] Auto Match Perspective from reference image\n");
+}
+
+//----------------------------------------------------------------------------------------
 //  Delete Grid — clear grid and hide everything
 //----------------------------------------------------------------------------------------
 
@@ -751,7 +817,11 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     self.horizonValueLabel.stringValue = [NSString stringWithFormat:@"%.0f%%", pct];
     // Send as percentage — module converts to artboard Y
     BridgeSetHorizonY(pct);
-    fprintf(stderr, "[IllTool Panel] Horizon: %.0f%%\n", pct);
+    // Enqueue an invalidation op so the annotator redraws immediately
+    // (without this, the grid only updates on the next timer-driven draw cycle)
+    PluginOp op;
+    op.type = OpType::InvalidateOverlay;
+    BridgeEnqueueOp(op);
 }
 
 - (void)onDensityChanged:(NSSlider *)sender
@@ -895,6 +965,34 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     self.densityValueLabel.stringValue = [NSString stringWithFormat:@"%d", density];
 }
 
+//----------------------------------------------------------------------------------------
+//  Preset Save / Load
+//----------------------------------------------------------------------------------------
+
+- (void)onPresetSave:(id)sender
+{
+    NSString *name = self.presetNameField.stringValue;
+    if (name.length == 0) name = @"preset1";
+
+    PluginOp op;
+    op.type = OpType::PerspectivePresetSave;
+    op.strParam = std::string([name UTF8String]);
+    BridgeEnqueueOp(op);
+    fprintf(stderr, "[IllTool Panel] Save preset: %s\n", [name UTF8String]);
+}
+
+- (void)onPresetLoad:(id)sender
+{
+    NSString *name = self.presetNameField.stringValue;
+    if (name.length == 0) name = @"preset1";
+
+    PluginOp op;
+    op.type = OpType::PerspectivePresetLoad;
+    op.strParam = std::string([name UTF8String]);
+    BridgeEnqueueOp(op);
+    fprintf(stderr, "[IllTool Panel] Load preset: %s\n", [name UTF8String]);
+}
+
 @end
 
 //========================================================================================
@@ -916,4 +1014,11 @@ void PluginDeletePerspective(void)
     for (int i = 0; i < 3; i++) BridgeClearPerspectiveLine(i);
     BridgeSetPerspectiveLocked(false);
     BridgeSetPerspectiveVisible(false);
+}
+
+void PluginAutoMatchPerspective(void)
+{
+    PluginOp op;
+    op.type = OpType::AutoMatchPerspective;
+    BridgeEnqueueOp(op);
 }

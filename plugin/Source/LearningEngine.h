@@ -53,6 +53,13 @@ public:
         @param pathNames  Names/IDs of the paths that were grouped. */
     void RecordGrouping(const std::vector<std::string>& pathNames);
 
+    /** Record handle displacement delta (where tool placed anchor vs where user moved it).
+        @param surfaceType  Surface classification.
+        @param dx           Horizontal displacement (user - auto).
+        @param dy           Vertical displacement (user - auto).
+        @param shapeType    Shape type string (line, arc, rect, etc.). */
+    void RecordCorrection(const char* surfaceType, double dx, double dy, const char* shapeType);
+
     //------------------------------------------------------------------------------------
     //  Inference (predictions from accumulated data)
     //------------------------------------------------------------------------------------
@@ -83,6 +90,15 @@ public:
         Returns -1.0 if not enough data.
         @return Threshold path length, or -1.0 if insufficient data. */
     double GetNoiseThreshold();
+
+    //------------------------------------------------------------------------------------
+    //  Interaction Journal (JSONL log for LLM consumption)
+    //------------------------------------------------------------------------------------
+
+    /** Append a JSONL line to the interaction journal file.
+        @param action     The action type (e.g. "shape_override", "simplify", "correction").
+        @param jsonFields Additional JSON key-value pairs to include. */
+    void JournalLog(const char* action, const char* jsonFields);
 
     //------------------------------------------------------------------------------------
     //  Stats (for HTTP endpoint / diagnostics)

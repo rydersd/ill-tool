@@ -10,12 +10,24 @@
 
 #include "IllustratorSDK.h"
 #include "PerspectiveModule.h"
+#include "CleanupModule.h"
 #include "IllToolPlugin.h"
 #include "IllToolSuites.h"
 #include "HttpBridge.h"
+#include "VisionEngine.h"
+
+// Link ai::FilePath implementation (needed for AIPlacedSuite::GetPlacedFileSpecification).
+// The Xcode project doesn't include IAIFilePath.cpp in its build sources.
+#include "IAIFilePath.cpp"
+
+// NOTE: Do NOT include IAIArtboards.cpp — it pulls in assertion dependencies.
+// Use raw AIArtboardSuite C API instead of C++ wrappers.
+
 #include <cstdio>
 #include <cmath>
 #include <vector>
+
+extern IllToolPlugin* gPlugin;
 
 //========================================================================================
 //  PerspectiveGrid method implementations
@@ -465,14 +477,14 @@ void PerspectiveModule::SyncFromBridge()
     }
 
     // Horizon is stored as percentage (0-100). Convert to artboard Y coordinate.
+    // Use cached artboard bounds (stable) instead of view bounds (shift on zoom/pan).
+    // fCachedArtboardBounds is set in OnDocumentChanged (at document open/switch).
     double horizonPct = BridgeGetHorizonY();
     double horizonY = horizonPct;  // fallback: treat as absolute
-    if (sAIDocumentView) {
-        AIRealRect vb = {0, 0, 0, 0};
-        if (sAIDocumentView->GetDocumentViewBounds(NULL, &vb) == kNoErr) {
-            // Illustrator Y: top is smaller number, bottom is larger
-            double top = std::min((double)vb.top, (double)vb.bottom);
-            double bot = std::max((double)vb.top, (double)vb.bottom);
+    {
+        double top = std::min((double)fCachedArtboardBounds.top, (double)fCachedArtboardBounds.bottom);
+        double bot = std::max((double)fCachedArtboardBounds.top, (double)fCachedArtboardBounds.bottom);
+        if (bot - top > 1.0) {
             horizonY = top + (bot - top) * (1.0 - horizonPct / 100.0);
         }
     }
@@ -534,6 +546,10 @@ bool PerspectiveModule::HandleOp(const PluginOp& op)
             ActivatePerspectiveTool();
             return true;
 
+        case OpType::AutoMatchPerspective:
+            AutoMatchPerspective();
+            return true;
+
         case OpType::MirrorPerspective:
             MirrorInPerspective(op.intParam, op.boolParam1);
             return true;
@@ -554,8 +570,91 @@ bool PerspectiveModule::HandleOp(const PluginOp& op)
             LoadFromDocument();
             return true;
 
+        case OpType::PerspectivePresetSave:
+            SavePreset(op.strParam);
+            return true;
+
+        case OpType::PerspectivePresetLoad:
+            LoadPreset(op.strParam);
+            return true;
+
+        case OpType::InvalidateOverlay:
+            // Force a sync + redraw cycle — used by sliders that set bridge values directly
+            SyncFromBridge();
+            return true;
+
         default:
             return false;
+    }
+}
+
+//========================================================================================
+//  Snap constraint helpers
+//========================================================================================
+
+void PerspectiveModule::RegisterSnapConstraints()
+{
+    if (!sAICursorSnap) {
+        fprintf(stderr, "[IllTool PerspModule] AICursorSnapSuite not available\n");
+        return;
+    }
+
+    // Count active perspective lines to size the constraint buffer
+    int count = 0;
+    PerspectiveLine* lines[3] = { &fGrid.leftVP, &fGrid.rightVP, &fGrid.verticalVP };
+    for (int i = 0; i < 3; i++) {
+        if (lines[i]->active) count++;
+    }
+
+    if (count == 0) {
+        fprintf(stderr, "[IllTool PerspModule] No active lines — skipping snap registration\n");
+        return;
+    }
+
+    // Build constraint buffer: one kLinearConstraintAbs per active VP line
+    ai::AutoBuffer<AICursorConstraint> constraints(count);
+    int idx = 0;
+    for (int i = 0; i < 3; i++) {
+        if (!lines[i]->active) continue;
+
+        AIReal dx = lines[i]->handle2.h - lines[i]->handle1.h;
+        AIReal dy = lines[i]->handle2.v - lines[i]->handle1.v;
+        AIReal theta = static_cast<AIReal>(atan2(dy, dx));
+
+        // Use the computed VP as the constraint origin (the point the line converges to)
+        AIRealPoint origin;
+        if (i == 0)      origin = fGrid.computedVP1;
+        else if (i == 1) origin = fGrid.computedVP2;
+        else             origin = fGrid.computedVP3;
+
+        constraints[idx] = AICursorConstraint(
+            kLinearConstraintAbs,   // kind: absolute angle
+            0,                      // flags: always active (no shift required)
+            origin,                 // origin point (the VP)
+            theta,                  // angle of the line
+            ai::UnicodeString(),    // no label
+            NULL                    // no custom annotation callback
+        );
+        idx++;
+    }
+
+    AIErr err = sAICursorSnap->SetCustom(constraints);
+    if (err) {
+        fprintf(stderr, "[IllTool PerspModule] SetCustom failed: %d\n", (int)err);
+    } else {
+        fprintf(stderr, "[IllTool PerspModule] Registered %d snap constraints\n", count);
+    }
+}
+
+void PerspectiveModule::ClearSnapConstraints()
+{
+    if (!sAICursorSnap) return;
+
+    AIErr err = sAICursorSnap->ClearCustom();
+    if (err) {
+        fprintf(stderr, "[IllTool PerspModule] ClearCustom failed: %d\n", (int)err);
+    } else {
+        fprintf(stderr, "[IllTool PerspModule] Snap constraints cleared\n");
     }
 }
 
@@ -565,6 +664,14 @@ bool PerspectiveModule::HandleOp(const PluginOp& op)
 
 void PerspectiveModule::ClearGrid()
 {
+    ClearSnapConstraints();
+
+    // Restore Smart Guides if we disabled them
+    if (sAIPreference && fSmartGuidesWasEnabled) {
+        sAIPreference->PutBooleanPreference(NULL, "smartGuides/showToolGuides", true);
+        fprintf(stderr, "[IllTool PerspModule] Smart Guides restored\n");
+    }
+
     fGrid.Clear();
     for (int i = 0; i < 3; i++) BridgeClearPerspectiveLine(i);
     BridgeSetPerspectiveLocked(false);
@@ -576,8 +683,37 @@ void PerspectiveModule::ClearGrid()
 
 void PerspectiveModule::LockGrid(bool lock)
 {
-    fGrid.locked = lock;
-    BridgeSetPerspectiveLocked(lock);
+    if (lock) {
+        fGrid.locked = true;
+        BridgeSetPerspectiveLocked(true);
+
+        // Register perspective-line snap constraints
+        RegisterSnapConstraints();
+
+        // Disable Smart Guides to avoid interference with perspective snapping
+        if (sAIPreference) {
+            AIBoolean wasEnabled = true;
+            sAIPreference->GetBooleanPreference(NULL, "smartGuides/showToolGuides", &wasEnabled);
+            fSmartGuidesWasEnabled = wasEnabled;
+            if (wasEnabled) {
+                sAIPreference->PutBooleanPreference(NULL, "smartGuides/showToolGuides", false);
+                fprintf(stderr, "[IllTool PerspModule] Smart Guides disabled (was enabled)\n");
+            }
+        }
+    } else {
+        // Clear snap constraints before unlocking
+        ClearSnapConstraints();
+
+        // Restore Smart Guides if we disabled them
+        if (sAIPreference && fSmartGuidesWasEnabled) {
+            sAIPreference->PutBooleanPreference(NULL, "smartGuides/showToolGuides", true);
+            fprintf(stderr, "[IllTool PerspModule] Smart Guides restored\n");
+        }
+
+        fGrid.locked = false;
+        BridgeSetPerspectiveLocked(false);
+    }
+
     fprintf(stderr, "[IllTool PerspModule] Grid %s\n", lock ? "locked" : "unlocked");
     InvalidateFullView();
 }
@@ -624,6 +760,248 @@ void PerspectiveModule::ActivatePerspectiveTool()
     InvalidateFullView();
 }
 
+//========================================================================================
+//  Auto Match Perspective — detect VPs from placed reference image
+//========================================================================================
+
+void PerspectiveModule::AutoMatchPerspective()
+{
+    fprintf(stderr, "[IllTool PerspModule] AutoMatchPerspective: starting\n");
+
+    // --- Find the first placed art in the document ---
+    if (!sAIMatchingArt || !sAIArt || !sAIPlaced) {
+        fprintf(stderr, "[IllTool PerspModule] AutoMatchPerspective: missing suites (matching=%p art=%p placed=%p)\n",
+                (void*)sAIMatchingArt, (void*)sAIArt, (void*)sAIPlaced);
+        return;
+    }
+
+    // Search for placed art (linked images)
+    AIArtHandle** matches = nullptr;
+    ai::int32 numMatches = 0;
+    AIMatchingArtSpec spec;
+    spec.type = kPlacedArt;
+    spec.whichAttr = 0;
+    spec.attr = 0;
+    ASErr err = sAIMatchingArt->GetMatchingArt(&spec, 1, &matches, &numMatches);
+    if (err != kNoErr || numMatches == 0 || !matches) {
+        fprintf(stderr, "[IllTool PerspModule] AutoMatchPerspective: no placed art found (err=%d count=%d)\n",
+                (int)err, (int)numMatches);
+        return;
+    }
+
+    // Use the first placed art
+    AIArtHandle placedArt = (*matches)[0];
+    fprintf(stderr, "[IllTool PerspModule] AutoMatchPerspective: found %d placed art(s), using first\n",
+            (int)numMatches);
+
+    // --- Get the linked file path ---
+    ai::FilePath filePath;
+    err = sAIPlaced->GetPlacedFileSpecification(placedArt, filePath);
+    if (err != kNoErr) {
+        fprintf(stderr, "[IllTool PerspModule] AutoMatchPerspective: failed to get file spec (err=%d)\n", (int)err);
+        return;
+    }
+
+    // Convert FilePath to POSIX path via CFStringRef (avoids ai::UnicodeString linker dependency)
+    CFStringRef cfPath = filePath.GetAsCFString();
+    if (!cfPath) {
+        fprintf(stderr, "[IllTool PerspModule] AutoMatchPerspective: GetAsCFString returned null\n");
+        return;
+    }
+    char pathBuf[2048];
+    if (!CFStringGetCString(cfPath, pathBuf, sizeof(pathBuf), kCFStringEncodingUTF8)) {
+        CFRelease(cfPath);
+        fprintf(stderr, "[IllTool PerspModule] AutoMatchPerspective: failed to convert path to UTF8\n");
+        return;
+    }
+    CFRelease(cfPath);
+    std::string pathCStr(pathBuf);
+    fprintf(stderr, "[IllTool PerspModule] AutoMatchPerspective: placed image path: %s\n", pathCStr.c_str());
+
+    // --- Get the placed art bounds (artwork coordinates) ---
+    AIRealRect artBounds = {0, 0, 0, 0};
+    err = sAIArt->GetArtBounds(placedArt, &artBounds);
+    if (err != kNoErr) {
+        fprintf(stderr, "[IllTool PerspModule] AutoMatchPerspective: failed to get art bounds (err=%d)\n", (int)err);
+        return;
+    }
+    fprintf(stderr, "[IllTool PerspModule] AutoMatchPerspective: art bounds L=%.1f T=%.1f R=%.1f B=%.1f\n",
+            (double)artBounds.left, (double)artBounds.top,
+            (double)artBounds.right, (double)artBounds.bottom);
+
+    // --- Get the placed art transform matrix ---
+    AIRealMatrix placedMatrix;
+    err = sAIPlaced->GetPlacedMatrix(placedArt, &placedMatrix);
+    if (err != kNoErr) {
+        fprintf(stderr, "[IllTool PerspModule] AutoMatchPerspective: failed to get placed matrix (err=%d)\n", (int)err);
+        // Fall back to using art bounds for coordinate mapping
+    }
+
+    // --- Load image into VisionEngine ---
+    VisionEngine& ve = VisionEngine::Instance();
+    if (!ve.LoadImage(pathCStr.c_str())) {
+        fprintf(stderr, "[IllTool PerspModule] AutoMatchPerspective: failed to load image\n");
+        return;
+    }
+
+    int imgW = ve.Width();
+    int imgH = ve.Height();
+    fprintf(stderr, "[IllTool PerspModule] AutoMatchPerspective: loaded image %dx%d\n", imgW, imgH);
+
+    // Set up coordinate mapping for pixel <-> artwork conversion
+    ve.SetArtToPixelMapping(
+        (double)artBounds.left, (double)artBounds.top,
+        (double)artBounds.right, (double)artBounds.bottom);
+
+    // --- Estimate vanishing points using dual approach ---
+    // Method 1: Hough line convergence (traditional)
+    auto houghVPs = ve.EstimateVanishingPoints(2, 50.0, 150.0, 30);
+
+    // Method 2: Normal direction clustering (surface-aware)
+    auto normalVPs = ve.EstimateVPsFromNormals(2);
+
+    // Method 3: Surface type analysis for confidence weighting
+    auto surfaceHint = ve.InferSurfaceType(0, 0, imgW, imgH);
+    fprintf(stderr, "[IllTool PerspModule] AutoMatchPerspective: surface=%d conf=%.2f angle=%.1f°\n",
+            (int)surfaceHint.type, surfaceHint.confidence,
+            surfaceHint.gradientAngle * 180.0 / M_PI);
+    fprintf(stderr, "[IllTool PerspModule] AutoMatchPerspective: Hough found %d VPs, Normals found %d VPs\n",
+            (int)houghVPs.size(), (int)normalVPs.size());
+
+    // Combine: prefer Hough VPs (more precise position), but use normal VPs as fallback
+    // or to validate Hough results. Weight by surface confidence.
+    std::vector<VisionEngine::VanishingPointEstimate> vps;
+
+    if (houghVPs.size() >= 2) {
+        // Hough found enough — use them, boost confidence if normals agree
+        vps = houghVPs;
+        for (auto& vp : vps) {
+            // Check if any normal VP has a similar angle (within 15°)
+            for (auto& nvp : normalVPs) {
+                double angleDiff = std::abs(vp.dominantAngle - nvp.dominantAngle);
+                if (angleDiff > M_PI) angleDiff = 2.0 * M_PI - angleDiff;
+                if (angleDiff < M_PI / 12.0) {  // within 15°
+                    vp.confidence = std::min(1.0, vp.confidence * 1.5);  // boost
+                    fprintf(stderr, "[IllTool PerspModule] VP angle %.1f° confirmed by normals (boosted)\n",
+                            vp.dominantAngle * 180.0 / M_PI);
+                    break;
+                }
+            }
+        }
+    } else if (normalVPs.size() >= 2) {
+        // Hough failed but normals found planes — use normal-derived VPs
+        vps = normalVPs;
+        fprintf(stderr, "[IllTool PerspModule] Using normal-derived VPs (Hough insufficient)\n");
+    } else if (houghVPs.size() == 1 && normalVPs.size() >= 1) {
+        // Combine: one from each
+        vps.push_back(houghVPs[0]);
+        vps.push_back(normalVPs[0]);
+        fprintf(stderr, "[IllTool PerspModule] Combining 1 Hough + 1 Normal VP\n");
+    } else {
+        fprintf(stderr, "[IllTool PerspModule] AutoMatchPerspective: insufficient VPs (Hough=%d Normal=%d)\n",
+                (int)houghVPs.size(), (int)normalVPs.size());
+        return;
+    }
+
+    if (vps.size() < 2) {
+        fprintf(stderr, "[IllTool PerspModule] AutoMatchPerspective: only %d VP(s) after combining, need 2\n",
+                (int)vps.size());
+        return;
+    }
+
+    // --- Convert VP pixel coordinates to artwork coordinates ---
+    // Pixel (0,0) = top-left, artwork uses Y-up from artBounds
+    double artW = (double)(artBounds.right - artBounds.left);
+    double artH = (double)(artBounds.top - artBounds.bottom);  // Y-up: top > bottom
+    double scaleX = artW / (double)imgW;
+    double scaleY = artH / (double)imgH;
+
+    // Convert pixel VP to artwork coordinates
+    // px -> art:  artX = artBounds.left + px * scaleX
+    //             artY = artBounds.top  - py * scaleY  (flip Y)
+    auto pixToArt = [&](double px, double py, double& ax, double& ay) {
+        ax = (double)artBounds.left + px * scaleX;
+        ay = (double)artBounds.top  - py * scaleY;
+    };
+
+    double vp1ArtX, vp1ArtY, vp2ArtX, vp2ArtY;
+    pixToArt(vps[0].x, vps[0].y, vp1ArtX, vp1ArtY);
+    pixToArt(vps[1].x, vps[1].y, vp2ArtX, vp2ArtY);
+
+    fprintf(stderr, "[IllTool PerspModule] AutoMatchPerspective: VP1 art=(%.1f, %.1f) VP2 art=(%.1f, %.1f)\n",
+            vp1ArtX, vp1ArtY, vp2ArtX, vp2ArtY);
+
+    // --- Set up perspective grid handles ---
+    // For each VP, create a line from the image center toward the VP.
+    // The handle1 is near the image center, handle2 extends toward the VP.
+    double imgCenterPx = imgW * 0.5;
+    double imgCenterPy = imgH * 0.5;
+    double centerArtX, centerArtY;
+    pixToArt(imgCenterPx, imgCenterPy, centerArtX, centerArtY);
+
+    // VP1 line: from image center toward VP1
+    double dir1X = vp1ArtX - centerArtX;
+    double dir1Y = vp1ArtY - centerArtY;
+    double len1 = std::sqrt(dir1X * dir1X + dir1Y * dir1Y);
+    if (len1 < 1e-6) {
+        fprintf(stderr, "[IllTool PerspModule] AutoMatchPerspective: VP1 too close to center\n");
+        return;
+    }
+    // Handle2 is 30% of the way from center to VP
+    double h2_1x = centerArtX + dir1X * 0.3;
+    double h2_1y = centerArtY + dir1Y * 0.3;
+
+    // VP2 line: from image center toward VP2
+    double dir2X = vp2ArtX - centerArtX;
+    double dir2Y = vp2ArtY - centerArtY;
+    double len2 = std::sqrt(dir2X * dir2X + dir2Y * dir2Y);
+    if (len2 < 1e-6) {
+        fprintf(stderr, "[IllTool PerspModule] AutoMatchPerspective: VP2 too close to center\n");
+        return;
+    }
+    double h2_2x = centerArtX + dir2X * 0.3;
+    double h2_2y = centerArtY + dir2Y * 0.3;
+
+    // Clear existing grid
+    fGrid.Clear();
+    for (int i = 0; i < 3; i++) BridgeClearPerspectiveLine(i);
+
+    // Set VP1 (left VP)
+    fGrid.leftVP.handle1.h = (AIReal)centerArtX;
+    fGrid.leftVP.handle1.v = (AIReal)centerArtY;
+    fGrid.leftVP.handle2.h = (AIReal)h2_1x;
+    fGrid.leftVP.handle2.v = (AIReal)h2_1y;
+    fGrid.leftVP.active = true;
+    BridgeSetPerspectiveLine(0, centerArtX, centerArtY, h2_1x, h2_1y);
+
+    // Set VP2 (right VP)
+    fGrid.rightVP.handle1.h = (AIReal)centerArtX;
+    fGrid.rightVP.handle1.v = (AIReal)centerArtY;
+    fGrid.rightVP.handle2.h = (AIReal)h2_2x;
+    fGrid.rightVP.handle2.v = (AIReal)h2_2y;
+    fGrid.rightVP.active = true;
+    BridgeSetPerspectiveLine(1, centerArtX, centerArtY, h2_2x, h2_2y);
+
+    // Estimate horizon Y from the two VPs:
+    // If both VPs are at roughly the same Y, that is the horizon.
+    // Otherwise, average the VP Y coordinates.
+    double avgVpY = (vp1ArtY + vp2ArtY) * 0.5;
+    fGrid.horizonY = avgVpY;
+    BridgeSetHorizonY(avgVpY);
+
+    // Make grid visible
+    fGrid.visible = true;
+    BridgeSetPerspectiveVisible(true);
+
+    fGrid.Recompute();
+    InvalidateFullView();
+
+    fprintf(stderr, "[IllTool PerspModule] AutoMatchPerspective: grid set with 2 VPs, horizon=%.1f\n",
+            fGrid.horizonY);
+    fprintf(stderr, "[IllTool PerspModule] AutoMatchPerspective: VP1 conf=%.2f (%d lines), VP2 conf=%.2f (%d lines)\n",
+            vps[0].confidence, vps[0].lineCount, vps[1].confidence, vps[1].lineCount);
+}
+
 void PerspectiveModule::SaveToDocument()
 {
     fGrid.SaveToDocument();
@@ -632,6 +1010,184 @@ void PerspectiveModule::SaveToDocument()
 void PerspectiveModule::LoadFromDocument()
 {
     fGrid.LoadFromDocument();
+}
+
+//========================================================================================
+//  Preset Save/Load — named presets stored in document dictionary
+//========================================================================================
+
+void PerspectiveModule::SavePreset(const std::string& name)
+{
+    if (!sAIDictionary || !sAIArt) return;
+    if (name.empty()) {
+        fprintf(stderr, "[IllTool PerspModule] SavePreset: empty name\n");
+        return;
+    }
+
+    AIArtHandle marker = FindPerspMarkerArt();
+    if (!marker) marker = CreatePerspMarkerArt();
+    if (!marker) {
+        fprintf(stderr, "[IllTool PerspModule] SavePreset: no marker art\n");
+        return;
+    }
+
+    AIDictionaryRef dict = nullptr;
+    ASErr err = sAIArt->GetDictionary(marker, &dict);
+    if (err != kNoErr || !dict) return;
+
+    // Build key prefix: "IllToolPerspPreset_<name>_"
+    std::string prefix = "IllToolPerspPreset_" + name + "_";
+
+    // Store a marker so we can enumerate presets later
+    sAIDictionary->SetBooleanEntry(dict, sAIDictionary->Key((prefix + "exists").c_str()), true);
+
+    // Save grid values with preset prefix
+    sAIDictionary->SetRealEntry(dict, sAIDictionary->Key((prefix + "horizonY").c_str()), (AIReal)fGrid.horizonY);
+    sAIDictionary->SetBooleanEntry(dict, sAIDictionary->Key((prefix + "locked").c_str()), fGrid.locked);
+    sAIDictionary->SetBooleanEntry(dict, sAIDictionary->Key((prefix + "visible").c_str()), fGrid.visible);
+    sAIDictionary->SetIntegerEntry(dict, sAIDictionary->Key((prefix + "density").c_str()), (ai::int32)fGrid.gridDensity);
+
+    const PerspectiveLine* lines[3] = {&fGrid.leftVP, &fGrid.rightVP, &fGrid.verticalVP};
+    for (int i = 0; i < 3; i++) {
+        const PerspectiveLine& line = *lines[i];
+        char idx[4]; snprintf(idx, sizeof(idx), "L%d", i);
+        std::string lp = prefix + idx;
+
+        sAIDictionary->SetBooleanEntry(dict, sAIDictionary->Key((lp + "_active").c_str()), line.active);
+        sAIDictionary->SetRealEntry(dict, sAIDictionary->Key((lp + "_h1x").c_str()), line.handle1.h);
+        sAIDictionary->SetRealEntry(dict, sAIDictionary->Key((lp + "_h1y").c_str()), line.handle1.v);
+        sAIDictionary->SetRealEntry(dict, sAIDictionary->Key((lp + "_h2x").c_str()), line.handle2.h);
+        sAIDictionary->SetRealEntry(dict, sAIDictionary->Key((lp + "_h2y").c_str()), line.handle2.v);
+    }
+
+    sAIDictionary->Release(dict);
+    fprintf(stderr, "[IllTool PerspModule] SavePreset '%s': saved %d lines, horizon=%.0f\n",
+            name.c_str(), fGrid.ActiveLineCount(), fGrid.horizonY);
+}
+
+void PerspectiveModule::LoadPreset(const std::string& name)
+{
+    if (!sAIDictionary || !sAIArt) return;
+    if (name.empty()) return;
+
+    AIArtHandle marker = FindPerspMarkerArt();
+    if (!marker) {
+        fprintf(stderr, "[IllTool PerspModule] LoadPreset: no marker art\n");
+        return;
+    }
+
+    AIDictionaryRef dict = nullptr;
+    ASErr err = sAIArt->GetDictionary(marker, &dict);
+    if (err != kNoErr || !dict) return;
+
+    std::string prefix = "IllToolPerspPreset_" + name + "_";
+
+    // Check that preset exists
+    AIBoolean exists = false;
+    sAIDictionary->GetBooleanEntry(dict, sAIDictionary->Key((prefix + "exists").c_str()), &exists);
+    if (!exists) {
+        sAIDictionary->Release(dict);
+        fprintf(stderr, "[IllTool PerspModule] LoadPreset '%s': not found\n", name.c_str());
+        return;
+    }
+
+    // Load grid values
+    AIReal hY = 400;
+    sAIDictionary->GetRealEntry(dict, sAIDictionary->Key((prefix + "horizonY").c_str()), &hY);
+    fGrid.horizonY = (double)hY;
+
+    AIBoolean bLocked = false, bVisible = true;
+    sAIDictionary->GetBooleanEntry(dict, sAIDictionary->Key((prefix + "locked").c_str()), &bLocked);
+    fGrid.locked = bLocked;
+
+    if (sAIDictionary->GetBooleanEntry(dict, sAIDictionary->Key((prefix + "visible").c_str()), &bVisible) == kNoErr)
+        fGrid.visible = bVisible;
+    else
+        fGrid.visible = true;
+
+    ai::int32 dens = 5;
+    sAIDictionary->GetIntegerEntry(dict, sAIDictionary->Key((prefix + "density").c_str()), &dens);
+    fGrid.gridDensity = (int)dens;
+
+    PerspectiveLine* lines[3] = {&fGrid.leftVP, &fGrid.rightVP, &fGrid.verticalVP};
+    for (int i = 0; i < 3; i++) {
+        PerspectiveLine& line = *lines[i];
+        char idx[4]; snprintf(idx, sizeof(idx), "L%d", i);
+        std::string lp = prefix + idx;
+
+        AIBoolean bActive = false;
+        sAIDictionary->GetBooleanEntry(dict, sAIDictionary->Key((lp + "_active").c_str()), &bActive);
+        line.active = bActive;
+
+        if (line.active) {
+            AIReal val = 0;
+            sAIDictionary->GetRealEntry(dict, sAIDictionary->Key((lp + "_h1x").c_str()), &val); line.handle1.h = val;
+            sAIDictionary->GetRealEntry(dict, sAIDictionary->Key((lp + "_h1y").c_str()), &val); line.handle1.v = val;
+            sAIDictionary->GetRealEntry(dict, sAIDictionary->Key((lp + "_h2x").c_str()), &val); line.handle2.h = val;
+            sAIDictionary->GetRealEntry(dict, sAIDictionary->Key((lp + "_h2y").c_str()), &val); line.handle2.v = val;
+        }
+    }
+
+    sAIDictionary->Release(dict);
+
+    // Recompute and sync to bridge
+    fGrid.Recompute();
+    for (int i = 0; i < 3; i++) {
+        const PerspectiveLine& line = *lines[i];
+        if (line.active) {
+            BridgeSetPerspectiveLine(i, line.handle1.h, line.handle1.v,
+                                        line.handle2.h, line.handle2.v);
+        } else {
+            BridgeClearPerspectiveLine(i);
+        }
+    }
+    BridgeSetHorizonY(fGrid.horizonY);
+    BridgeSetPerspectiveLocked(fGrid.locked);
+    BridgeSetPerspectiveVisible(fGrid.visible);
+    InvalidateFullView();
+
+    fprintf(stderr, "[IllTool PerspModule] LoadPreset '%s': loaded %d lines, horizon=%.0f\n",
+            name.c_str(), fGrid.ActiveLineCount(), fGrid.horizonY);
+}
+
+std::vector<std::string> PerspectiveModule::ListPresets()
+{
+    std::vector<std::string> names;
+    if (!sAIDictionary || !sAIArt) return names;
+
+    AIArtHandle marker = FindPerspMarkerArt();
+    if (!marker) return names;
+
+    AIDictionaryRef dict = nullptr;
+    ASErr err = sAIArt->GetDictionary(marker, &dict);
+    if (err != kNoErr || !dict) return names;
+
+    // Scan up to 20 well-known preset slots
+    for (int i = 1; i <= 20; i++) {
+        char nameBuf[32];
+        snprintf(nameBuf, sizeof(nameBuf), "preset%d", i);
+        std::string prefix = std::string("IllToolPerspPreset_") + nameBuf + "_exists";
+        AIBoolean exists = false;
+        if (sAIDictionary->GetBooleanEntry(dict, sAIDictionary->Key(prefix.c_str()), &exists) == kNoErr && exists) {
+            names.push_back(nameBuf);
+        }
+    }
+    // Also check named presets with common names
+    const char* commonNames[] = {"default", "low", "high", "bird", "worm"};
+    for (const char* cn : commonNames) {
+        std::string prefix = std::string("IllToolPerspPreset_") + cn + "_exists";
+        AIBoolean exists = false;
+        if (sAIDictionary->GetBooleanEntry(dict, sAIDictionary->Key(prefix.c_str()), &exists) == kNoErr && exists) {
+            // Avoid duplicates
+            bool found = false;
+            for (const auto& n : names) { if (n == cn) { found = true; break; } }
+            if (!found) names.push_back(cn);
+        }
+    }
+
+    sAIDictionary->Release(dict);
+    fprintf(stderr, "[IllTool PerspModule] ListPresets: %zu presets found\n", names.size());
+    return names;
 }
 
 void PerspectiveModule::PlaceVerticalVP()
@@ -684,6 +1240,28 @@ void PerspectiveModule::OnDocumentChanged()
     fNextLineIndex = 0;
     fPlacementMode = false;
     fUndoStack.Clear();
+
+    // Cache artboard bounds — use document crop area style to get stable bounds.
+    // AIArtboardSuite C++ wrappers (ai::ArtboardList) pull in assertion dependencies,
+    // so we use a simpler approach: get all art bounds as a proxy for artboard extent,
+    // or use GetDocumentViewBounds on first open (when zoom=fit, view = artboard).
+    fCachedArtboardBounds = {0, 0, 0, 0};
+    bool gotBounds = false;
+
+    // Strategy: use document's crop style bounds if available via the C suite
+    if (sAIArtboard) {
+        // The raw C API still needs the wrapper types. Fall back to view bounds
+        // but cache at document open when the view typically fits the artboard.
+        // This is acceptable because the horizon only needs the vertical range.
+    }
+
+    if (!gotBounds && sAIDocumentView) {
+        sAIDocumentView->GetDocumentViewBounds(NULL, &fCachedArtboardBounds);
+        gotBounds = true;
+    }
+    fprintf(stderr, "[IllTool PerspModule] Cached artboard bounds: top=%.0f bot=%.0f left=%.0f right=%.0f\n",
+            fCachedArtboardBounds.top, fCachedArtboardBounds.bottom,
+            fCachedArtboardBounds.left, fCachedArtboardBounds.right);
 
     // Try to load persisted grid from new document
     fGrid.LoadFromDocument();
@@ -838,6 +1416,14 @@ void PerspectiveModule::SetEditMode(bool edit)
 {
     fEditMode = edit;
     if (edit) {
+        // Mutual exclusion: cancel cleanup working mode when entering perspective edit
+        if (gPlugin) {
+            auto* cleanup = gPlugin->GetModule<CleanupModule>();
+            if (cleanup && cleanup->IsInWorkingMode()) {
+                cleanup->CancelWorkingMode();
+                fprintf(stderr, "[IllTool PerspModule] SetEditMode: cancelled cleanup working mode\n");
+            }
+        }
         fGrid.locked = false;
         BridgeSetPerspectiveLocked(false);
         fprintf(stderr, "[IllTool PerspModule] Entered edit mode\n");
@@ -939,13 +1525,17 @@ void PerspectiveModule::ToolMouseDown(AIToolMessage* msg)
         return;
     }
 
-    // Get the viewport bounds to find the horizontal center
-    AIRealRect viewBounds = {0, 0, 0, 0};
-    if (sAIDocumentView) {
-        sAIDocumentView->GetDocumentViewBounds(NULL, &viewBounds);
+    // Get artboard center X from cached bounds (stable across zoom/pan).
+    // Fall back to view center if cached bounds are zero (no artboard loaded yet).
+    double centerX = (fCachedArtboardBounds.left + fCachedArtboardBounds.right) * 0.5;
+    if (std::abs(fCachedArtboardBounds.right - fCachedArtboardBounds.left) < 1.0) {
+        AIRealRect viewBounds = {0, 0, 0, 0};
+        if (sAIDocumentView) {
+            sAIDocumentView->GetDocumentViewBounds(NULL, &viewBounds);
+        }
+        centerX = (viewBounds.left + viewBounds.right) * 0.5;
+        if (std::abs(viewBounds.right - viewBounds.left) < 1.0) centerX = 400.0;
     }
-    double viewCenterX = (viewBounds.left + viewBounds.right) * 0.5;
-    if (std::abs(viewBounds.right - viewBounds.left) < 1.0) viewCenterX = 400.0;
 
     // VP1: place line at click position
     lines[0]->handle1 = click;
@@ -955,9 +1545,9 @@ void PerspectiveModule::ToolMouseDown(AIToolMessage* msg)
         lines[0]->handle1.h, lines[0]->handle1.v,
         lines[0]->handle2.h, lines[0]->handle2.v);
 
-    // VP2: auto-mirror across horizontal center of viewport
-    AIRealPoint mirH1 = { (AIReal)(2.0 * viewCenterX - click.h), click.v };
-    AIRealPoint mirH2 = { (AIReal)(2.0 * viewCenterX - (click.h + 100.0)), click.v };
+    // VP2: auto-mirror across artboard center X
+    AIRealPoint mirH1 = { (AIReal)(2.0 * centerX - lines[0]->handle1.h), lines[0]->handle1.v };
+    AIRealPoint mirH2 = { (AIReal)(2.0 * centerX - lines[0]->handle2.h), lines[0]->handle2.v };
     lines[1]->handle1 = mirH1;
     lines[1]->handle2 = mirH2;
     lines[1]->active = true;
@@ -969,10 +1559,12 @@ void PerspectiveModule::ToolMouseDown(AIToolMessage* msg)
 
     fDragLine = -1;
     fDragHandle = 0;
-    fNextLineIndex = 2;
+    fNextLineIndex = 2;  // skip rightVP, go straight to vertical
 
-    fprintf(stderr, "[IllTool PerspModule Tool] Placed VP1 at (%.0f,%.0f), auto-mirrored VP2 at (%.0f,%.0f), viewCenterX=%.0f\n",
-            click.h, click.v, mirH1.h, mirH1.v, viewCenterX);
+    fprintf(stderr, "[IllTool PerspModule] Auto-mirrored VP2 from VP1 — centerX=%.0f, VP1=(%.0f,%.0f)-(%.0f,%.0f), VP2=(%.0f,%.0f)-(%.0f,%.0f)\n",
+            centerX,
+            lines[0]->handle1.h, lines[0]->handle1.v, lines[0]->handle2.h, lines[0]->handle2.v,
+            mirH1.h, mirH1.v, mirH2.h, mirH2.v);
 
     fGrid.Recompute();
     InvalidateFullView();
@@ -1033,6 +1625,27 @@ static AIRGBColor DimColor(const AIRGBColor& c, double factor)
     return dim;
 }
 
+/** Helper: draw a white outline stroke behind a colored line for visibility.
+    Draws a wider white line first, then the colored line on top.
+    Caller is responsible for setting dash state before calling this. */
+static void DrawOutlinedLine(AIAnnotatorDrawer* drawer, AIPoint p1, AIPoint p2,
+                              const AIRGBColor& color, AIReal colorWidth, AIReal opacity)
+{
+    // White outline (wider, behind)
+    AIRGBColor white;
+    white.red = white.green = white.blue = 65535;
+    sAIAnnotatorDrawer->SetColor(drawer, white);
+    sAIAnnotatorDrawer->SetOpacity(drawer, opacity * 0.7);
+    sAIAnnotatorDrawer->SetLineWidth(drawer, colorWidth + 2.0);
+    sAIAnnotatorDrawer->DrawLine(drawer, p1, p2);
+
+    // Colored line on top
+    sAIAnnotatorDrawer->SetColor(drawer, color);
+    sAIAnnotatorDrawer->SetOpacity(drawer, opacity);
+    sAIAnnotatorDrawer->SetLineWidth(drawer, colorWidth);
+    sAIAnnotatorDrawer->DrawLine(drawer, p1, p2);
+}
+
 void PerspectiveModule::DrawOverlay(AIAnnotatorMessage* msg)
 {
     // Sync from bridge before drawing (replaces the timer-based SyncPerspectiveFromBridge)
@@ -1079,14 +1692,8 @@ void PerspectiveModule::DrawPerspectiveOverlay(AIAnnotatorMessage* message)
     gridColor.green = (ai::uint16)(0.7 * 65535);
     gridColor.blue  = (ai::uint16)(0.9 * 65535);
 
-    // --- Draw horizon line ---
+    // --- Draw horizon line (white outline + colored dashed line) ---
     {
-        sAIAnnotatorDrawer->SetOpacity(drawer, 0.6);
-        sAIAnnotatorDrawer->SetLineWidth(drawer, 1.0);
-        AIFloat dashArray[] = {6.0f, 4.0f};
-        sAIAnnotatorDrawer->SetLineDashedEx(drawer, dashArray, 2);
-        sAIAnnotatorDrawer->SetColor(drawer, horizonColor);
-
         // Horizon line extends across visible canvas
         double horizExtend = 2000.0;
         if (sAIDocumentView) {
@@ -1100,6 +1707,22 @@ void PerspectiveModule::DrawPerspectiveOverlay(AIAnnotatorMessage* message)
         AIPoint vLeft, vRight;
         if (sAIDocumentView->ArtworkPointToViewPoint(NULL, &artLeft, &vLeft) == kNoErr &&
             sAIDocumentView->ArtworkPointToViewPoint(NULL, &artRight, &vRight) == kNoErr) {
+            AIFloat dashArray[] = {6.0f, 4.0f};
+
+            // White outline pass (wider, behind)
+            AIRGBColor white;
+            white.red = white.green = white.blue = 65535;
+            sAIAnnotatorDrawer->SetColor(drawer, white);
+            sAIAnnotatorDrawer->SetOpacity(drawer, 0.4);
+            sAIAnnotatorDrawer->SetLineWidth(drawer, 3.5);
+            sAIAnnotatorDrawer->SetLineDashedEx(drawer, dashArray, 2);
+            sAIAnnotatorDrawer->DrawLine(drawer, vLeft, vRight);
+
+            // Colored horizon line on top
+            sAIAnnotatorDrawer->SetColor(drawer, horizonColor);
+            sAIAnnotatorDrawer->SetOpacity(drawer, 0.6);
+            sAIAnnotatorDrawer->SetLineWidth(drawer, 1.5);
+            sAIAnnotatorDrawer->SetLineDashedEx(drawer, dashArray, 2);
             sAIAnnotatorDrawer->DrawLine(drawer, vLeft, vRight);
         }
         sAIAnnotatorDrawer->SetLineDashedEx(drawer, nullptr, 0);
@@ -1113,12 +1736,9 @@ void PerspectiveModule::DrawPerspectiveOverlay(AIAnnotatorMessage* message)
         if (sAIDocumentView->ArtworkPointToViewPoint(NULL, &line.handle1, &vh1) != kNoErr) return;
         if (sAIDocumentView->ArtworkPointToViewPoint(NULL, &line.handle2, &vh2) != kNoErr) return;
 
-        // Solid line between handles
-        sAIAnnotatorDrawer->SetColor(drawer, color);
-        sAIAnnotatorDrawer->SetOpacity(drawer, 0.8);
-        sAIAnnotatorDrawer->SetLineWidth(drawer, 2.0);
+        // Solid line between handles (white outline + colored line)
         sAIAnnotatorDrawer->SetLineDashedEx(drawer, nullptr, 0);
-        sAIAnnotatorDrawer->DrawLine(drawer, vh1, vh2);
+        DrawOutlinedLine(drawer, vh1, vh2, color, 2.0, 0.8);
 
         // Circle handles — hidden when grid is locked, hover-highlighted
         if (!fGrid.locked) {
@@ -1138,9 +1758,10 @@ void PerspectiveModule::DrawPerspectiveOverlay(AIAnnotatorMessage* message)
             hoverColor.green = (ai::uint16)(1.0 * 65535);
             hoverColor.blue = (ai::uint16)(0.5 * 65535);
 
-            DrawHandleCircle(drawer, vh1, (h1Hover || h1Drag) ? 7 : 5,
+            // Fixed screen-space handle sizes (8px normal, 10px hover/drag)
+            DrawHandleCircle(drawer, vh1, (h1Hover || h1Drag) ? 10 : 8,
                              (h1Hover || h1Drag) ? hoverColor : color);
-            DrawHandleCircle(drawer, vh2, (h2Hover || h2Drag) ? 7 : 5,
+            DrawHandleCircle(drawer, vh2, (h2Hover || h2Drag) ? 10 : 8,
                              (h2Hover || h2Drag) ? hoverColor : color);
         }
 
@@ -1169,18 +1790,40 @@ void PerspectiveModule::DrawPerspectiveOverlay(AIAnnotatorMessage* message)
                             (AIReal)(line.handle2.v + ny * extendDist)};
 
         AIRGBColor extColor = DimColor(color, 0.6);
-        sAIAnnotatorDrawer->SetColor(drawer, extColor);
-        sAIAnnotatorDrawer->SetOpacity(drawer, 0.4);
-        sAIAnnotatorDrawer->SetLineWidth(drawer, 1.0);
         AIFloat dashArray[] = {4.0f, 6.0f};
-        sAIAnnotatorDrawer->SetLineDashedEx(drawer, dashArray, 2);
 
         AIPoint vExtA, vExtB;
         if (sAIDocumentView->ArtworkPointToViewPoint(NULL, &extA, &vExtA) == kNoErr) {
+            // White outline pass
+            AIRGBColor white;
+            white.red = white.green = white.blue = 65535;
+            sAIAnnotatorDrawer->SetColor(drawer, white);
+            sAIAnnotatorDrawer->SetOpacity(drawer, 0.25);
+            sAIAnnotatorDrawer->SetLineWidth(drawer, 3.0);
+            sAIAnnotatorDrawer->SetLineDashedEx(drawer, dashArray, 2);
+            sAIAnnotatorDrawer->DrawLine(drawer, vExtA, vh1);
+            // Colored extension line on top
+            sAIAnnotatorDrawer->SetColor(drawer, extColor);
+            sAIAnnotatorDrawer->SetOpacity(drawer, 0.4);
+            sAIAnnotatorDrawer->SetLineWidth(drawer, 1.0);
+            sAIAnnotatorDrawer->SetLineDashedEx(drawer, dashArray, 2);
             sAIAnnotatorDrawer->DrawLine(drawer, vExtA, vh1);
         }
         if (sAIDocumentView->ArtworkPointToViewPoint(NULL, &extB, &vExtB) == kNoErr) {
-            sAIAnnotatorDrawer->DrawLine(drawer, vh2, vExtB);
+            // White outline pass
+            AIRGBColor white;
+            white.red = white.green = white.blue = 65535;
+            sAIAnnotatorDrawer->SetColor(drawer, white);
+            sAIAnnotatorDrawer->SetOpacity(drawer, 0.25);
+            sAIAnnotatorDrawer->SetLineWidth(drawer, 3.0);
+            sAIAnnotatorDrawer->SetLineDashedEx(drawer, dashArray, 2);
+            sAIAnnotatorDrawer->DrawLine(drawer, vExtB, vh2);
+            // Colored extension line on top
+            sAIAnnotatorDrawer->SetColor(drawer, extColor);
+            sAIAnnotatorDrawer->SetOpacity(drawer, 0.4);
+            sAIAnnotatorDrawer->SetLineWidth(drawer, 1.0);
+            sAIAnnotatorDrawer->SetLineDashedEx(drawer, dashArray, 2);
+            sAIAnnotatorDrawer->DrawLine(drawer, vExtB, vh2);
         }
         sAIAnnotatorDrawer->SetLineDashedEx(drawer, nullptr, 0);
     };

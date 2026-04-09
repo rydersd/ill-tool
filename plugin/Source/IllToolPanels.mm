@@ -21,6 +21,14 @@
 #import "panels/ShadingPanelController.h"
 #import "panels/BlendPanelController.h"
 #import "panels/PerspectivePanelController.h"
+#import "panels/TransformPanelController.h"
+#import "panels/TracePanelController.h"
+#import "panels/SurfacePanelController.h"
+
+// Panel controller .mm files aren't in Xcode pbxproj — compile them here
+#include "panels/TransformPanelController.mm"
+#include "panels/TracePanelController.mm"
+#include "panels/SurfacePanelController.mm"
 
 #include <cstdio>
 
@@ -92,6 +100,36 @@ static void BlendPanelVisibilityChanged(AIPanelRef inPanel, AIBoolean isVisible)
 }
 
 static void PerspectivePanelVisibilityChanged(AIPanelRef inPanel, AIBoolean isVisible)
+{
+    AIPanelUserData ud = NULL;
+    sAIPanel->GetUserData(inPanel, ud);
+    if (ud) {
+        IllToolPlugin* plugin = reinterpret_cast<IllToolPlugin*>(ud);
+        plugin->UpdatePanelMenu(inPanel, isVisible);
+    }
+}
+
+static void TransformPanelVisibilityChanged(AIPanelRef inPanel, AIBoolean isVisible)
+{
+    AIPanelUserData ud = NULL;
+    sAIPanel->GetUserData(inPanel, ud);
+    if (ud) {
+        IllToolPlugin* plugin = reinterpret_cast<IllToolPlugin*>(ud);
+        plugin->UpdatePanelMenu(inPanel, isVisible);
+    }
+}
+
+static void TracePanelVisibilityChanged(AIPanelRef inPanel, AIBoolean isVisible)
+{
+    AIPanelUserData ud = NULL;
+    sAIPanel->GetUserData(inPanel, ud);
+    if (ud) {
+        IllToolPlugin* plugin = reinterpret_cast<IllToolPlugin*>(ud);
+        plugin->UpdatePanelMenu(inPanel, isVisible);
+    }
+}
+
+static void SurfacePanelVisibilityChanged(AIPanelRef inPanel, AIBoolean isVisible)
 {
     AIPanelUserData ud = NULL;
     sAIPanel->GetUserData(inPanel, ud);
@@ -359,7 +397,7 @@ ASErr IllToolPlugin::AddPanels()
             fPluginRef, this,
             kIllToolPerspectivePanelID,
             kIllToolPerspectiveMenuItem,
-            500.0,
+            530.0,
             PerspectivePanelVisibilityChanged,
             ctrl, ctrl.rootView,
             fPerspectivePanel, fPerspectiveMenuHandle);
@@ -369,6 +407,81 @@ ASErr IllToolPlugin::AddPanels()
         } else {
             fprintf(stderr, "[IllTool] Perspective panel registered\n");
         }
+    }
+
+    // --- Transform Panel (Stage 15) ---
+    @try {
+        fprintf(stderr, "[IllTool] Creating Transform panel...\n");
+        TransformPanelController *ctrl = [[TransformPanelController alloc] init];
+        fTransformController = (void*)[ctrl retain];
+
+        error = CreateOnePanel(
+            fPluginRef, this,
+            kIllToolTransformPanelID,
+            kIllToolTransformMenuItem,
+            320.0,
+            TransformPanelVisibilityChanged,
+            ctrl, ctrl.rootView,
+            fTransformPanel, fTransformMenuHandle);
+
+        if (error) {
+            fprintf(stderr, "[IllTool] Transform panel creation failed: %d\n", (int)error);
+        } else {
+            fprintf(stderr, "[IllTool] Transform panel registered\n");
+        }
+    } @catch (NSException *ex) {
+        fprintf(stderr, "[IllTool] Transform panel EXCEPTION: %s — %s\n",
+                [[ex name] UTF8String], [[ex reason] UTF8String]);
+    }
+
+    // --- Trace Panel (Stage 16) ---
+    @try {
+        fprintf(stderr, "[IllTool] Creating Trace panel...\n");
+        TracePanelController *ctrl = [[TracePanelController alloc] init];
+        fTraceController = (void*)[ctrl retain];
+
+        error = CreateOnePanel(
+            fPluginRef, this,
+            kIllToolTracePanelID,
+            kIllToolTraceMenuItem,
+            660.0,
+            TracePanelVisibilityChanged,
+            ctrl, ctrl.rootView,
+            fTracePanel, fTraceMenuHandle);
+
+        if (error) {
+            fprintf(stderr, "[IllTool] Trace panel creation failed: %d\n", (int)error);
+        } else {
+            fprintf(stderr, "[IllTool] Trace panel registered\n");
+        }
+    } @catch (NSException *ex) {
+        fprintf(stderr, "[IllTool] Trace panel EXCEPTION: %s — %s\n",
+                [[ex name] UTF8String], [[ex reason] UTF8String]);
+    }
+
+    // --- Surface Extraction Panel (Stage 17) ---
+    @try {
+        fprintf(stderr, "[IllTool] Creating Surface panel...\n");
+        SurfacePanelController *ctrl = [[SurfacePanelController alloc] init];
+        fSurfaceController = (void*)[ctrl retain];
+
+        error = CreateOnePanel(
+            fPluginRef, this,
+            kIllToolSurfacePanelID,
+            kIllToolSurfaceMenuItem,
+            240.0,
+            SurfacePanelVisibilityChanged,
+            ctrl, ctrl.rootView,
+            fSurfacePanel, fSurfaceMenuHandle);
+
+        if (error) {
+            fprintf(stderr, "[IllTool] Surface panel creation failed: %d\n", (int)error);
+        } else {
+            fprintf(stderr, "[IllTool] Surface panel registered\n");
+        }
+    } @catch (NSException *ex) {
+        fprintf(stderr, "[IllTool] Surface panel EXCEPTION: %s — %s\n",
+                [[ex name] UTF8String], [[ex reason] UTF8String]);
     }
 
     fprintf(stderr, "[IllTool] AddPanels complete\n");
@@ -391,6 +504,9 @@ void IllToolPlugin::DestroyPanels()
         if (fShadingPanel)       { sAIPanel->Destroy(fShadingPanel);       fShadingPanel = NULL; }
         if (fBlendPanel)         { sAIPanel->Destroy(fBlendPanel);         fBlendPanel = NULL; }
         if (fPerspectivePanel)   { sAIPanel->Destroy(fPerspectivePanel);   fPerspectivePanel = NULL; }
+        if (fTransformPanel)     { sAIPanel->Destroy(fTransformPanel);     fTransformPanel = NULL; }
+        if (fTracePanel)         { sAIPanel->Destroy(fTracePanel);         fTracePanel = NULL; }
+        if (fSurfacePanel)       { sAIPanel->Destroy(fSurfacePanel);       fSurfacePanel = NULL; }
     }
 
     // Release retained Objective-C controllers
@@ -401,6 +517,9 @@ void IllToolPlugin::DestroyPanels()
     if (fShadingController)      { [(id)fShadingController release];      fShadingController = NULL; }
     if (fBlendController)        { [(id)fBlendController release];        fBlendController = NULL; }
     if (fPerspectiveController)  { [(id)fPerspectiveController release];  fPerspectiveController = NULL; }
+    if (fTransformController)    { [(id)fTransformController release];    fTransformController = NULL; }
+    if (fTraceController)        { [(id)fTraceController release];        fTraceController = NULL; }
+    if (fSurfaceController)      { [(id)fSurfaceController release];      fSurfaceController = NULL; }
 }
 
 //========================================================================================
@@ -418,6 +537,9 @@ void IllToolPlugin::UpdatePanelMenu(AIPanelRef panel, AIBoolean isVisible)
     else if (panel == fShadingPanel)       menuHandle = fShadingMenuHandle;
     else if (panel == fBlendPanel)         menuHandle = fBlendMenuHandle;
     else if (panel == fPerspectivePanel)   menuHandle = fPerspectiveMenuHandle;
+    else if (panel == fTransformPanel)     menuHandle = fTransformMenuHandle;
+    else if (panel == fTracePanel)         menuHandle = fTraceMenuHandle;
+    else if (panel == fSurfacePanel)       menuHandle = fSurfaceMenuHandle;
 
     if (menuHandle && sAIMenu) {
         sAIMenu->CheckItem(menuHandle, isVisible);

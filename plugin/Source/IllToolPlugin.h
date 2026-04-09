@@ -113,6 +113,9 @@ private:
     AIPanelRef              fShadingPanel;
     AIPanelRef              fBlendPanel;
     AIPanelRef              fPerspectivePanel;
+    AIPanelRef              fTransformPanel;
+    AIPanelRef              fTracePanel;
+    AIPanelRef              fSurfacePanel;
 
     /** Menu item handles for panel show/hide in Window menu. */
     AIMenuItemHandle        fSelectionMenuHandle;
@@ -122,6 +125,9 @@ private:
     AIMenuItemHandle        fShadingMenuHandle;
     AIMenuItemHandle        fBlendMenuHandle;
     AIMenuItemHandle        fPerspectiveMenuHandle;
+    AIMenuItemHandle        fTransformMenuHandle;
+    AIMenuItemHandle        fTraceMenuHandle;
+    AIMenuItemHandle        fSurfaceMenuHandle;
 
     //------------------------------------------------------------------------------------
     //  Application menu (Window > IllTool submenu)
@@ -137,6 +143,7 @@ private:
     AIMenuItemHandle        fMenuGroupingHandle;  // Grouping Tools (toggle panel)
     AIMenuItemHandle        fMenuMergeHandle;     // Smart Merge    (toggle panel)
     AIMenuItemHandle        fMenuSelectionHandle; // Selection Panel (toggle panel)
+    AIMenuItemHandle        fMenuPerspToggleHandle; // Toggle Perspective lock
 
     //------------------------------------------------------------------------------------
     //  Isolation mode lock notifier
@@ -153,6 +160,9 @@ private:
     void*                   fShadingController;
     void*                   fBlendController;
     void*                   fPerspectiveController;
+    void*                   fTransformController;
+    void*                   fTraceController;
+    void*                   fSurfaceController;
 
     //------------------------------------------------------------------------------------
     //  Module system
@@ -176,6 +186,10 @@ public:
         Public so PluginGetSelectedAnchorCount() can read it. */
     std::atomic<int>        fLastKnownSelectionCount{0};
 
+    /** True while a mouse drag is in progress. Prevents ProcessOperationQueue
+        from dequeueing WorkingApply/Cancel mid-drag (timer-race). */
+    std::atomic<bool>       fDragInProgress{false};
+
     /** Returns the perspective tool handle (for panel tool activation). */
     AIToolHandle GetPerspectiveToolHandle() const { return fPerspectiveToolHandle; }
 
@@ -194,6 +208,9 @@ public:
 
     /** Invalidate the full document view to force annotator repaint. */
     void InvalidateFullView();
+
+    /** Get the main IllTool tool handle (for auto-activation from modules). */
+    AIToolHandle GetToolHandle() const { return fToolHandle; }
 
 protected:
     virtual ASErr SetGlobal(Plugin* plugin);
@@ -229,6 +246,11 @@ private:
     /** Process queued operations from HTTP bridge and panel buttons.
         Called from AITimerSuite in SDK message context -- SDK API calls are safe here. */
     void ProcessOperationQueue();
+
+    /** Handle a synchronous MCP operation (inspect, create_path, etc.).
+        Called from ProcessOperationQueue when a sync request is pending.
+        Posts the JSON result back to the waiting HTTP thread via condvar. */
+    void HandleMcpOperation(const PluginOp& op);
 };
 
 #endif // __ILLTOOLPLUGIN_H__

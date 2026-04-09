@@ -338,12 +338,45 @@ static std::vector<AIPathSegment> RotateSegments(const std::vector<AIPathSegment
 //  Blend Core — shared interpolation logic
 //========================================================================================
 
+/** Lerp between two AIReal color values. */
+static AIReal LerpReal(AIReal a, AIReal b, double t)
+{
+    return (AIReal)(a + (b - a) * t);
+}
+
+/** Interpolate AIPathStyle between two styles at parameter t (0=A, 1=B). */
+static AIPathStyle InterpolateStyle(const AIPathStyle& sA, const AIPathStyle& sB, double t)
+{
+    AIPathStyle out = sA;  // start from A
+
+    // Interpolate stroke color (RGB)
+    if (sA.strokePaint && sB.strokePaint) {
+        out.stroke.color.kind = kThreeColor;
+        out.stroke.color.c.rgb.red   = LerpReal(sA.stroke.color.c.rgb.red,   sB.stroke.color.c.rgb.red,   t);
+        out.stroke.color.c.rgb.green = LerpReal(sA.stroke.color.c.rgb.green, sB.stroke.color.c.rgb.green, t);
+        out.stroke.color.c.rgb.blue  = LerpReal(sA.stroke.color.c.rgb.blue,  sB.stroke.color.c.rgb.blue,  t);
+    }
+
+    // Interpolate stroke width
+    out.stroke.width = LerpReal(sA.stroke.width, sB.stroke.width, t);
+
+    // Interpolate fill color (RGB)
+    if (sA.fillPaint && sB.fillPaint) {
+        out.fill.color.kind = kThreeColor;
+        out.fill.color.c.rgb.red   = LerpReal(sA.fill.color.c.rgb.red,   sB.fill.color.c.rgb.red,   t);
+        out.fill.color.c.rgb.green = LerpReal(sA.fill.color.c.rgb.green, sB.fill.color.c.rgb.green, t);
+        out.fill.color.c.rgb.blue  = LerpReal(sA.fill.color.c.rgb.blue,  sB.fill.color.c.rgb.blue,  t);
+    }
+
+    return out;
+}
+
 static int GenerateIntermediates(
     const std::vector<AIPathSegment>& resA,
     const std::vector<AIPathSegment>& resB,
     int targetCount, bool isClosed, int steps,
     const EasingCurve& easing,
-    const AIPathStyle& style,
+    const AIPathStyle& styleA, const AIPathStyle& styleB,
     AIArtHandle placeRelTo,
     std::vector<AIArtHandle>& outHandles)
 {
@@ -352,6 +385,7 @@ static int GenerateIntermediates(
         double rawT = (double)step / (double)(steps + 1);
         double t = easing.Evaluate(rawT);
 
+        // Interpolate geometry
         std::vector<AIPathSegment> interp(targetCount);
         for (int j = 0; j < targetCount; j++) {
             const AIPathSegment& a = resA[j];
@@ -387,7 +421,10 @@ static int GenerateIntermediates(
         }
 
         sAIPath->SetPathClosed(newPath, isClosed ? true : false);
-        sAIPathStyle->SetPathStyle(newPath, &style);
+
+        // Interpolated style: color transition from A to B
+        AIPathStyle interpStyle = InterpolateStyle(styleA, styleB, t);
+        sAIPathStyle->SetPathStyle(newPath, &interpStyle);
 
         outHandles.push_back(newPath);
         created++;
@@ -546,14 +583,22 @@ bool BlendModule::HandleOp(const PluginOp& op)
             BridgeSetBlendPickMode(1);
             fBlendPathA = nullptr;
             BridgeSetBlendPathASet(false);
-            fprintf(stderr, "[BlendModule] Entered Pick A mode\n");
+            // Auto-activate IllTool so clicks route to our HandleMouseDown
+            if (sAITool && fPlugin && fPlugin->GetToolHandle()) {
+                sAITool->SetSelectedTool(fPlugin->GetToolHandle());
+            }
+            fprintf(stderr, "[BlendModule] Entered Pick A mode (tool activated)\n");
             return true;
         }
         case OpType::BlendPickB: {
             BridgeSetBlendPickMode(2);
             fBlendPathB = nullptr;
             BridgeSetBlendPathBSet(false);
-            fprintf(stderr, "[BlendModule] Entered Pick B mode\n");
+            // Auto-activate IllTool so clicks route to our HandleMouseDown
+            if (sAITool && fPlugin && fPlugin->GetToolHandle()) {
+                sAITool->SetSelectedTool(fPlugin->GetToolHandle());
+            }
+            fprintf(stderr, "[BlendModule] Entered Pick B mode (tool activated)\n");
             return true;
         }
         case OpType::BlendSetSteps: {
@@ -722,13 +767,18 @@ int BlendModule::ExecuteBlend(AIArtHandle pathA, AIArtHandle pathB,
     if (!HarmonizePaths(pathA, pathB, resA, resB, targetCount, isClosed))
         return 0;
 
-    // Read style from path A
-    AIPathStyle style;
-    AIBoolean hasAdvFill = false;
-    ASErr err = sAIPathStyle->GetPathStyle(pathA, &style, &hasAdvFill);
+    // Read style from both paths for color interpolation
+    AIPathStyle styleA, styleB;
+    AIBoolean hasAdvFillA = false, hasAdvFillB = false;
+    ASErr err = sAIPathStyle->GetPathStyle(pathA, &styleA, &hasAdvFillA);
     if (err != kNoErr) {
-        fprintf(stderr, "[BlendModule] GetPathStyle failed: %d\n", (int)err);
-        style.Init();
+        fprintf(stderr, "[BlendModule] GetPathStyle(A) failed: %d\n", (int)err);
+        memset(&styleA, 0, sizeof(styleA));
+    }
+    err = sAIPathStyle->GetPathStyle(pathB, &styleB, &hasAdvFillB);
+    if (err != kNoErr) {
+        fprintf(stderr, "[BlendModule] GetPathStyle(B) failed: %d\n", (int)err);
+        styleB = styleA;  // fallback to A
     }
 
     // Push undo frame
@@ -764,10 +814,10 @@ int BlendModule::ExecuteBlend(AIArtHandle pathA, AIArtHandle pathB,
         return 0;
     }
 
-    // Generate intermediates inside the group
+    // Generate intermediates inside the group (with color interpolation A→B)
     std::vector<AIArtHandle> intermediates;
     int created = GenerateIntermediates(resA, resB, targetCount, isClosed, steps,
-                                         easing, style, movedA, intermediates);
+                                         easing, styleA, styleB, movedA, intermediates);
 
     // Dispose original paths (they're now duplicated in the group)
     sAIArt->DisposeArt(pathA);
@@ -907,18 +957,23 @@ int BlendModule::ReblendGroup(AIArtHandle groupArt, int steps, int easingPreset)
     if (!HarmonizePaths(srcA, srcB, resA, resB, targetCount, isClosed))
         return 0;
 
-    // Read style from path A
-    AIPathStyle pathStyle;
-    AIBoolean hasAdvFill = false;
-    sAIPathStyle->GetPathStyle(srcA, &pathStyle, &hasAdvFill);
+    // Read style from both paths for color interpolation
+    AIPathStyle pathStyleA, pathStyleB;
+    memset(&pathStyleA, 0, sizeof(pathStyleA));
+    memset(&pathStyleB, 0, sizeof(pathStyleB));
+    AIBoolean hasAdvFillA2 = false, hasAdvFillB2 = false;
+    ASErr styleErrA = sAIPathStyle->GetPathStyle(srcA, &pathStyleA, &hasAdvFillA2);
+    ASErr styleErrB = sAIPathStyle->GetPathStyle(srcB, &pathStyleB, &hasAdvFillB2);
+    if (styleErrA != kNoErr) memset(&pathStyleA, 0, sizeof(pathStyleA));
+    if (styleErrB != kNoErr) pathStyleB = pathStyleA;
 
     // Push undo frame
     fUndoStack.PushFrame();
 
-    // Generate new intermediates
+    // Generate new intermediates with color interpolation
     std::vector<AIArtHandle> newIntermediates;
     int created = GenerateIntermediates(resA, resB, targetCount, isClosed, steps,
-                                         easing, pathStyle, srcA, newIntermediates);
+                                         easing, pathStyleA, pathStyleB, srcA, newIntermediates);
 
     // Update dictionary
     StoreBlendParams(groupArt, steps, easingPreset);

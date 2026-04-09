@@ -84,9 +84,9 @@ protected:
 class UndoStack {
 public:
     struct PathSnapshot {
-        AIArtHandle art;
+        AIArtHandle art = nullptr;
         std::vector<AIPathSegment> segments;
-        AIBoolean closed;
+        AIBoolean closed = false;
     };
 
     /** Begin a new undo frame. Call before a destructive operation. */
@@ -100,6 +100,19 @@ public:
 
     /** Check if there's anything to undo. */
     bool CanUndo() const { return !stack.empty(); }
+
+    /** Get number of frames remaining. */
+    size_t FrameCount() const { return stack.size(); }
+
+    /** Check if the top frame targets the given art handle.
+        Returns false if stack is empty or any snapshot in the frame targets a different handle. */
+    bool TopFrameTargets(AIArtHandle expectedArt) const {
+        if (stack.empty()) return false;
+        for (auto& snap : stack.back()) {
+            if (snap.art != expectedArt) return false;
+        }
+        return true;
+    }
 
     /** Clear all frames. */
     void Clear() { stack.clear(); }

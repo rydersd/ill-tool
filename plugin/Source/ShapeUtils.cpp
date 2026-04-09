@@ -111,12 +111,15 @@ std::vector<AIRealPoint> SortByPCA(const std::vector<AIRealPoint>& pts)
         sorted[m] = pts[indexed[m].idx];
     }
 
-    // Direction check: if sorted order is reversed relative to the original
-    // first anchor, flip it. This prevents the curve from being mirrored.
-    AIRealPoint origFirst = pts[0];
-    double distToFirst = Dist2D(sorted[0], origFirst);
-    double distToLast  = Dist2D(sorted.back(), origFirst);
-    if (distToLast < distToFirst) {
+    // Direction check: use dot product of PCA axis with (last - first) of original
+    // points. If negative, the sort reversed the curve direction — flip it back.
+    // Dot product is more robust than Dist2D for collinear or nearly-symmetric cases.
+    double origDirH = pts.back().h - pts[0].h;
+    double origDirV = pts.back().v - pts[0].v;
+    double sortDirH = sorted.back().h - sorted[0].h;
+    double sortDirV = sorted.back().v - sorted[0].v;
+    double dot = origDirH * sortDirH + origDirV * sortDirV;
+    if (dot < 0) {
         std::reverse(sorted.begin(), sorted.end());
     }
 

@@ -77,6 +77,64 @@ bool ShadingModule::HandleOp(const PluginOp& op)
                     mode, mode == 0 ? "blend" : "mesh");
             return true;
         }
+        case OpType::ShadingEyedropper: {
+            // Sample fill color from currently selected path
+            int target = op.intParam;  // 0=highlight, 1=shadow
+            AIArtHandle selPath = GetFirstSelectedPath();
+            if (!selPath) {
+                fprintf(stderr, "[ShadingModule] Eyedropper: no path selected\n");
+                return true;
+            }
+            if (!sAIPathStyle) {
+                fprintf(stderr, "[ShadingModule] Eyedropper: AIPathStyleSuite unavailable\n");
+                return true;
+            }
+
+            AIPathStyle style;
+            AIBoolean hasAdvFill = false;
+            memset(&style, 0, sizeof(style));
+            ASErr err = sAIPathStyle->GetPathStyle(selPath, &style, &hasAdvFill);
+            if (err != kNoErr) {
+                fprintf(stderr, "[ShadingModule] Eyedropper: GetPathStyle failed: %d\n", (int)err);
+                return true;
+            }
+
+            if (!style.fillPaint) {
+                fprintf(stderr, "[ShadingModule] Eyedropper: selected path has no fill\n");
+                return true;
+            }
+
+            // Extract RGB values (normalize from AIReal 0-1 range)
+            double r = 0, g = 0, b = 0;
+            if (style.fill.color.kind == kThreeColor) {
+                r = (double)style.fill.color.c.rgb.red;
+                g = (double)style.fill.color.c.rgb.green;
+                b = (double)style.fill.color.c.rgb.blue;
+            } else if (style.fill.color.kind == kFourColor) {
+                // CMYK to approximate RGB
+                double c_val = (double)style.fill.color.c.f.cyan;
+                double m_val = (double)style.fill.color.c.f.magenta;
+                double y_val = (double)style.fill.color.c.f.yellow;
+                double k_val = (double)style.fill.color.c.f.black;
+                r = (1.0 - c_val) * (1.0 - k_val);
+                g = (1.0 - m_val) * (1.0 - k_val);
+                b = (1.0 - y_val) * (1.0 - k_val);
+            } else if (style.fill.color.kind == kGrayColor) {
+                r = g = b = 1.0 - (double)style.fill.color.c.g.gray;
+            }
+
+            if (target == 0) {
+                BridgeSetShadingHighlight(r, g, b);
+                fprintf(stderr, "[ShadingModule] Eyedropper: set highlight to (%.3f, %.3f, %.3f)\n", r, g, b);
+            } else {
+                BridgeSetShadingShadow(r, g, b);
+                fprintf(stderr, "[ShadingModule] Eyedropper: set shadow to (%.3f, %.3f, %.3f)\n", r, g, b);
+            }
+
+            // Clear eyedropper mode
+            BridgeSetShadingEyedropperMode(false);
+            return true;
+        }
         default:
             return false;
     }

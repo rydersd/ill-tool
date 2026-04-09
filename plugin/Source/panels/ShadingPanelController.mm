@@ -106,21 +106,39 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     [[NSColor colorWithRed:0.12 green:0.12 blue:0.12 alpha:1.0] setFill];
     NSRectFill(bounds);
 
-    // Dark circle background
+    // Hemisphere dome — radial gradient shaded by light direction for 3D feel
+    double lightRad = _lightAngle * M_PI / 180.0;
+    CGFloat lightOffsetX = radius * 0.3 * cos(lightRad);
+    CGFloat lightOffsetY = radius * 0.3 * sin(lightRad);
+
+    // Gradient from highlight center (offset toward light) to shadow edge
+    NSGradient *domeGradient = [[NSGradient alloc] initWithColorsAndLocations:
+        [NSColor colorWithRed:0.35 green:0.35 blue:0.38 alpha:1.0], 0.0,
+        [NSColor colorWithRed:0.22 green:0.22 blue:0.24 alpha:1.0], 0.5,
+        [NSColor colorWithRed:0.10 green:0.10 blue:0.12 alpha:1.0], 1.0,
+        nil];
+
     NSBezierPath *circleBg = [NSBezierPath bezierPathWithOvalInRect:
         NSMakeRect(cx - radius, cy - radius, radius * 2, radius * 2)];
-    [[NSColor colorWithRed:0.18 green:0.18 blue:0.18 alpha:1.0] setFill];
-    [circleBg fill];
+    [NSGraphicsContext saveGraphicsState];
+    [circleBg addClip];
+    [domeGradient drawFromCenter:NSMakePoint(cx + lightOffsetX, cy + lightOffsetY)
+                          radius:0
+                        toCenter:NSMakePoint(cx - lightOffsetX * 0.5, cy - lightOffsetY * 0.5)
+                          radius:radius * 1.4
+                         options:0];
+    [NSGraphicsContext restoreGraphicsState];
+    [domeGradient release];
 
-    // Circle outline
-    [[NSColor colorWithRed:0.35 green:0.35 blue:0.35 alpha:1.0] setStroke];
+    // Circle outline (rim light effect)
+    [[NSColor colorWithRed:0.40 green:0.40 blue:0.42 alpha:1.0] setStroke];
     circleBg.lineWidth = 1.0;
     [circleBg stroke];
 
     // Cross-hair guide lines (dim gray)
     NSBezierPath *crossHair = [NSBezierPath bezierPath];
     crossHair.lineWidth = 0.5;
-    [[NSColor colorWithRed:0.30 green:0.30 blue:0.30 alpha:1.0] setStroke];
+    [[NSColor colorWithRed:0.28 green:0.28 blue:0.30 alpha:1.0] setStroke];
     // Horizontal
     [crossHair moveToPoint:NSMakePoint(cx - radius, cy)];
     [crossHair lineToPoint:NSMakePoint(cx + radius, cy)];
@@ -242,7 +260,9 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
 // Controls
 @property (nonatomic, strong) NSSegmentedControl *modeToggle;
 @property (nonatomic, strong) NSColorWell *highlightColorWell;
+@property (nonatomic, strong) NSButton *highlightPickButton;
 @property (nonatomic, strong) NSColorWell *shadowColorWell;
+@property (nonatomic, strong) NSButton *shadowPickButton;
 @property (nonatomic, strong) LightDirectionView *lightDirView;
 @property (nonatomic, strong) NSTextField *angleLabel;
 @property (nonatomic, strong) NSSlider *intensitySlider;
@@ -289,14 +309,30 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
 - (void)pollColors:(NSTimer *)timer
 {
     @autoreleasepool {
-        // Sync color wells to bridge state
-        NSColor *hl = [self.highlightColorWell.color colorUsingColorSpace:[NSColorSpace sRGBColorSpace]];
-        if (hl) {
-            BridgeSetShadingHighlight(hl.redComponent, hl.greenComponent, hl.blueComponent);
+        // Check if eyedropper just changed a color — sync bridge → wells
+        double bHR, bHG, bHB, bSR, bSG, bSB;
+        BridgeGetShadingHighlight(bHR, bHG, bHB);
+        BridgeGetShadingShadow(bSR, bSG, bSB);
+
+        NSColor *curHL = [self.highlightColorWell.color colorUsingColorSpace:[NSColorSpace sRGBColorSpace]];
+        NSColor *curSH = [self.shadowColorWell.color colorUsingColorSpace:[NSColorSpace sRGBColorSpace]];
+
+        // If bridge highlight differs from well, eyedropper updated it — sync well
+        if (curHL && (fabs(curHL.redComponent - bHR) > 0.01 ||
+                      fabs(curHL.greenComponent - bHG) > 0.01 ||
+                      fabs(curHL.blueComponent - bHB) > 0.01)) {
+            self.highlightColorWell.color = [NSColor colorWithRed:bHR green:bHG blue:bHB alpha:1.0];
+        } else if (curHL) {
+            // Normal flow: sync well → bridge
+            BridgeSetShadingHighlight(curHL.redComponent, curHL.greenComponent, curHL.blueComponent);
         }
-        NSColor *sh = [self.shadowColorWell.color colorUsingColorSpace:[NSColorSpace sRGBColorSpace]];
-        if (sh) {
-            BridgeSetShadingShadow(sh.redComponent, sh.greenComponent, sh.blueComponent);
+
+        if (curSH && (fabs(curSH.redComponent - bSR) > 0.01 ||
+                       fabs(curSH.greenComponent - bSG) > 0.01 ||
+                       fabs(curSH.blueComponent - bSB) > 0.01)) {
+            self.shadowColorWell.color = [NSColor colorWithRed:bSR green:bSG blue:bSB alpha:1.0];
+        } else if (curSH) {
+            BridgeSetShadingShadow(curSH.redComponent, curSH.greenComponent, curSH.blueComponent);
         }
     }
 }
@@ -363,6 +399,12 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     self.highlightColorWell = hlWell;
     [hlWell release];
 
+    NSButton *hlPick = MakeButton(@"Pick", self, @selector(onPickHighlight:));
+    hlPick.frame = NSMakeRect(kPadding + 110, y - 30, 40, 22);
+    hlPick.toolTip = @"Sample highlight color from selected path";
+    [root addSubview:hlPick];
+    self.highlightPickButton = hlPick;
+
     y -= (34 + 4);
 
     // Shadow row
@@ -375,6 +417,12 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     [root addSubview:shWell];
     self.shadowColorWell = shWell;
     [shWell release];
+
+    NSButton *shPick = MakeButton(@"Pick", self, @selector(onPickShadow:));
+    shPick.frame = NSMakeRect(kPadding + 110, y - 30, 40, 22);
+    shPick.toolTip = @"Sample shadow color from selected path";
+    [root addSubview:shPick];
+    self.shadowPickButton = shPick;
 
     y -= (34 + kPadding);
 
@@ -595,6 +643,24 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     self.gridValueLabel.stringValue = [NSString stringWithFormat:@"%dx%d", value, value];
     BridgeSetShadingMeshGrid(value);
     fprintf(stderr, "[IllTool Panel] Shading grid: %dx%d\n", value, value);
+}
+
+- (void)onPickHighlight:(id)sender
+{
+    fprintf(stderr, "[IllTool Panel] Eyedropper: pick highlight from selection\n");
+    PluginOp op;
+    op.type = OpType::ShadingEyedropper;
+    op.intParam = 0;  // target = highlight
+    BridgeEnqueueOp(op);
+}
+
+- (void)onPickShadow:(id)sender
+{
+    fprintf(stderr, "[IllTool Panel] Eyedropper: pick shadow from selection\n");
+    PluginOp op;
+    op.type = OpType::ShadingEyedropper;
+    op.intParam = 1;  // target = shadow
+    BridgeEnqueueOp(op);
 }
 
 - (void)onApply:(id)sender

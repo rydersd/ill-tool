@@ -9,6 +9,7 @@
 #include "IllToolPlugin.h"
 #include "IllToolSuites.h"
 #include "ShapeUtils.h"
+#include "LearningEngine.h"
 #include <cstdio>
 #include <cmath>
 #include <cfloat>
@@ -74,6 +75,81 @@ void MergeModule::OnDocumentChanged()
     fMergePairs.clear();
     fMergeSnapshot = MergeSnapshot();
     fLastScanTolerance = 5.0;
+}
+
+//========================================================================================
+//  DrawOverlay — green connector lines between matched endpoint pairs
+//========================================================================================
+
+void MergeModule::DrawOverlay(AIAnnotatorMessage* msg)
+{
+    if (!msg || !msg->drawer) return;
+    if (fMergePairs.empty()) return;
+    if (!sAIDocumentView || !sAIAnnotatorDrawer || !sAIPath) return;
+
+    AIAnnotatorDrawer* drawer = msg->drawer;
+
+    // Green connector color
+    AIRGBColor green;
+    green.red   = 0;
+    green.green = (ai::uint16)(0.76 * 65535);  // ~50000
+    green.blue  = 0;
+
+    AIFloat dashPattern[] = {4.0f, 4.0f};
+
+    for (const auto& pair : fMergePairs) {
+        // Get the actual endpoint positions for this pair
+        ai::int16 segCountA = 0, segCountB = 0;
+        if (sAIPath->GetPathSegmentCount(pair.artA, &segCountA) != kNoErr || segCountA < 1) continue;
+        if (sAIPath->GetPathSegmentCount(pair.artB, &segCountB) != kNoErr || segCountB < 1) continue;
+
+        AIPathSegment segA, segB;
+
+        // Get the matched endpoint from path A
+        if (pair.endA_is_end) {
+            sAIPath->GetPathSegments(pair.artA, segCountA - 1, 1, &segA);
+        } else {
+            sAIPath->GetPathSegments(pair.artA, 0, 1, &segA);
+        }
+
+        // Get the matched endpoint from path B
+        if (pair.endB_is_start) {
+            sAIPath->GetPathSegments(pair.artB, 0, 1, &segB);
+        } else {
+            sAIPath->GetPathSegments(pair.artB, segCountB - 1, 1, &segB);
+        }
+
+        // Convert artwork points to view points
+        AIPoint vA, vB;
+        if (sAIDocumentView->ArtworkPointToViewPoint(NULL, &segA.p, &vA) != kNoErr) continue;
+        if (sAIDocumentView->ArtworkPointToViewPoint(NULL, &segB.p, &vB) != kNoErr) continue;
+
+        // Draw dashed green connector line
+        sAIAnnotatorDrawer->SetColor(drawer, green);
+        sAIAnnotatorDrawer->SetOpacity(drawer, 0.7);
+        sAIAnnotatorDrawer->SetLineWidth(drawer, 1.5);
+        sAIAnnotatorDrawer->SetLineDashedEx(drawer, dashPattern, 2);
+        sAIAnnotatorDrawer->DrawLine(drawer, vA, vB);
+
+        // Draw small circles at endpoints for visibility
+        int radius = 4;
+        AIRect rA;
+        rA.left = vA.h - radius; rA.top = vA.v - radius;
+        rA.right = vA.h + radius; rA.bottom = vA.v + radius;
+        sAIAnnotatorDrawer->SetLineDashedEx(drawer, nullptr, 0);
+        sAIAnnotatorDrawer->SetColor(drawer, green);
+        sAIAnnotatorDrawer->SetOpacity(drawer, 0.8);
+        sAIAnnotatorDrawer->SetLineWidth(drawer, 1.5);
+        sAIAnnotatorDrawer->DrawEllipse(drawer, rA, false);
+
+        AIRect rB;
+        rB.left = vB.h - radius; rB.top = vB.v - radius;
+        rB.right = vB.h + radius; rB.bottom = vB.v + radius;
+        sAIAnnotatorDrawer->DrawEllipse(drawer, rB, false);
+    }
+
+    // Reset dash state
+    sAIAnnotatorDrawer->SetLineDashedEx(drawer, nullptr, 0);
 }
 
 //========================================================================================

@@ -21,6 +21,10 @@ public:
     bool HandleOp(const PluginOp& op) override;
     void OnDocumentChanged() override;
 
+    /** Eyedropper state — when active, samples fill color from selected path. */
+    bool fEyedropperMode = false;
+    int  fEyedropperTarget = 0;  // 0=highlight, 1=shadow
+
 private:
     /** Running counter for shading group naming. */
     int fShadingGroupCounter = 0;

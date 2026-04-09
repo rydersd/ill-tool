@@ -23,6 +23,7 @@
 
 #include <thread>
 #include <mutex>
+#include <condition_variable>
 #include <atomic>
 #include <future>
 #include <vector>
@@ -51,6 +52,11 @@ bool BridgeDequeueOp(PluginOp& out) {
     out = std::move(gOpQueue.front());
     gOpQueue.pop_front();
     return true;
+}
+
+void BridgeRequeueOp(PluginOp op) {
+    std::lock_guard<std::mutex> lock(gOpMutex);
+    gOpQueue.push_front(std::move(op));
 }
 
 //========================================================================================
@@ -398,6 +404,15 @@ int  BridgeGetShadingBlendSteps()          { return gShadingBlendSteps.load(); }
 void BridgeSetShadingMeshGrid(int size) { gShadingMeshGrid.store(size); }
 int  BridgeGetShadingMeshGrid()         { return gShadingMeshGrid.load(); }
 
+static std::atomic<bool> gShadingEyedropperMode{false};
+static std::atomic<int>  gShadingEyedropperTarget{0};   // 0=highlight, 1=shadow
+
+void BridgeSetShadingEyedropperMode(bool active) { gShadingEyedropperMode.store(active); }
+bool BridgeGetShadingEyedropperMode()             { return gShadingEyedropperMode.load(); }
+
+void BridgeSetShadingEyedropperTarget(int target) { gShadingEyedropperTarget.store(target); }
+int  BridgeGetShadingEyedropperTarget()            { return gShadingEyedropperTarget.load(); }
+
 //----------------------------------------------------------------------------------------
 //  Decompose state (Stage 14)
 //----------------------------------------------------------------------------------------
@@ -498,6 +513,184 @@ void BridgeRequestDecomposeMergeGroups(int clusterA, int clusterB) {
     BridgeEnqueueOp(op);
 }
 void BridgeRequestDecomposeCancel()    { BridgeEnqueueOp({OpType::DecomposeCancel}); }
+
+//----------------------------------------------------------------------------------------
+//  Transform state (Stage 15)
+//----------------------------------------------------------------------------------------
+
+static std::atomic<double> gTransformWidth{0};
+static std::atomic<double> gTransformHeight{0};
+static std::atomic<double> gTransformRotation{0};
+static std::atomic<int>    gTransformMode{1};          // 0=absolute, 1=relative
+static std::atomic<bool>   gTransformRandom{false};
+static std::atomic<int>    gTransformUnitSize{0};      // 0=px, 1=%
+static std::atomic<int>    gTransformUnitRotation{0};  // 0=degrees, 1=%
+
+void BridgeSetTransformWidth(double w)         { gTransformWidth.store(w); }
+double BridgeGetTransformWidth()               { return gTransformWidth.load(); }
+
+void BridgeSetTransformHeight(double h)        { gTransformHeight.store(h); }
+double BridgeGetTransformHeight()              { return gTransformHeight.load(); }
+
+void BridgeSetTransformRotation(double deg)    { gTransformRotation.store(deg); }
+double BridgeGetTransformRotation()            { return gTransformRotation.load(); }
+
+void BridgeSetTransformMode(int mode)          { gTransformMode.store(mode); }
+int  BridgeGetTransformMode()                  { return gTransformMode.load(); }
+
+void BridgeSetTransformRandom(bool random)     { gTransformRandom.store(random); }
+bool BridgeGetTransformRandom()                { return gTransformRandom.load(); }
+
+void BridgeSetTransformUnitSize(int unit)      { gTransformUnitSize.store(unit); }
+int  BridgeGetTransformUnitSize()              { return gTransformUnitSize.load(); }
+
+void BridgeSetTransformUnitRotation(int unit)  { gTransformUnitRotation.store(unit); }
+int  BridgeGetTransformUnitRotation()          { return gTransformUnitRotation.load(); }
+
+static std::atomic<bool> gTransformLockAspectRatio{false};
+void BridgeSetTransformLockAspectRatio(bool lock) { gTransformLockAspectRatio.store(lock); }
+bool BridgeGetTransformLockAspectRatio()          { return gTransformLockAspectRatio.load(); }
+
+//----------------------------------------------------------------------------------------
+//  Trace state (Stage 16)
+//----------------------------------------------------------------------------------------
+
+static std::atomic<int>  gTraceSpeckle{4};
+static std::atomic<int>  gTraceColorPrecision{6};
+static std::mutex        gTraceStatusMutex;
+static std::string       gTraceStatus;
+
+void BridgeRequestTrace(const std::string& backend) {
+    PluginOp op{OpType::Trace};
+    op.strParam = backend;
+    BridgeEnqueueOp(op);
+}
+
+void BridgeSetTraceSpeckle(int size)        { gTraceSpeckle.store(size); }
+int  BridgeGetTraceSpeckle()                { return gTraceSpeckle.load(); }
+
+void BridgeSetTraceColorPrecision(int p)    { gTraceColorPrecision.store(p); }
+int  BridgeGetTraceColorPrecision()         { return gTraceColorPrecision.load(); }
+
+void BridgeSetTraceStatus(const std::string& status) {
+    std::lock_guard<std::mutex> lock(gTraceStatusMutex);
+    gTraceStatus = status;
+}
+std::string BridgeGetTraceStatus() {
+    std::lock_guard<std::mutex> lock(gTraceStatusMutex);
+    return gTraceStatus;
+}
+
+//----------------------------------------------------------------------------------------
+//  Surface extraction state (Stage 17)
+//----------------------------------------------------------------------------------------
+
+static std::atomic<bool>   gSurfaceExtractMode{false};
+static std::atomic<double> gExtractionSensitivity{0.5};
+static std::mutex          gExtractionStatusMutex;
+static std::string         gExtractionStatus;
+
+void BridgeRequestSurfaceExtract(double x, double y, const std::string& action) {
+    PluginOp op{OpType::SurfaceExtract};
+    op.param1 = x;
+    op.param2 = y;
+    op.strParam = action;
+    BridgeEnqueueOp(op);
+}
+
+void BridgeRequestSurfaceExtractToggle(bool enable) {
+    PluginOp op{OpType::SurfaceExtractToggle};
+    op.boolParam1 = enable;
+    BridgeEnqueueOp(op);
+}
+
+void BridgeSetExtractionSensitivity(double s) { gExtractionSensitivity.store(s); }
+double BridgeGetExtractionSensitivity()       { return gExtractionSensitivity.load(); }
+
+void BridgeSetExtractionStatus(const std::string& status) {
+    std::lock_guard<std::mutex> lock(gExtractionStatusMutex);
+    gExtractionStatus = status;
+}
+std::string BridgeGetExtractionStatus() {
+    std::lock_guard<std::mutex> lock(gExtractionStatusMutex);
+    return gExtractionStatus;
+}
+
+void BridgeSetSurfaceExtractMode(bool active) { gSurfaceExtractMode.store(active); }
+bool BridgeGetSurfaceExtractMode()            { return gSurfaceExtractMode.load(); }
+
+//----------------------------------------------------------------------------------------
+//  MCP Synchronous Request/Response mechanism
+//  HTTP handler thread posts a request + waits on condvar.
+//  Timer callback (SDK context) processes it, posts result, signals condvar.
+//----------------------------------------------------------------------------------------
+
+static std::mutex              gMcpMutex;
+static std::condition_variable gMcpCondVar;
+static bool                    gMcpRequestPending = false;
+static PluginOp                gMcpRequestOp;
+static std::string             gMcpResponse;
+static bool                    gMcpResponseReady = false;
+static std::atomic<bool>       gMcpShuttingDown{false};
+
+std::string BridgeMcpSyncRequest(PluginOp op, int timeoutMs)
+{
+    // Reject immediately if shutting down
+    if (gMcpShuttingDown.load()) {
+        return "{\"ok\":false,\"error\":\"Plugin shutting down\"}";
+    }
+
+    std::unique_lock<std::mutex> lock(gMcpMutex);
+
+    // Only one sync request at a time
+    if (gMcpRequestPending) {
+        return "{\"ok\":false,\"error\":\"Another MCP request is in progress\"}";
+    }
+
+    gMcpRequestOp = std::move(op);
+    gMcpRequestPending = true;
+    gMcpResponseReady = false;
+    gMcpResponse.clear();
+
+    // Wait for the timer callback to fill the response, or shutdown
+    bool timedOut = !gMcpCondVar.wait_for(lock,
+        std::chrono::milliseconds(timeoutMs),
+        [] { return gMcpResponseReady || gMcpShuttingDown.load(); });
+
+    gMcpRequestPending = false;
+
+    if (gMcpShuttingDown.load()) {
+        return "{\"ok\":false,\"error\":\"Plugin shutting down\"}";
+    }
+
+    if (timedOut) {
+        return "{\"ok\":false,\"error\":\"SDK timeout — no document open or timer inactive\"}";
+    }
+
+    return std::move(gMcpResponse);
+}
+
+void BridgeMcpPostResponse(const std::string& jsonResult)
+{
+    std::lock_guard<std::mutex> lock(gMcpMutex);
+    gMcpResponse = jsonResult;
+    gMcpResponseReady = true;
+    gMcpCondVar.notify_one();
+}
+
+bool BridgeMcpPeekRequest(PluginOp& out)
+{
+    std::lock_guard<std::mutex> lock(gMcpMutex);
+    if (!gMcpRequestPending || gMcpResponseReady) return false;
+    out = gMcpRequestOp;
+    return true;
+}
+
+void BridgeMcpClearRequest()
+{
+    // No-op: the response posting + condvar notify handles cleanup.
+    // This exists for symmetry but isn't strictly needed.
+}
 
 //----------------------------------------------------------------------------------------
 //  SSE event emitter
@@ -1839,6 +2032,22 @@ bool StartHttpBridge(int port)
     });
 
     //------------------------------------------------------------------------------------
+    //  Perspective auto-match endpoint
+    //------------------------------------------------------------------------------------
+
+    gServer->Post("/perspective/auto-match", [](const httplib::Request& /*req*/, httplib::Response& res) {
+        AddCorsHeaders(res);
+        PluginOp op;
+        op.type = OpType::AutoMatchPerspective;
+        BridgeEnqueueOp(op);
+        json resp;
+        resp["ok"] = true;
+        resp["message"] = "Auto-match perspective enqueued";
+        res.set_content(resp.dump(), "application/json");
+        fprintf(stderr, "[IllTool HTTP] POST /perspective/auto-match\n");
+    });
+
+    //------------------------------------------------------------------------------------
     //  Stage 14: Decompose endpoints
     //------------------------------------------------------------------------------------
 
@@ -1923,6 +2132,329 @@ bool StartHttpBridge(int port)
     });
 
     //------------------------------------------------------------------------------------
+    //  LLM Batch Cleanup (Stage 5C) — accepts a sequence of operations from Claude
+    //------------------------------------------------------------------------------------
+
+    gServer->Post("/api/batch", [](const httplib::Request& req, httplib::Response& res) {
+        AddCorsHeaders(res);
+        try {
+            json body = json::parse(req.body);
+            if (!body.contains("operations") || !body["operations"].is_array()) {
+                res.status = 400;
+                json err;
+                err["error"] = "Missing 'operations' array";
+                res.set_content(err.dump(), "application/json");
+                return;
+            }
+
+            int enqueued = 0;
+            for (auto& op : body["operations"]) {
+                std::string action = op.value("action", "");
+                PluginOp pluginOp;
+
+                if (action == "average_selection") {
+                    pluginOp.type = OpType::AverageSelection;
+                } else if (action == "classify") {
+                    pluginOp.type = OpType::Classify;
+                } else if (action == "reclassify") {
+                    pluginOp.type = OpType::Reclassify;
+                    pluginOp.intParam = op.value("shape_type", 0);
+                } else if (action == "simplify") {
+                    pluginOp.type = OpType::Simplify;
+                    pluginOp.param1 = op.value("level", 50.0);
+                } else if (action == "apply") {
+                    pluginOp.type = OpType::WorkingApply;
+                    pluginOp.boolParam1 = op.value("delete_originals", true);
+                } else if (action == "cancel") {
+                    pluginOp.type = OpType::WorkingCancel;
+                } else if (action == "select_small") {
+                    pluginOp.type = OpType::SelectSmall;
+                    pluginOp.param1 = op.value("threshold", 10.0);
+                } else if (action == "merge") {
+                    pluginOp.type = OpType::MergeEndpoints;
+                    pluginOp.boolParam1 = op.value("chain", true);
+                } else if (action == "trace") {
+                    pluginOp.type = OpType::Trace;
+                    pluginOp.strParam = op.value("backend", "vtracer");
+                } else {
+                    continue;  // skip unknown actions
+                }
+
+                BridgeEnqueueOp(pluginOp);
+                enqueued++;
+            }
+
+            json resp;
+            resp["ok"] = true;
+            resp["enqueued"] = enqueued;
+            res.set_content(resp.dump(), "application/json");
+            fprintf(stderr, "[IllTool HTTP] POST /api/batch: enqueued %d operations\n", enqueued);
+        }
+        catch (const std::exception& e) {
+            res.status = 400;
+            json err;
+            err["error"] = e.what();
+            res.set_content(err.dump(), "application/json");
+        }
+    });
+
+    // Read interaction journal
+    gServer->Get("/api/journal", [](const httplib::Request& /*req*/, httplib::Response& res) {
+        AddCorsHeaders(res);
+        const char* home = getenv("HOME");
+        if (!home) {
+            res.status = 500;
+            res.set_content("{\"error\":\"HOME not set\"}", "application/json");
+            return;
+        }
+        std::string path = std::string(home) + "/Library/Application Support/illtool/interactions/journal.jsonl";
+        FILE* f = fopen(path.c_str(), "r");
+        if (!f) {
+            res.set_content("[]", "application/json");
+            return;
+        }
+        // Read last 100 lines
+        std::string content;
+        char line[4096];
+        std::vector<std::string> lines;
+        while (fgets(line, sizeof(line), f)) {
+            lines.push_back(line);
+        }
+        fclose(f);
+
+        // Return last 100 as JSON array
+        content = "[";
+        int start = std::max(0, (int)lines.size() - 100);
+        for (int i = start; i < (int)lines.size(); i++) {
+            if (i > start) content += ",";
+            // Trim trailing newline
+            std::string l = lines[i];
+            while (!l.empty() && (l.back() == '\n' || l.back() == '\r')) l.pop_back();
+            content += l;
+        }
+        content += "]";
+        res.set_content(content, "application/json");
+    });
+
+    // Trace endpoint (for panel HTTP POST)
+    gServer->Post("/api/trace", [](const httplib::Request& req, httplib::Response& res) {
+        AddCorsHeaders(res);
+        try {
+            json body = json::parse(req.body);
+            std::string backend = body.value("backend", "vtracer");
+            BridgeRequestTrace(backend);
+            json resp;
+            resp["ok"] = true;
+            res.set_content(resp.dump(), "application/json");
+        }
+        catch (...) {
+            res.status = 400;
+            res.set_content("{\"error\":\"invalid JSON\"}", "application/json");
+        }
+    });
+
+    // Surface extract endpoint
+    gServer->Post("/api/surface_extract", [](const httplib::Request& req, httplib::Response& res) {
+        AddCorsHeaders(res);
+        try {
+            json body = json::parse(req.body);
+            std::string action = body.value("action", "click_extract");
+            double x = 0, y = 0;
+            if (body.contains("point") && body["point"].is_array() && body["point"].size() >= 2) {
+                x = body["point"][0].get<double>();
+                y = body["point"][1].get<double>();
+            }
+            BridgeRequestSurfaceExtract(x, y, action);
+            json resp;
+            resp["ok"] = true;
+            res.set_content(resp.dump(), "application/json");
+        }
+        catch (...) {
+            res.status = 400;
+            res.set_content("{\"error\":\"invalid JSON\"}", "application/json");
+        }
+    });
+
+    //====================================================================================
+    //  MCP Tool Integration Routes — synchronous SDK operations via condvar handshake
+    //  These replace ExtendScript calls from the MCP Python server.
+    //====================================================================================
+
+    //------------------------------------------------------------------------------------
+    //  GET /api/inspect — document + selection info
+    //  Returns: document name, width, height, artboard count, selected art details.
+    //------------------------------------------------------------------------------------
+    gServer->Get("/api/inspect", [](const httplib::Request& /*req*/, httplib::Response& res) {
+        AddCorsHeaders(res);
+        PluginOp op;
+        op.type = OpType::McpInspect;
+        std::string result = BridgeMcpSyncRequest(op);
+        res.set_content(result, "application/json");
+    });
+
+    //------------------------------------------------------------------------------------
+    //  POST /api/create_path — create a path from an array of points
+    //  Body: {"points":[[x,y],...], "closed":false, "stroke_r":0, ...}
+    //------------------------------------------------------------------------------------
+    gServer->Post("/api/create_path", [](const httplib::Request& req, httplib::Response& res) {
+        AddCorsHeaders(res);
+        try {
+            // Validate JSON parses before sending to SDK
+            json body = json::parse(req.body);
+            if (!body.contains("points") || !body["points"].is_array() || body["points"].empty()) {
+                json resp;
+                resp["ok"] = false;
+                resp["error"] = "Missing or empty 'points' array";
+                res.status = 400;
+                res.set_content(resp.dump(), "application/json");
+                return;
+            }
+            PluginOp op;
+            op.type = OpType::McpCreatePath;
+            op.strParam = req.body;
+            std::string result = BridgeMcpSyncRequest(op);
+            res.set_content(result, "application/json");
+        }
+        catch (const json::exception& e) {
+            json resp;
+            resp["ok"] = false;
+            resp["error"] = std::string("Invalid JSON: ") + e.what();
+            res.status = 400;
+            res.set_content(resp.dump(), "application/json");
+        }
+    });
+
+    //------------------------------------------------------------------------------------
+    //  POST /api/create_shape — create rectangle or ellipse
+    //  Body: {"shape":"rectangle|ellipse", "x":0, "y":0, "width":100, "height":100, ...}
+    //------------------------------------------------------------------------------------
+    gServer->Post("/api/create_shape", [](const httplib::Request& req, httplib::Response& res) {
+        AddCorsHeaders(res);
+        try {
+            json body = json::parse(req.body);
+            std::string shapeType = body.value("shape", "");
+            if (shapeType != "rectangle" && shapeType != "ellipse") {
+                json resp;
+                resp["ok"] = false;
+                resp["error"] = "shape must be 'rectangle' or 'ellipse'";
+                res.status = 400;
+                res.set_content(resp.dump(), "application/json");
+                return;
+            }
+            PluginOp op;
+            op.type = OpType::McpCreateShape;
+            op.strParam = req.body;
+            std::string result = BridgeMcpSyncRequest(op);
+            res.set_content(result, "application/json");
+        }
+        catch (const json::exception& e) {
+            json resp;
+            resp["ok"] = false;
+            resp["error"] = std::string("Invalid JSON: ") + e.what();
+            res.status = 400;
+            res.set_content(resp.dump(), "application/json");
+        }
+    });
+
+    //------------------------------------------------------------------------------------
+    //  POST /api/layers — list, create, or rename layers
+    //  Body: {"action":"list|create|rename", "name":"...", "new_name":"..."}
+    //------------------------------------------------------------------------------------
+    gServer->Post("/api/layers", [](const httplib::Request& req, httplib::Response& res) {
+        AddCorsHeaders(res);
+        try {
+            json body = json::parse(req.body);
+            std::string action = body.value("action", "list");
+            if (action != "list" && action != "create" && action != "rename") {
+                json resp;
+                resp["ok"] = false;
+                resp["error"] = "action must be 'list', 'create', or 'rename'";
+                res.status = 400;
+                res.set_content(resp.dump(), "application/json");
+                return;
+            }
+            PluginOp op;
+            op.type = OpType::McpLayers;
+            op.strParam = req.body;
+            std::string result = BridgeMcpSyncRequest(op);
+            res.set_content(result, "application/json");
+        }
+        catch (const json::exception& e) {
+            json resp;
+            resp["ok"] = false;
+            resp["error"] = std::string("Invalid JSON: ") + e.what();
+            res.status = 400;
+            res.set_content(resp.dump(), "application/json");
+        }
+    });
+
+    //------------------------------------------------------------------------------------
+    //  POST /api/select — select art by criteria
+    //  Body: {"action":"all|none|by_name|by_type", "name":"...", "type":"path|group|placed"}
+    //------------------------------------------------------------------------------------
+    gServer->Post("/api/select", [](const httplib::Request& req, httplib::Response& res) {
+        AddCorsHeaders(res);
+        try {
+            json body = json::parse(req.body);
+            std::string action = body.value("action", "");
+            if (action != "all" && action != "none" && action != "by_name" && action != "by_type") {
+                json resp;
+                resp["ok"] = false;
+                resp["error"] = "action must be 'all', 'none', 'by_name', or 'by_type'";
+                res.status = 400;
+                res.set_content(resp.dump(), "application/json");
+                return;
+            }
+            PluginOp op;
+            op.type = OpType::McpSelect;
+            op.strParam = req.body;
+            std::string result = BridgeMcpSyncRequest(op);
+            res.set_content(result, "application/json");
+        }
+        catch (const json::exception& e) {
+            json resp;
+            resp["ok"] = false;
+            resp["error"] = std::string("Invalid JSON: ") + e.what();
+            res.status = 400;
+            res.set_content(resp.dump(), "application/json");
+        }
+    });
+
+    //------------------------------------------------------------------------------------
+    //  POST /api/modify — transform/style/delete selected art
+    //  Body: {"action":"move|scale|rotate|set_stroke|set_fill|set_name|delete", ...}
+    //------------------------------------------------------------------------------------
+    gServer->Post("/api/modify", [](const httplib::Request& req, httplib::Response& res) {
+        AddCorsHeaders(res);
+        try {
+            json body = json::parse(req.body);
+            std::string action = body.value("action", "");
+            if (action != "move" && action != "scale" && action != "rotate" &&
+                action != "set_stroke" && action != "set_fill" &&
+                action != "set_name" && action != "delete") {
+                json resp;
+                resp["ok"] = false;
+                resp["error"] = "action must be move/scale/rotate/set_stroke/set_fill/set_name/delete";
+                res.status = 400;
+                res.set_content(resp.dump(), "application/json");
+                return;
+            }
+            PluginOp op;
+            op.type = OpType::McpModify;
+            op.strParam = req.body;
+            std::string result = BridgeMcpSyncRequest(op);
+            res.set_content(result, "application/json");
+        }
+        catch (const json::exception& e) {
+            json resp;
+            resp["ok"] = false;
+            resp["error"] = std::string("Invalid JSON: ") + e.what();
+            res.status = 400;
+            res.set_content(resp.dump(), "application/json");
+        }
+    });
+
+    //------------------------------------------------------------------------------------
     //  Launch server on detached thread
     //------------------------------------------------------------------------------------
     gRunning.store(true);
@@ -1952,6 +2484,10 @@ void StopHttpBridge()
 
     fprintf(stderr, "[IllTool] Stopping HTTP bridge...\n");
     gRunning.store(false);
+
+    // Wake any blocked MCP sync request so it can exit cleanly
+    gMcpShuttingDown.store(true);
+    gMcpCondVar.notify_all();
 
     if (gServer) {
         gServer->stop();

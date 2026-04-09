@@ -11,12 +11,18 @@ IDENTITY="Developer ID Application: Ryder Booth (ASH39KMW4S)"
 
 echo "=== Step 1: Copy source files to SDK ==="
 rm -f "$SDK_SRC/modules/"*.cpp "$SDK_SRC/modules/"*.h
-cp plugin/Source/*.cpp plugin/Source/*.h "$SDK_SRC/"
+cp plugin/Source/*.cpp plugin/Source/*.h plugin/Source/*.mm "$SDK_SRC/"
 cp plugin/Source/modules/*.cpp plugin/Source/modules/*.h "$SDK_SRC/modules/"
 cp plugin/Source/panels/*.mm plugin/Source/panels/*.h "$SDK_SRC/panels/"
+# Copy resource files (cursor SVGs, etc.)
+if [ -d "plugin/Resources/raw" ]; then
+    cp plugin/Resources/raw/*.svg "$SDK/Resources/raw/" 2>/dev/null || true
+    cp plugin/Resources/raw/IDToFile.txt "$SDK/Resources/raw/" 2>/dev/null || true
+fi
 
-echo "=== Step 2: Build ==="
+echo "=== Step 2: Build (clean + build) ==="
 cd "$SDK"
+xcodebuild -project IllTool.xcodeproj -configuration Release -arch arm64 clean 2>&1 | tail -1
 xcodebuild -project IllTool.xcodeproj -configuration Release -arch arm64 build 2>&1 | tail -3
 cd - > /dev/null
 

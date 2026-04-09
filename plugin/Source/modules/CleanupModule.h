@@ -15,11 +15,12 @@
 #include <vector>
 #include <string>
 #include <atomic>
+#include <chrono>
 
 class CleanupModule : public IllToolModule {
 public:
     CleanupModule() = default;
-    ~CleanupModule() override = default;
+    ~CleanupModule() override;  // removes NSEvent monitor if still installed
 
     //------------------------------------------------------------------------------------
     //  IllToolModule interface
@@ -94,6 +95,10 @@ public:
     /// Original segment position at start of drag (for delta calculation)
     AIPathSegment fAnchorDragOrigSeg;
 
+    /// Double-click detection for anchor toggle
+    int fLastClickedAnchor = -1;              ///< Anchor index of previous click (-1 = none)
+    std::chrono::steady_clock::time_point fLastClickTime;  ///< Timestamp of previous anchor click
+
     /// Hover state for handle pre-highlighting (-1 = none)
     int fHoverAnchorIdx = -1;    ///< Hovered path anchor point (square)
     int fHoverBBoxIdx = -1;      ///< Hovered bbox handle (-1=none, 0-7=handles, 8=rotate zone)
@@ -102,6 +107,7 @@ public:
     /// Bezier handle drag state
     int fDragBezierIdx = -1;     ///< Which bezier handle is being dragged (-1=none, seg*2+0=in, seg*2+1=out)
     AIRealPoint fBezierDragStart;
+    bool fBezierSnapPreview = false;  ///< True when dragged bezier handle is near anchor (collapse preview)
 
 private:
     //------------------------------------------------------------------------------------
@@ -112,7 +118,7 @@ private:
     void ReclassifyAs(BridgeShapeType shapeType);
     void SimplifySelection(double tolerance);
     void ApplyLODLevel(int level);
-    void SelectSmall(double threshold);
+    void SelectSmall(double threshold, int maxPoints = 0);
 
 public:
     void AverageSelection();
@@ -161,6 +167,7 @@ private:
     std::string                     fSourceLayerName;         ///< Name of source layer
     bool                            fInWorkingMode = false;
     bool                            fExitingWorkingMode = false;  ///< Suppress isolation re-entry during Apply/Cancel
+    void*                           fUndoEventMonitor = nullptr;  ///< NSEvent local monitor intercepting Cmd+Z in working mode
 
     //------------------------------------------------------------------------------------
     //  AverageSelection pipeline cache

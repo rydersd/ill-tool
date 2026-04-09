@@ -381,6 +381,59 @@ Both handle types must be the same visual size. The IllTool tool intercepts Tool
 
 ---
 
+## Stage 9: Transform All
+
+### Concept
+Batch transform multiple selected shapes at once. Select shapes with lasso or any selection method, then use the Transform All panel to set size and rotation values. Apply transforms all selected shapes. Random mode adds ±variance to each shape independently.
+
+### UX Design
+- **Panel only** — no dedicated tool. Works with whatever selection exists.
+- **Two transform axes**:
+  - **Size**: px or % toggle. Sets the target size (absolute) or delta (relative).
+  - **Rotation**: degrees or % toggle. Sets the target angle (absolute) or delta (relative).
+- **Absolute / Relative toggle** — switches between:
+  - **Absolute**: all shapes become exactly the specified value (e.g. 100px → all shapes 100px wide)
+  - **Relative**: add/subtract from each shape's current value (e.g. +10px → each shape grows 10px)
+- **Random checkbox** — when checked, each shape gets a random value within ±range around the specified center. E.g. size 100px ± random → each shape gets ~80-120px (variance configurable or fixed percentage).
+- **Apply** button — transforms all selected shapes in one operation.
+- **Panel shows current values** — when shapes are selected, panel displays their average or range for size and rotation.
+
+### Panel Layout
+```
+┌─────────────────────────────┐
+│ Transform All               │
+├─────────────────────────────┤
+│ Mode: [Absolute ▼ Relative] │
+│                             │
+│ Size:     [___100___] [px|%]│
+│ Rotation: [____45___] [°|%] │
+│                             │
+│ ☐ Random (± variance)       │
+│                             │
+│ Selected: 12 shapes         │
+│ Size range: 40-180 px       │
+│ Rotation range: -15° to 30° │
+│                             │
+│ [        Apply        ]     │
+└─────────────────────────────┘
+```
+
+### What Exists
+- [x] Selection infrastructure (lasso, smart select, SelectSmall)
+- [x] AIArtSuite for getting/setting art transforms
+- [x] Panel framework (FlippedView pattern, dark theme)
+
+### What's Missing
+- [ ] TransformModule (new module — HandleOp for TransformApply)
+- [ ] TransformPanelController (new panel — size/rotation inputs, mode toggle, random checkbox)
+- [ ] AITransformArtSuite acquisition (for scale/rotate operations)
+- [ ] Random variance distribution (uniform within ± range)
+- [ ] Panel selection readout (show current size/rotation range of selected shapes)
+- [ ] HTTP bridge endpoints for transform ops
+- [ ] LearningEngine recording of transform choices
+
+---
+
 ## UI Skin File (IllTool-UI.ai)
 
 An Illustrator file that defines all plugin visual elements — handles, cursors, icons, bounding box shapes. The plugin reads this file at runtime. Editing the `.ai` file changes the plugin's appearance without recompiling.
@@ -458,6 +511,7 @@ xcrun stapler staple ~/Developer/ai-plugins/IllTool.aip
 9. Blend easing curve editor
 10. Perspective preset save/load
 11. Shading light direction widget
+12. Transform All panel (batch size/rotation with random variance)
 
 ### P2 — Intelligence & automation
 12. LearningEngine predictions feeding UI defaults (shape suggestion, simplify level, noise threshold)

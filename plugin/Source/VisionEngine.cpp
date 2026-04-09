@@ -1263,6 +1263,187 @@ std::vector<VisionEngine::ContourGroup> VisionEngine::SuggestGroups(
 }
 
 //========================================================================================
+//  Vanishing point estimation
+//========================================================================================
+
+std::vector<VisionEngine::VanishingPointEstimate> VisionEngine::EstimateVanishingPoints(
+    int maxVPs, double cannyLow, double cannyHigh, int houghThreshold)
+{
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
+    std::vector<VanishingPointEstimate> results;
+
+    if (!IsLoaded()) {
+        VE_LOG("EstimateVanishingPoints: no image loaded");
+        return results;
+    }
+
+    VE_LOG("EstimateVanishingPoints: image %dx%d, maxVPs=%d, canny=[%.0f,%.0f], hough=%d",
+           imgWidth, imgHeight, maxVPs, cannyLow, cannyHigh, houghThreshold);
+
+    // Step 1: Edge detection
+    auto edges = CannyEdges(cannyLow, cannyHigh);
+    if (edges.empty()) {
+        VE_LOG("EstimateVanishingPoints: edge detection returned empty");
+        return results;
+    }
+
+    // Step 2: Hough line detection
+    auto lines = DetectLines(edges, 1.0, M_PI / 180.0, houghThreshold);
+    VE_LOG("EstimateVanishingPoints: %d raw lines detected", (int)lines.size());
+    if (lines.size() < 2) {
+        VE_LOG("EstimateVanishingPoints: not enough lines for VP estimation");
+        return results;
+    }
+
+    // Cap lines to top 200 by vote count (already sorted descending)
+    if (lines.size() > 200) lines.resize(200);
+
+    // Step 3: Filter near-horizontal (theta near 0 or pi) and near-vertical (theta near pi/2)
+    // In Hough space theta is in [0, pi). Horizontal lines have theta near pi/2,
+    // vertical lines have theta near 0 or pi.
+    const double kFilterDeg = 5.0;
+    const double kFilterRad = kFilterDeg * M_PI / 180.0;
+    std::vector<HoughLine> perspLines;
+    for (auto& l : lines) {
+        double theta = l.theta;
+        // Near-vertical: theta close to 0 or close to pi
+        if (theta < kFilterRad || theta > (M_PI - kFilterRad)) continue;
+        // Near-horizontal: theta close to pi/2
+        if (std::abs(theta - M_PI / 2.0) < kFilterRad) continue;
+        perspLines.push_back(l);
+    }
+    VE_LOG("EstimateVanishingPoints: %d lines after filtering horiz/vert", (int)perspLines.size());
+    if (perspLines.size() < 2) {
+        VE_LOG("EstimateVanishingPoints: not enough perspective lines after filtering");
+        return results;
+    }
+
+    // Step 4: Cluster by theta angle using 10-degree bins
+    const double kBinWidth = 10.0 * M_PI / 180.0;  // 10 degrees in radians
+    const int kNumBins = static_cast<int>(std::ceil(M_PI / kBinWidth));
+    std::vector<std::vector<int>> bins(kNumBins);
+    for (int i = 0; i < (int)perspLines.size(); i++) {
+        int bin = static_cast<int>(perspLines[i].theta / kBinWidth);
+        if (bin >= kNumBins) bin = kNumBins - 1;
+        bins[bin].push_back(i);
+    }
+
+    // Step 5: Find the largest clusters (merge adjacent bins for robustness)
+    // Build cluster list: each cluster is a set of line indices
+    struct Cluster {
+        std::vector<int> lineIndices;
+        double avgTheta;
+        int totalVotes;
+    };
+    std::vector<Cluster> clusters;
+
+    // Merge adjacent non-empty bins into clusters
+    for (int b = 0; b < kNumBins; b++) {
+        if (bins[b].empty()) continue;
+
+        Cluster c;
+        c.lineIndices = bins[b];
+        c.totalVotes = 0;
+        c.avgTheta = 0;
+
+        // Merge with next bin if also non-empty (handles lines on bin boundaries)
+        if (b + 1 < kNumBins && !bins[b + 1].empty()) {
+            c.lineIndices.insert(c.lineIndices.end(), bins[b + 1].begin(), bins[b + 1].end());
+            b++;  // skip the merged bin
+        }
+
+        // Compute weighted average theta and total votes
+        double sumTheta = 0;
+        for (int idx : c.lineIndices) {
+            sumTheta += perspLines[idx].theta * perspLines[idx].votes;
+            c.totalVotes += perspLines[idx].votes;
+        }
+        c.avgTheta = (c.totalVotes > 0) ? sumTheta / c.totalVotes : 0;
+        clusters.push_back(std::move(c));
+    }
+
+    // Sort clusters by total votes (proxy for size/importance)
+    std::sort(clusters.begin(), clusters.end(),
+              [](const Cluster& a, const Cluster& b) { return a.totalVotes > b.totalVotes; });
+
+    VE_LOG("EstimateVanishingPoints: %d angle clusters formed", (int)clusters.size());
+
+    // Step 6: For each of the top clusters, compute VP by median intersection
+    int vpCount = std::min(maxVPs, (int)clusters.size());
+    for (int ci = 0; ci < vpCount; ci++) {
+        const Cluster& cluster = clusters[ci];
+        if ((int)cluster.lineIndices.size() < 2) continue;
+
+        // Intersect all pairs of lines in this cluster
+        std::vector<double> xs, ys;
+        int nLines = (int)cluster.lineIndices.size();
+        // Limit pairs to avoid O(n^2) explosion
+        int maxPairs = 500;
+        int pairCount = 0;
+        for (int a = 0; a < nLines && pairCount < maxPairs; a++) {
+            for (int b = a + 1; b < nLines && pairCount < maxPairs; b++) {
+                const HoughLine& l1 = perspLines[cluster.lineIndices[a]];
+                const HoughLine& l2 = perspLines[cluster.lineIndices[b]];
+
+                // Skip if lines are too parallel (theta difference < 2 degrees)
+                double thetaDiff = std::abs(l1.theta - l2.theta);
+                if (thetaDiff < 2.0 * M_PI / 180.0) continue;
+
+                // Solve 2x2 system:
+                // cos(t1)*x + sin(t1)*y = rho1
+                // cos(t2)*x + sin(t2)*y = rho2
+                double c1 = std::cos(l1.theta), s1 = std::sin(l1.theta);
+                double c2 = std::cos(l2.theta), s2 = std::sin(l2.theta);
+                double det = c1 * s2 - c2 * s1;
+                if (std::abs(det) < 1e-10) continue;  // parallel
+
+                double ix = (l1.rho * s2 - l2.rho * s1) / det;
+                double iy = (l2.rho * c1 - l1.rho * c2) / det;
+
+                // Filter out intersection points that are absurdly far away
+                // (more than 5x image diagonal from image center)
+                double diagLen = std::sqrt((double)(imgWidth * imgWidth + imgHeight * imgHeight));
+                double cx = imgWidth * 0.5, cy = imgHeight * 0.5;
+                double dist = std::sqrt((ix - cx) * (ix - cx) + (iy - cy) * (iy - cy));
+                if (dist > 5.0 * diagLen) continue;
+
+                xs.push_back(ix);
+                ys.push_back(iy);
+                pairCount++;
+            }
+        }
+
+        if (xs.size() < 3) {
+            VE_LOG("EstimateVanishingPoints: cluster %d has too few intersections (%d)", ci, (int)xs.size());
+            continue;
+        }
+
+        // Median intersection point (robust to outliers)
+        std::sort(xs.begin(), xs.end());
+        std::sort(ys.begin(), ys.end());
+        double medX = xs[xs.size() / 2];
+        double medY = ys[ys.size() / 2];
+
+        VanishingPointEstimate vp;
+        vp.x = medX;
+        vp.y = medY;
+        vp.lineCount = nLines;
+        vp.dominantAngle = cluster.avgTheta;
+        // Confidence: ratio of this cluster's votes to total votes, capped at 1.0
+        int totalAllVotes = 0;
+        for (auto& c : clusters) totalAllVotes += c.totalVotes;
+        vp.confidence = (totalAllVotes > 0) ?
+            std::min(1.0, (double)cluster.totalVotes / (double)totalAllVotes * 2.0) : 0.0;
+
+        results.push_back(vp);
+        VE_LOG("EstimateVanishingPoints: VP%d at (%.1f, %.1f) conf=%.2f lines=%d angle=%.1f°",
+               ci, medX, medY, vp.confidence, nLines, cluster.avgTheta * 180.0 / M_PI);
+    }
+
+    return results;
+}
+
+//========================================================================================
 //  C-callable wrappers
 //========================================================================================
 
@@ -1508,5 +1689,138 @@ VisionEngine::SurfaceHint VisionEngine::InferSurfaceType(int x, int y, int w, in
     VE_LOG("InferSurfaceType: region=[%d,%d,%dx%d] type=%d conf=%.2f angle=%.1f°",
            x, y, w, h, (int)result.type, result.confidence,
            result.gradientAngle * 180.0 / M_PI);
+    return result;
+}
+
+//========================================================================================
+//  ClusterNormalDirections — k-means on gradient direction histogram
+//========================================================================================
+
+std::vector<VisionEngine::PlaneCluster> VisionEngine::ClusterNormalDirections(int maxPlanes)
+{
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
+    std::vector<PlaneCluster> result;
+
+    if (pixels.empty() || imgWidth < 2 || imgHeight < 2) return result;
+
+    // Build high-resolution angle histogram (36 bins = 5° each, axial: 0-π)
+    const int NUM_BINS = 36;
+    std::vector<int> histogram(NUM_BINS, 0);
+    int totalGrad = 0;
+
+    for (int y = 1; y < imgHeight - 1; y++) {
+        for (int x = 1; x < imgWidth - 1; x++) {
+            int idx = y * imgWidth + x;
+
+            // Grayscale gradient (Sobel-like)
+            double gx = (double)pixels[idx + 1] - (double)pixels[idx - 1];
+            double gy = (double)pixels[idx + imgWidth] - (double)pixels[idx - imgWidth];
+            double mag = std::sqrt(gx * gx + gy * gy);
+
+            if (mag < 10.0) continue;  // skip low-gradient pixels
+
+            double angle = std::atan2(gy, gx);
+            if (angle < 0) angle += M_PI;
+            if (angle >= M_PI) angle -= M_PI;  // fold to 0-π
+
+            int bin = (int)(angle / M_PI * NUM_BINS);
+            if (bin >= NUM_BINS) bin = NUM_BINS - 1;
+            histogram[bin]++;
+            totalGrad++;
+        }
+    }
+
+    if (totalGrad < 100) return result;  // too few gradient pixels
+
+    // Find peaks: local maxima in the histogram (with wrapping for circular data)
+    struct Peak { int bin; int count; double angle; };
+    std::vector<Peak> peaks;
+
+    for (int i = 0; i < NUM_BINS; i++) {
+        int prev = histogram[(i - 1 + NUM_BINS) % NUM_BINS];
+        int next = histogram[(i + 1) % NUM_BINS];
+        if (histogram[i] > prev && histogram[i] > next && histogram[i] > totalGrad / NUM_BINS) {
+            double angle = (i + 0.5) * M_PI / NUM_BINS;
+            peaks.push_back({i, histogram[i], angle});
+        }
+    }
+
+    // Sort peaks by count (strongest first)
+    std::sort(peaks.begin(), peaks.end(), [](const Peak& a, const Peak& b) {
+        return a.count > b.count;
+    });
+
+    // Take top maxPlanes peaks
+    int nPlanes = std::min((int)peaks.size(), maxPlanes);
+    for (int i = 0; i < nPlanes; i++) {
+        PlaneCluster pc;
+        pc.normalAngle = peaks[i].angle;
+        pc.strength = (double)peaks[i].count / (double)totalGrad;
+        pc.pixelCount = peaks[i].count;
+        result.push_back(pc);
+
+        VE_LOG("ClusterNormals: plane %d angle=%.1f° strength=%.2f (%d pixels)",
+               i, pc.normalAngle * 180.0 / M_PI, pc.strength, pc.pixelCount);
+    }
+
+    return result;
+}
+
+//========================================================================================
+//  EstimateVPsFromNormals — derive VPs from dominant surface plane orientations
+//========================================================================================
+
+std::vector<VisionEngine::VanishingPointEstimate> VisionEngine::EstimateVPsFromNormals(int maxVPs)
+{
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
+    std::vector<VanishingPointEstimate> result;
+
+    // Get dominant plane clusters
+    auto planes = ClusterNormalDirections(maxVPs + 1);  // get extra for filtering
+    if (planes.size() < 1) return result;
+
+    // Each plane's gradient direction indicates the surface normal.
+    // The EDGE direction of that plane is perpendicular to the gradient.
+    // Parallel edges from the same plane family converge at a VP.
+    // The VP direction is along the edge direction (gradient + π/2).
+
+    double imgCx = imgWidth * 0.5;
+    double imgCy = imgHeight * 0.5;
+
+    for (int i = 0; i < (int)planes.size() && (int)result.size() < maxVPs; i++) {
+        // Edge direction = gradient direction + 90°
+        double edgeAngle = planes[i].normalAngle + M_PI / 2.0;
+        if (edgeAngle >= M_PI) edgeAngle -= M_PI;
+
+        // Place VP far along the edge direction from image center
+        // Distance proportional to image size (VPs are typically far from image)
+        double vpDist = std::max(imgWidth, imgHeight) * 2.0;
+        double vpX = imgCx + std::cos(edgeAngle) * vpDist;
+        double vpY = imgCy + std::sin(edgeAngle) * vpDist;
+
+        // Check this VP isn't too close to an existing one
+        bool tooClose = false;
+        for (auto& existing : result) {
+            double dx = vpX - existing.x, dy = vpY - existing.y;
+            double angleDiff = std::abs(edgeAngle - existing.dominantAngle);
+            if (angleDiff < M_PI / 6.0 || angleDiff > 5.0 * M_PI / 6.0) {
+                tooClose = true;
+                break;
+            }
+        }
+        if (tooClose) continue;
+
+        VanishingPointEstimate vpe;
+        vpe.x = vpX;
+        vpe.y = vpY;
+        vpe.confidence = planes[i].strength;
+        vpe.lineCount = planes[i].pixelCount;
+        vpe.dominantAngle = edgeAngle;
+        result.push_back(vpe);
+
+        VE_LOG("VPFromNormals: VP%d at (%.0f, %.0f) edge_angle=%.1f° conf=%.2f",
+               (int)result.size(), vpX, vpY, edgeAngle * 180.0 / M_PI, planes[i].strength);
+    }
+
     return result;
 }

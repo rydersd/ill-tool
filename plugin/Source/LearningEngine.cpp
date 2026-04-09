@@ -14,6 +14,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <sys/stat.h>
 
 //----------------------------------------------------------------------------------------
@@ -335,6 +336,85 @@ void LearningEngine::RecordGrouping(const std::vector<std::string>& pathNames)
     }
 
     sqlite3_finalize(stmt);
+}
+
+void LearningEngine::RecordCorrection(const char* surfaceType, double dx, double dy, const char* shapeType)
+{
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
+    if (!db) return;
+
+    sqlite3* sqldb = reinterpret_cast<sqlite3*>(db);
+    sqlite3_stmt* stmt = nullptr;
+
+    // Store correction delta: surface_type in surface_type field, shape in auto_shape,
+    // dx in simplify_level, dy in point_count_before (reusing existing columns)
+    const char* sql =
+        "INSERT INTO interactions (action, surface_type, auto_shape, simplify_level, point_count_before) "
+        "VALUES ('correction', ?, ?, ?, ?);";
+
+    int rc = sqlite3_prepare_v2(sqldb, sql, -1, &stmt, nullptr);
+    if (rc != SQLITE_OK) {
+        LE_LOG("ERROR preparing correction insert: %s", sqlite3_errmsg(sqldb));
+        return;
+    }
+
+    sqlite3_bind_text(stmt, 1, surfaceType ? surfaceType : "unknown", -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, shapeType ? shapeType : "unknown", -1, SQLITE_TRANSIENT);
+    sqlite3_bind_double(stmt, 3, dx);
+    sqlite3_bind_int(stmt, 4, (int)(dy * 1000));  // store dy as millipoints for int column
+
+    rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        LE_LOG("ERROR inserting correction: %s", sqlite3_errmsg(sqldb));
+    } else {
+        LE_LOG("Recorded correction: surface=%s shape=%s dx=%.1f dy=%.1f",
+               surfaceType, shapeType, dx, dy);
+    }
+
+    sqlite3_finalize(stmt);
+}
+
+//========================================================================================
+//  Interaction Journal (JSONL)
+//========================================================================================
+
+void LearningEngine::JournalLog(const char* action, const char* jsonFields)
+{
+    // Write to ~/Library/Application Support/illtool/interactions/journal.jsonl
+    const char* home = getenv("HOME");
+    if (!home) return;
+
+    std::string dir = std::string(home) + "/Library/Application Support/illtool/interactions";
+
+    // Create directory if needed
+    struct stat st;
+    if (stat(dir.c_str(), &st) != 0) {
+        mkdir(dir.c_str(), 0755);
+    }
+
+    std::string path = dir + "/journal.jsonl";
+
+    FILE* f = fopen(path.c_str(), "a");
+    if (!f) {
+        LE_LOG("ERROR opening journal: %s", path.c_str());
+        return;
+    }
+
+    // Timestamp
+    time_t now = time(nullptr);
+    struct tm tm;
+    localtime_r(&now, &tm);
+    char ts[64];
+    strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%S", &tm);
+
+    // Write JSONL line
+    fprintf(f, "{\"ts\":\"%s\",\"action\":\"%s\"", ts, action ? action : "unknown");
+    if (jsonFields && jsonFields[0]) {
+        fprintf(f, ",%s", jsonFields);
+    }
+    fprintf(f, "}\n");
+
+    fclose(f);
 }
 
 //========================================================================================

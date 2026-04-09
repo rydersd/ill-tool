@@ -7,6 +7,7 @@
 #include "GroupingModule.h"
 #include "IllToolPlugin.h"
 #include "IllToolSuites.h"
+#include "LearningEngine.h"
 #include <cstdio>
 #include <cmath>
 #include <vector>
@@ -111,6 +112,13 @@ void GroupingModule::CopyToGroup(const std::string& groupName)
         }
 
         fprintf(stderr, "[GroupingModule] CopyToGroup: duplicated %d paths into group '%s'\n", dupeCount, groupName.c_str());
+
+        // Record grouping in LearningEngine
+        if (dupeCount > 0) {
+            std::vector<std::string> pathNames;
+            pathNames.push_back(groupName);
+            LearningEngine::Instance().RecordGrouping(pathNames);
+        }
 
         if (sAIIsolationMode && sAIIsolationMode->CanIsolateArt(groupArt)) {
             result = sAIIsolationMode->EnterIsolationMode(groupArt, false);

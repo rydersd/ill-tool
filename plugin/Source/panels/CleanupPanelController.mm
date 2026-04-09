@@ -76,6 +76,21 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
 
 @implementation FlippedView
 - (BOOL)isFlipped { return YES; }
+- (BOOL)acceptsFirstResponder { return YES; }
+- (void)keyDown:(NSEvent *)event
+{
+    // Enter/Return → Apply, Escape → Cancel (queued for SDK context)
+    unsigned short keyCode = event.keyCode;
+    if (keyCode == 36 || keyCode == 76) {  // Return or Enter (numpad)
+        BridgeRequestWorkingApply(true);  // default: delete originals
+        fprintf(stderr, "[IllTool Panel] Enter key → Apply\n");
+    } else if (keyCode == 53) {  // Escape
+        BridgeRequestWorkingCancel();
+        fprintf(stderr, "[IllTool Panel] Escape key → Cancel\n");
+    } else {
+        [super keyDown:event];
+    }
+}
 @end
 
 //========================================================================================
@@ -102,6 +117,7 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
 @property (nonatomic, strong) NSTextField *pointsCountLabel;
 @property (nonatomic, strong) NSTextField *layerNameField;
 @property (nonatomic, strong) NSTextField *selectSmallField;
+@property (nonatomic, strong) NSTextField *maxPointsField;
 
 // Decompose tab controls
 @property (nonatomic, strong) NSSlider *sensitivitySlider;
@@ -468,6 +484,23 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
     NSTextField *ptLabel = MakeLabel(@"pt", ITLabelFont(), ITDimColor());
     ptLabel.frame = NSMakeRect(kPadding + 158, y + 3, 20, 14);
     [container addSubview:ptLabel];
+
+    // Max Points field (point-count threshold for SelectSmall)
+    NSTextField *maxPtsLabel = MakeLabel(@"Max Pts", ITLabelFont(), ITDimColor());
+    maxPtsLabel.frame = NSMakeRect(kPadding + 182, y + 3, 50, 14);
+    [container addSubview:maxPtsLabel];
+
+    NSTextField *maxPtsField = [[NSTextField alloc] initWithFrame:
+        NSMakeRect(kPadding + 182 + 50, y, 36, kRowHeight)];
+    maxPtsField.font = ITMonoFont();
+    maxPtsField.placeholderString = @"0";
+    maxPtsField.bezelStyle = NSTextFieldSquareBezel;
+    maxPtsField.bordered = YES;
+    maxPtsField.editable = YES;
+    maxPtsField.stringValue = @"0";
+    [container addSubview:maxPtsField];
+    self.maxPointsField = maxPtsField;
+    [maxPtsField release];
 }
 
 //----------------------------------------------------------------------------------------
@@ -610,14 +643,39 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
 
 - (void)setActiveShapeButton:(NSInteger)index
 {
-    // Clear previous active state
+    NSArray *icons  = @[@"\u2014", @"\u2312", @"\u221F", @"\u25AD", @"\u223F", @"\u25CB", @"\u224B"];
+    NSArray *labels = @[@"LINE",   @"ARC",    @"L",      @"RECT",   @"S",      @"ELLIPSE",@"FREE"];
+
     for (NSInteger i = 0; i < (NSInteger)self.shapeButtons.count; i++) {
         NSButton *btn = self.shapeButtons[i];
-        if (i == index) {
-            btn.layer.backgroundColor = ITAccentColor().CGColor;
-            btn.layer.cornerRadius = 3.0;
-        } else {
-            btn.layer.backgroundColor = [NSColor clearColor].CGColor;
+        bool active = (i == index);
+        btn.layer.backgroundColor = active ? ITAccentColor().CGColor : [NSColor clearColor].CGColor;
+        btn.layer.cornerRadius = active ? 3.0 : 0.0;
+
+        // Rebuild attributed title with inverted colors when active
+        if (i < (NSInteger)icons.count) {
+            NSMutableParagraphStyle *para = [[NSMutableParagraphStyle alloc] init];
+            para.alignment = NSTextAlignmentCenter;
+            para.lineSpacing = 0;
+            NSColor *iconColor = active ? [NSColor blackColor] : ITTextColor();
+            NSColor *labelColor = active ? [NSColor colorWithRed:0.15 green:0.15 blue:0.15 alpha:1.0] : ITDimColor();
+            NSDictionary *iconAttrs = @{
+                NSFontAttributeName: [NSFont systemFontOfSize:14],
+                NSForegroundColorAttributeName: iconColor,
+                NSParagraphStyleAttributeName: para
+            };
+            NSDictionary *labelAttrs = @{
+                NSFontAttributeName: [NSFont systemFontOfSize:7 weight:NSFontWeightMedium],
+                NSForegroundColorAttributeName: labelColor,
+                NSParagraphStyleAttributeName: para
+            };
+            NSMutableAttributedString *attrStr = [[NSMutableAttributedString alloc] init];
+            [attrStr appendAttributedString:[[[NSAttributedString alloc] initWithString:icons[i] attributes:iconAttrs] autorelease]];
+            [attrStr appendAttributedString:[[[NSAttributedString alloc] initWithString:@"\n" attributes:iconAttrs] autorelease]];
+            [attrStr appendAttributedString:[[[NSAttributedString alloc] initWithString:labels[i] attributes:labelAttrs] autorelease]];
+            btn.attributedTitle = attrStr;
+            [attrStr release];
+            [para release];
         }
     }
     self.activeShapeIndex = index;
@@ -629,6 +687,7 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
     self.tensionValueLabel.stringValue = [NSString stringWithFormat:@"%d", value];
     fprintf(stderr, "[IllTool Panel] Tension: %d\n", value);
     BridgeSetTension((double)value);
+    BridgeEnqueueOp({OpType::Resmooth});
 }
 
 - (void)onSimplificationChanged:(NSSlider *)sender
@@ -668,8 +727,14 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
 - (void)onSelectSmall:(id)sender
 {
     double threshold = self.selectSmallField.doubleValue;
-    fprintf(stderr, "[IllTool Panel] Select Small (threshold: %.1f pt) — queuing request\n", threshold);
-    BridgeRequestSelectSmall(threshold);
+    int maxPoints = (int)self.maxPointsField.integerValue;
+    fprintf(stderr, "[IllTool Panel] Select Small (threshold: %.1f pt, maxPoints: %d) — queuing request\n",
+            threshold, maxPoints);
+    PluginOp op;
+    op.type = OpType::SelectSmall;
+    op.param1 = threshold;
+    op.intParam = maxPoints;
+    BridgeEnqueueOp(op);
 }
 
 //----------------------------------------------------------------------------------------

@@ -17,6 +17,8 @@
 
 #define kIllToolCursorID                16060
 #define kIllToolPerspectiveCursorID     16061
+#define kIllToolPickACursorID           16062
+#define kIllToolPickBCursorID           16063
 
 // Panel internal IDs (must be unique strings)
 #define kIllToolSelectionPanelID        "IllTool Selection"
@@ -26,6 +28,9 @@
 #define kIllToolShadingPanelID          "IllTool Shading"
 #define kIllToolBlendPanelID            "IllTool Blend"
 #define kIllToolPerspectivePanelID      "IllTool Perspective"
+#define kIllToolTransformPanelID        "IllTool Transform"
+#define kIllToolTracePanelID            "Ill Trace"
+#define kIllToolSurfacePanelID          "Ill Surface"
 
 // Panel menu item identifiers
 #define kIllToolSelectionMenuItem        "IllTool Selection Panel"
@@ -35,6 +40,9 @@
 #define kIllToolShadingMenuItem          "IllTool Shading Panel"
 #define kIllToolBlendMenuItem            "IllTool Blend Panel"
 #define kIllToolPerspectiveMenuItem      "IllTool Perspective Panel"
+#define kIllToolTransformMenuItem        "IllTool Transform Panel"
+#define kIllToolTraceMenuItem            "IllTool Trace Panel"
+#define kIllToolSurfaceMenuItem          "IllTool Surface Panel"
 
 // Application menu (Window > IllTool submenu)
 #define kIllToolMenuGroupName            "IllTool Menu Group"
@@ -46,5 +54,6 @@
 #define kIllToolMenuMergeItem            "IllTool Menu Merge"
 #define kIllToolMenuSelectionItem        "IllTool Menu Selection"
 #define kIllToolMenuShadingItem          "IllTool Menu Shading"
+#define kIllToolMenuPerspToggleItem      "IllTool Toggle Perspective"
 
 #endif //__ILLTOOLID_H__

@@ -28,11 +28,18 @@
 /** Update grid status display. */
 - (void)updateGridStatus:(BOOL)valid vpCount:(int)count density:(int)density;
 
+/** Save/load preset actions. */
+- (void)onPresetSave:(id)sender;
+- (void)onPresetLoad:(id)sender;
+
 /** C-callable: place VP3 at center of viewport (called from "Add Vertical" button). */
 void PluginPlaceVerticalVP(void);
 
 /** C-callable: delete perspective grid entirely. */
 void PluginDeletePerspective(void);
+
+/** C-callable: auto-match perspective from placed reference image. */
+void PluginAutoMatchPerspective(void);
 
 @end
 

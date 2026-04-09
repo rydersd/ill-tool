@@ -22,12 +22,29 @@
 #include "modules/BlendModule.h"
 #include "modules/ShadingModule.h"
 #include "modules/DecomposeModule.h"
+#include "modules/TransformModule.h"
+#include "modules/TraceModule.h"
+#include "modules/SurfaceModule.h"
+#include "UISkinLoader.h"
+
+// New modules not in Xcode pbxproj — compile them here
+#include "modules/TransformModule.cpp"
+#include "modules/TraceModule.cpp"
+#include "modules/SurfaceModule.cpp"
+#include "UISkinLoader.cpp"
+
+#include "vendor/json.hpp"
 
 #include <cstdio>
 #include <cmath>
 #include <chrono>
 #include <algorithm>
 #include <string>
+#include <set>
+
+using json = nlohmann::json;
+
+#import <AppKit/NSEvent.h>  // For modifier key state in TrackToolCursor
 
 IllToolPlugin *gPlugin = NULL;
 
@@ -66,16 +83,19 @@ IllToolPlugin::IllToolPlugin(SPPluginRef pluginRef) :
     fSelectionPanel(NULL), fCleanupPanel(NULL),
     fGroupingPanel(NULL), fMergePanel(NULL),
     fShadingPanel(NULL), fBlendPanel(NULL), fPerspectivePanel(NULL),
+    fTransformPanel(NULL), fTracePanel(NULL), fSurfacePanel(NULL),
     fSelectionMenuHandle(NULL), fCleanupMenuHandle(NULL),
     fGroupingMenuHandle(NULL), fMergeMenuHandle(NULL),
     fShadingMenuHandle(NULL), fBlendMenuHandle(NULL), fPerspectiveMenuHandle(NULL),
+    fTransformMenuHandle(NULL), fTraceMenuHandle(NULL), fSurfaceMenuHandle(NULL),
     fAppMenuRootHandle(NULL),
     fMenuLassoHandle(NULL), fMenuSmartHandle(NULL),
     fMenuCleanupHandle(NULL), fMenuGroupingHandle(NULL),
-    fMenuMergeHandle(NULL), fMenuSelectionHandle(NULL),
+    fMenuMergeHandle(NULL), fMenuSelectionHandle(NULL), fMenuPerspToggleHandle(NULL),
     fSelectionController(NULL), fCleanupController(NULL),
     fGroupingController(NULL), fMergeController(NULL),
-    fShadingController(NULL), fBlendController(NULL), fPerspectiveController(NULL)
+    fShadingController(NULL), fBlendController(NULL), fPerspectiveController(NULL),
+    fTransformController(NULL), fTraceController(NULL), fSurfaceController(NULL)
 {
     strncpy(fPluginName, kIllToolPluginName, kMaxStringLength);
     fprintf(stderr, "[IllTool] Plugin constructed: %s\n", kIllToolPluginName);
@@ -157,6 +177,9 @@ ASErr IllToolPlugin::StartupPlugin(SPInterfaceMessage* message)
             addModule(std::make_unique<BlendModule>());
             addModule(std::make_unique<ShadingModule>());
             addModule(std::make_unique<DecomposeModule>());
+            addModule(std::make_unique<TransformModule>());
+            addModule(std::make_unique<TraceModule>());
+            addModule(std::make_unique<SurfaceModule>());
         }
         fprintf(stderr, "[IllTool] %zu modules created\n", fModules.size());
 
@@ -176,6 +199,9 @@ ASErr IllToolPlugin::StartupPlugin(SPInterfaceMessage* message)
         } else {
             fprintf(stderr, "[IllTool] WARNING: AITimerSuite not available -- using TrackToolCursor only\n");
         }
+
+        // Load UI skin (handle sizes, colors, cursors)
+        UISkinLoader::Instance().Load();
 
         fprintf(stderr, "[IllTool] StartupPlugin complete\n");
     }
@@ -303,6 +329,7 @@ ASErr IllToolPlugin::Message(char* caller, char* selector, void* message)
                         }
                         else if (strcmp(selector, kSelectorAIToolMouseUp) == 0) {
                             persp->HandleMouseUp(toolMsg);
+                            fDragInProgress = false;
                             result = kNoErr;
                         }
                     }
@@ -317,6 +344,7 @@ ASErr IllToolPlugin::Message(char* caller, char* selector, void* message)
                         }
                         else if (strcmp(selector, kSelectorAIToolMouseUp) == 0) {
                             persp->HandleMouseUp(toolMsg);
+                            fDragInProgress = false;
                             result = kNoErr;
                         }
                     }
@@ -355,6 +383,7 @@ ASErr IllToolPlugin::Message(char* caller, char* selector, void* message)
                                     if (mod->HandleMouseUp(toolMsg)) break;
                                 }
                             }
+                            fDragInProgress = false;
                             result = kNoErr;
                         }
                     }
@@ -416,6 +445,18 @@ ASErr IllToolPlugin::GoMenuItem(AIMenuMessage* message)
             }
         }
         //----------------------------------------------------------------------
+        // Toggle Perspective Lock (Shift+Cmd+P)
+        //----------------------------------------------------------------------
+        else if (message->menuItem == fMenuPerspToggleHandle) {
+            bool locked = BridgeGetPerspectiveLocked();
+            BridgeSetPerspectiveLocked(!locked);
+            PluginOp lockOp{OpType::LockPerspective};
+            lockOp.boolParam1 = !locked;
+            BridgeEnqueueOp(lockOp);
+            fprintf(stderr, "[IllTool Menu] Perspective lock toggled to %s\n",
+                    !locked ? "locked" : "unlocked");
+        }
+        //----------------------------------------------------------------------
         // Panel toggle items (both Window menu items AND submenu panel items)
         //----------------------------------------------------------------------
         else if (sAIPanel) {
@@ -432,6 +473,9 @@ ASErr IllToolPlugin::GoMenuItem(AIMenuMessage* message)
                 { fMenuGroupingHandle,  fGroupingPanel,  "Grouping (menu)" },
                 { fMenuMergeHandle,     fMergePanel,     "Merge (menu)" },
                 { fMenuSelectionHandle, fSelectionPanel,  "Selection (menu)" },
+                { fTransformMenuHandle, fTransformPanel,  "Transform (menu)" },
+                { fTraceMenuHandle,     fTracePanel,      "Trace (menu)" },
+                { fSurfaceMenuHandle,   fSurfacePanel,    "Surface (menu)" },
             };
             for (auto& p : panels) {
                 if (message->menuItem == p.menu && p.panel) {
@@ -611,6 +655,8 @@ ASErr IllToolPlugin::ToolMouseDown(AIToolMessage* message)
 {
     ASErr result = kNoErr;
     try {
+        fDragInProgress = true;  // Prevent ProcessOperationQueue from dequeueing Apply/Cancel mid-drag
+
         // Perspective tool: dispatch to PerspectiveModule's dedicated handler
         if (message->tool == fPerspectiveToolHandle) {
             auto* persp = GetModule<PerspectiveModule>();
@@ -626,16 +672,43 @@ ASErr IllToolPlugin::ToolMouseDown(AIToolMessage* message)
             }
         }
 
-        // Priority 2: if perspective grid is visible+unlocked, try VP handle dragging
-        // This lets the user drag VP handles with the main IllTool tool (no tool switch)
+        // Priority 2: Blend pick mode — must run BEFORE lasso (which consumes all clicks)
+        {
+            int blendPick = BridgeGetBlendPickMode();
+            if (blendPick > 0) {
+                auto* blend = GetModule<BlendModule>();
+                if (blend && blend->HandleMouseDown(message)) return kNoErr;
+            }
+        }
+
+        // Priority 3: Surface extract mode — click-to-extract
+        {
+            if (BridgeGetSurfaceExtractMode()) {
+                auto* surface = GetModule<SurfaceModule>();
+                if (surface && surface->HandleExtractClick(message->cursor)) return kNoErr;
+            }
+        }
+
+        // Priority 4: Shading eyedropper mode
+        {
+            if (BridgeGetShadingEyedropperMode()) {
+                auto* shading = GetModule<ShadingModule>();
+                if (shading && shading->HandleMouseDown(message)) return kNoErr;
+            }
+        }
+
+        // Priority 5: if perspective grid is visible+unlocked, try VP handle dragging
         {
             auto* persp = GetModule<PerspectiveModule>();
             if (persp && persp->HandleMouseDown(message)) return kNoErr;
         }
 
-        // Try each module's HandleMouseDown (lasso, blend pick, etc.)
+        // Priority 6: remaining modules (lasso, selection, etc.)
         for (auto& mod : fModules) {
-            if (dynamic_cast<PerspectiveModule*>(mod.get())) continue;  // already tried at Priority 2
+            if (dynamic_cast<PerspectiveModule*>(mod.get())) continue;  // already tried
+            if (dynamic_cast<BlendModule*>(mod.get())) continue;        // already tried
+            if (dynamic_cast<SurfaceModule*>(mod.get())) continue;      // already tried
+            if (dynamic_cast<ShadingModule*>(mod.get())) continue;      // already tried
             if (mod->HandleMouseDown(message)) return kNoErr;
         }
     }
@@ -661,9 +734,29 @@ void IllToolPlugin::ProcessOperationQueue()
         InvalidateFullView();
     }
 
+    //------------------------------------------------------------------------
+    //  MCP Synchronous Request/Response — handle pending sync requests first
+    //  These are posted by HTTP handler threads and need a condvar signal back.
+    //------------------------------------------------------------------------
+    {
+        PluginOp mcpOp;
+        if (BridgeMcpPeekRequest(mcpOp)) {
+            HandleMcpOperation(mcpOp);
+        }
+    }
+
     // H1: Dequeue and dispatch all pending operations to modules
     PluginOp op;
     while (BridgeDequeueOp(op)) {
+        // Guard: don't process Apply/Cancel/Undo while a mouse drag is in progress.
+        // The timer fires at ~10Hz and could dequeue these ops between mouse events.
+        // Processing undo mid-drag corrupts the drag state and crashes.
+        if (fDragInProgress &&
+            (op.type == OpType::WorkingApply || op.type == OpType::WorkingCancel ||
+             op.type == OpType::UndoShape)) {
+            BridgeRequeueOp(op);  // put it back for next tick
+            break;
+        }
         bool handled = false;
         for (auto& mod : fModules) {
             if (mod->HandleOp(op)) { handled = true; break; }
@@ -678,6 +771,769 @@ void IllToolPlugin::ProcessOperationQueue()
     // The preview has an orange stroke and stays selected — no need to lock the user in.
     // Isolation re-entry was forcing the user back into isolation every time they clicked
     // outside the working group, preventing normal interaction with other tools.
+}
+
+//========================================================================================
+//  HandleMcpOperation — synchronous SDK operations for MCP tool integration.
+//  Runs in timer/SDK context. Posts JSON result back to HTTP thread via condvar.
+//========================================================================================
+
+void IllToolPlugin::HandleMcpOperation(const PluginOp& op)
+{
+    json resp;
+
+    try {
+        switch (op.type) {
+
+        //----------------------------------------------------------------
+        //  McpInspect — document + selection info
+        //----------------------------------------------------------------
+        case OpType::McpInspect: {
+            resp["ok"] = true;
+
+            // Document info
+            json docInfo;
+            if (sAIDocument) {
+                ai::FilePath filePath;
+                if (sAIDocument->GetDocumentFileSpecification(filePath) == kNoErr) {
+                    ai::UnicodeString fileName = filePath.GetFileName();
+                    std::string nameStr = fileName.as_UTF8();
+                    docInfo["name"] = nameStr;
+                } else {
+                    docInfo["name"] = "Untitled";
+                }
+
+                AIDocumentSetup setup;
+                memset(&setup, 0, sizeof(setup));
+                if (sAIDocument->GetDocumentSetup(&setup) == kNoErr) {
+                    docInfo["width"]  = (double)setup.width;
+                    docInfo["height"] = (double)setup.height;
+                }
+            }
+
+            // Artboard count — ai::ArtboardList wrappers need IAIArtboards.cpp linked,
+            // which pulls in assertion stubs we don't have. Default to 1.
+            docInfo["artboard_count"] = 1;
+            resp["document"] = docInfo;
+
+            // Selected art
+            json selectedArr = json::array();
+            int selectedCount = 0;
+
+            // Check all art types for selection (not just paths)
+            short artTypes[] = {kPathArt, kGroupArt, kPlacedArt, kCompoundPathArt, kTextFrameArt};
+            const char* typeNames[] = {"path", "group", "placed", "compound_path", "text_frame"};
+
+            for (int t = 0; t < 5; t++) {
+                AIMatchingArtSpec spec;
+                spec.type = artTypes[t];
+                spec.whichAttr = kArtSelected;
+                spec.attr = kArtSelected;
+
+                AIArtHandle** matches = nullptr;
+                ai::int32 numMatches = 0;
+                ASErr err = GetMatchingArtIsolationAware(&spec, 1, &matches, &numMatches);
+                if (err != kNoErr || numMatches == 0) continue;
+
+                for (ai::int32 i = 0; i < numMatches; i++) {
+                    AIArtHandle art = (*matches)[i];
+                    json artObj;
+                    artObj["type"] = typeNames[t];
+
+                    // Name
+                    ai::UnicodeString artName;
+                    AIBoolean isDefaultName = true;
+                    if (sAIArt->GetArtName(art, artName, &isDefaultName) == kNoErr && !isDefaultName) {
+                        std::string nameStr;
+                        nameStr = artName.as_UTF8();
+                        artObj["name"] = nameStr;
+                    } else {
+                        artObj["name"] = nullptr;
+                    }
+
+                    // Bounds
+                    AIRealRect bounds;
+                    if (sAIArt->GetArtBounds(art, &bounds) == kNoErr) {
+                        artObj["bounds"] = {
+                            {"left",   (double)bounds.left},
+                            {"top",    (double)bounds.top},
+                            {"right",  (double)bounds.right},
+                            {"bottom", (double)bounds.bottom}
+                        };
+                    }
+
+                    // Segment count for paths
+                    if (artTypes[t] == kPathArt) {
+                        ai::int16 segCount = 0;
+                        sAIPath->GetPathSegmentCount(art, &segCount);
+                        artObj["segments"] = (int)segCount;
+
+                        AIBoolean closed = false;
+                        sAIPath->GetPathClosed(art, &closed);
+                        artObj["closed"] = (bool)closed;
+                    }
+
+                    selectedArr.push_back(artObj);
+                    selectedCount++;
+                }
+                sAIMdMemory->MdMemoryDisposeHandle((AIMdMemoryHandle)matches);
+            }
+
+            resp["selected_count"] = selectedCount;
+            resp["selected"] = selectedArr;
+
+            fprintf(stderr, "[IllTool MCP] /api/inspect: %d selected items\n", selectedCount);
+            break;
+        }
+
+        //----------------------------------------------------------------
+        //  McpCreatePath — create path from point array
+        //----------------------------------------------------------------
+        case OpType::McpCreatePath: {
+            json body = json::parse(op.strParam);
+            auto& pointsArr = body["points"];
+            bool closed = body.value("closed", false);
+
+            int n = (int)pointsArr.size();
+            if (n < 2) {
+                resp["ok"] = false;
+                resp["error"] = "Need at least 2 points";
+                break;
+            }
+
+            // Create the path art
+            AIArtHandle newPath = nullptr;
+            ASErr err = sAIArt->NewArt(kPathArt, kPlaceAboveAll, nullptr, &newPath);
+            if (err != kNoErr || !newPath) {
+                resp["ok"] = false;
+                resp["error"] = "NewArt failed";
+                break;
+            }
+
+            // Build segments
+            std::vector<AIPathSegment> segs(n);
+            for (int i = 0; i < n; i++) {
+                double x = pointsArr[i][0].get<double>();
+                double y = pointsArr[i][1].get<double>();
+                segs[i].p.h = (AIReal)x;
+                segs[i].p.v = (AIReal)y;
+                segs[i].in  = segs[i].p;   // corner points (no handles)
+                segs[i].out = segs[i].p;
+                segs[i].corner = true;
+            }
+
+            sAIPath->SetPathSegmentCount(newPath, (ai::int16)n);
+            sAIPath->SetPathSegments(newPath, 0, (ai::int16)n, segs.data());
+            sAIPath->SetPathClosed(newPath, closed);
+
+            // Apply stroke/fill style
+            AIPathStyle style;
+            memset(&style, 0, sizeof(style));
+            style.stroke.miterLimit = (AIReal)4.0;  // Illustrator default
+
+            // Stroke
+            bool hasStroke = true;  // default: stroke on
+            double strokeR = body.value("stroke_r", 0.0) / 255.0;
+            double strokeG = body.value("stroke_g", 0.0) / 255.0;
+            double strokeB = body.value("stroke_b", 0.0) / 255.0;
+            double strokeW = body.value("stroke_width", 1.0);
+
+            style.strokePaint = hasStroke;
+            style.stroke.width = (AIReal)strokeW;
+            style.stroke.color.kind = kThreeColor;
+            style.stroke.color.c.rgb.red   = (AIReal)strokeR;
+            style.stroke.color.c.rgb.green = (AIReal)strokeG;
+            style.stroke.color.c.rgb.blue  = (AIReal)strokeB;
+
+            // Fill (optional — null means no fill)
+            if (body.contains("fill_r") && !body["fill_r"].is_null()) {
+                style.fillPaint = true;
+                style.fill.color.kind = kThreeColor;
+                style.fill.color.c.rgb.red   = (AIReal)(body["fill_r"].get<double>() / 255.0);
+                style.fill.color.c.rgb.green = (AIReal)(body["fill_g"].get<double>() / 255.0);
+                style.fill.color.c.rgb.blue  = (AIReal)(body["fill_b"].get<double>() / 255.0);
+            } else {
+                style.fillPaint = false;
+            }
+
+            sAIPathStyle->SetPathStyle(newPath, &style);
+
+            // Name (optional)
+            if (body.contains("name") && body["name"].is_string()) {
+                std::string name = body["name"].get<std::string>();
+                sAIArt->SetArtName(newPath, ai::UnicodeString(name));
+            }
+
+            // Select the new path
+            sAIArt->SetArtUserAttr(newPath, kArtSelected, kArtSelected);
+            if (sAIDocument) sAIDocument->RedrawDocument();
+
+            resp["ok"] = true;
+            resp["segments"] = n;
+            fprintf(stderr, "[IllTool MCP] /api/create_path: %d segments, closed=%d\n", n, (int)closed);
+            break;
+        }
+
+        //----------------------------------------------------------------
+        //  McpCreateShape — create rectangle or ellipse
+        //----------------------------------------------------------------
+        case OpType::McpCreateShape: {
+            json body = json::parse(op.strParam);
+            std::string shape = body.value("shape", "rectangle");
+            double x = body.value("x", 0.0);
+            double y = body.value("y", 0.0);
+            double w = body.value("width", 100.0);
+            double h = body.value("height", 100.0);
+
+            AIArtHandle newPath = nullptr;
+            ASErr err = sAIArt->NewArt(kPathArt, kPlaceAboveAll, nullptr, &newPath);
+            if (err != kNoErr || !newPath) {
+                resp["ok"] = false;
+                resp["error"] = "NewArt failed";
+                break;
+            }
+
+            if (shape == "rectangle") {
+                // 4 corner points: top-left, top-right, bottom-right, bottom-left
+                // AI coordinate system: Y increases upward, so top > bottom
+                AIPathSegment segs[4];
+                segs[0].p = {(AIReal)x,       (AIReal)y};
+                segs[1].p = {(AIReal)(x + w),  (AIReal)y};
+                segs[2].p = {(AIReal)(x + w),  (AIReal)(y - h)};
+                segs[3].p = {(AIReal)x,        (AIReal)(y - h)};
+                for (int i = 0; i < 4; i++) {
+                    segs[i].in  = segs[i].p;
+                    segs[i].out = segs[i].p;
+                    segs[i].corner = true;
+                }
+                sAIPath->SetPathSegmentCount(newPath, 4);
+                sAIPath->SetPathSegments(newPath, 0, 4, segs);
+                sAIPath->SetPathClosed(newPath, true);
+            } else {
+                // Ellipse: 4 bezier points approximating an ellipse
+                // Standard bezier circle constant: kappa = 4*(sqrt(2)-1)/3 ~ 0.5522847498
+                const double kappa = 0.5522847498;
+                double cx = x + w / 2.0;
+                double cy = y - h / 2.0;
+                double rx = w / 2.0;
+                double ry = h / 2.0;
+
+                AIPathSegment segs[4];
+                // Top
+                segs[0].p   = {(AIReal)cx,              (AIReal)(cy + ry)};
+                segs[0].in  = {(AIReal)(cx + rx*kappa),  (AIReal)(cy + ry)};
+                segs[0].out = {(AIReal)(cx - rx*kappa),  (AIReal)(cy + ry)};
+                segs[0].corner = false;
+                // Left
+                segs[1].p   = {(AIReal)(cx - rx),        (AIReal)cy};
+                segs[1].in  = {(AIReal)(cx - rx),        (AIReal)(cy + ry*kappa)};
+                segs[1].out = {(AIReal)(cx - rx),        (AIReal)(cy - ry*kappa)};
+                segs[1].corner = false;
+                // Bottom
+                segs[2].p   = {(AIReal)cx,              (AIReal)(cy - ry)};
+                segs[2].in  = {(AIReal)(cx - rx*kappa),  (AIReal)(cy - ry)};
+                segs[2].out = {(AIReal)(cx + rx*kappa),  (AIReal)(cy - ry)};
+                segs[2].corner = false;
+                // Right
+                segs[3].p   = {(AIReal)(cx + rx),        (AIReal)cy};
+                segs[3].in  = {(AIReal)(cx + rx),        (AIReal)(cy - ry*kappa)};
+                segs[3].out = {(AIReal)(cx + rx),        (AIReal)(cy + ry*kappa)};
+                segs[3].corner = false;
+
+                sAIPath->SetPathSegmentCount(newPath, 4);
+                sAIPath->SetPathSegments(newPath, 0, 4, segs);
+                sAIPath->SetPathClosed(newPath, true);
+            }
+
+            // Style
+            AIPathStyle style;
+            memset(&style, 0, sizeof(style));
+
+            if (body.contains("fill_r") && !body["fill_r"].is_null()) {
+                style.fillPaint = true;
+                style.fill.color.kind = kThreeColor;
+                style.fill.color.c.rgb.red   = (AIReal)(body.value("fill_r", 0.0) / 255.0);
+                style.fill.color.c.rgb.green = (AIReal)(body.value("fill_g", 0.0) / 255.0);
+                style.fill.color.c.rgb.blue  = (AIReal)(body.value("fill_b", 0.0) / 255.0);
+            } else {
+                style.fillPaint = false;
+            }
+
+            if (body.contains("stroke_r") && !body["stroke_r"].is_null()) {
+                style.strokePaint = true;
+                style.stroke.width = (AIReal)body.value("stroke_width", 1.0);
+                style.stroke.color.kind = kThreeColor;
+                style.stroke.color.c.rgb.red   = (AIReal)(body.value("stroke_r", 0.0) / 255.0);
+                style.stroke.color.c.rgb.green = (AIReal)(body.value("stroke_g", 0.0) / 255.0);
+                style.stroke.color.c.rgb.blue  = (AIReal)(body.value("stroke_b", 0.0) / 255.0);
+            } else {
+                style.strokePaint = true;
+                style.stroke.width = (AIReal)1.0;
+                style.stroke.color.kind = kThreeColor;
+                style.stroke.color.c.rgb.red   = 0;
+                style.stroke.color.c.rgb.green = 0;
+                style.stroke.color.c.rgb.blue  = 0;
+            }
+
+            sAIPathStyle->SetPathStyle(newPath, &style);
+
+            // Name (optional)
+            if (body.contains("name") && body["name"].is_string()) {
+                sAIArt->SetArtName(newPath, ai::UnicodeString(body["name"].get<std::string>()));
+            }
+
+            sAIArt->SetArtUserAttr(newPath, kArtSelected, kArtSelected);
+            if (sAIDocument) sAIDocument->RedrawDocument();
+
+            resp["ok"] = true;
+            resp["shape"] = shape;
+            fprintf(stderr, "[IllTool MCP] /api/create_shape: %s at (%.0f,%.0f) %.0fx%.0f\n",
+                    shape.c_str(), x, y, w, h);
+            break;
+        }
+
+        //----------------------------------------------------------------
+        //  McpLayers — list, create, or rename layers
+        //----------------------------------------------------------------
+        case OpType::McpLayers: {
+            json body = json::parse(op.strParam);
+            std::string action = body.value("action", "list");
+
+            if (action == "list") {
+                json layersArr = json::array();
+                if (sAILayer) {
+                    ai::int32 layerCount = 0;
+                    sAILayer->CountLayers(&layerCount);
+                    for (ai::int32 i = 0; i < layerCount; i++) {
+                        AILayerHandle layer = nullptr;
+                        if (sAILayer->GetNthLayer(i, &layer) != kNoErr) continue;
+
+                        json layerObj;
+                        ai::UnicodeString title;
+                        sAILayer->GetLayerTitle(layer, title);
+                        std::string titleStr;
+                        titleStr = title.as_UTF8();
+                        layerObj["name"] = titleStr;
+                        layerObj["index"] = (int)i;
+
+                        AIBoolean visible = true, editable = true;
+                        sAILayer->GetLayerVisible(layer, &visible);
+                        sAILayer->GetLayerEditable(layer, &editable);
+                        layerObj["visible"]  = (bool)visible;
+                        layerObj["editable"] = (bool)editable;
+
+                        layersArr.push_back(layerObj);
+                    }
+                }
+                resp["ok"] = true;
+                resp["layers"] = layersArr;
+                resp["count"] = (int)layersArr.size();
+                fprintf(stderr, "[IllTool MCP] /api/layers list: %d layers\n", (int)layersArr.size());
+            }
+            else if (action == "create") {
+                std::string name = body.value("name", "New Layer");
+                if (sAILayer) {
+                    AILayerHandle newLayer = nullptr;
+                    ASErr err = sAILayer->InsertLayer(nullptr, kPlaceAboveAll, &newLayer);
+                    if (err == kNoErr && newLayer) {
+                        ai::UnicodeString uName(name);
+                        sAILayer->SetLayerTitle(newLayer, uName);
+                        resp["ok"] = true;
+                        resp["name"] = name;
+                        fprintf(stderr, "[IllTool MCP] /api/layers create: '%s'\n", name.c_str());
+                    } else {
+                        resp["ok"] = false;
+                        resp["error"] = "InsertLayer failed";
+                    }
+                } else {
+                    resp["ok"] = false;
+                    resp["error"] = "AILayerSuite not available";
+                }
+            }
+            else if (action == "rename") {
+                std::string name = body.value("name", "");
+                std::string newName = body.value("new_name", "");
+                if (name.empty() || newName.empty()) {
+                    resp["ok"] = false;
+                    resp["error"] = "Both 'name' and 'new_name' required";
+                    break;
+                }
+                if (sAILayer) {
+                    AILayerHandle layer = nullptr;
+                    ai::UnicodeString uName(name);
+                    ASErr err = sAILayer->GetLayerByTitle(&layer, uName);
+                    if (err == kNoErr && layer) {
+                        ai::UnicodeString uNewName(newName);
+                        sAILayer->SetLayerTitle(layer, uNewName);
+                        resp["ok"] = true;
+                        resp["old_name"] = name;
+                        resp["new_name"] = newName;
+                        fprintf(stderr, "[IllTool MCP] /api/layers rename: '%s' -> '%s'\n",
+                                name.c_str(), newName.c_str());
+                    } else {
+                        resp["ok"] = false;
+                        resp["error"] = "Layer not found: " + name;
+                    }
+                } else {
+                    resp["ok"] = false;
+                    resp["error"] = "AILayerSuite not available";
+                }
+            }
+            break;
+        }
+
+        //----------------------------------------------------------------
+        //  McpSelect — select art by criteria
+        //----------------------------------------------------------------
+        case OpType::McpSelect: {
+            json body = json::parse(op.strParam);
+            std::string action = body.value("action", "none");
+            int affected = 0;
+
+            if (action == "none") {
+                // Deselect all — iterate all art types and clear selection
+                short artTypes[] = {kPathArt, kGroupArt, kPlacedArt, kCompoundPathArt, kTextFrameArt};
+                for (int t = 0; t < 5; t++) {
+                    AIMatchingArtSpec spec;
+                    spec.type = artTypes[t];
+                    spec.whichAttr = kArtSelected;
+                    spec.attr = kArtSelected;
+                    AIArtHandle** matches = nullptr;
+                    ai::int32 numMatches = 0;
+                    if (GetMatchingArtIsolationAware(&spec, 1, &matches, &numMatches) == kNoErr && numMatches > 0) {
+                        for (ai::int32 i = 0; i < numMatches; i++) {
+                            sAIArt->SetArtUserAttr((*matches)[i], kArtSelected, 0);
+                            affected++;
+                        }
+                        sAIMdMemory->MdMemoryDisposeHandle((AIMdMemoryHandle)matches);
+                    }
+                }
+                resp["ok"] = true;
+                resp["deselected"] = affected;
+            }
+            else if (action == "all") {
+                // Select all visible/unlocked path art
+                AIMatchingArtSpec spec;
+                spec.type = kPathArt;
+                spec.whichAttr = 0;
+                spec.attr = 0;
+                AIArtHandle** matches = nullptr;
+                ai::int32 numMatches = 0;
+                if (GetMatchingArtIsolationAware(&spec, 1, &matches, &numMatches) == kNoErr && numMatches > 0) {
+                    for (ai::int32 i = 0; i < numMatches; i++) {
+                        ai::int32 attrs = 0;
+                        sAIArt->GetArtUserAttr((*matches)[i], kArtLocked | kArtHidden, &attrs);
+                        if (attrs & (kArtLocked | kArtHidden)) continue;
+                        sAIArt->SetArtUserAttr((*matches)[i], kArtSelected, kArtSelected);
+                        affected++;
+                    }
+                    sAIMdMemory->MdMemoryDisposeHandle((AIMdMemoryHandle)matches);
+                }
+                resp["ok"] = true;
+                resp["selected"] = affected;
+            }
+            else if (action == "by_name") {
+                std::string targetName = body.value("name", "");
+                if (targetName.empty()) {
+                    resp["ok"] = false;
+                    resp["error"] = "'name' required for by_name selection";
+                    break;
+                }
+                // Search all art types
+                short artTypes[] = {kPathArt, kGroupArt, kPlacedArt, kCompoundPathArt, kTextFrameArt};
+                for (int t = 0; t < 5; t++) {
+                    AIMatchingArtSpec spec;
+                    spec.type = artTypes[t];
+                    spec.whichAttr = 0;
+                    spec.attr = 0;
+                    AIArtHandle** matches = nullptr;
+                    ai::int32 numMatches = 0;
+                    if (GetMatchingArtIsolationAware(&spec, 1, &matches, &numMatches) == kNoErr && numMatches > 0) {
+                        for (ai::int32 i = 0; i < numMatches; i++) {
+                            ai::UnicodeString artName;
+                            AIBoolean isDefault = true;
+                            sAIArt->GetArtName((*matches)[i], artName, &isDefault);
+                            if (!isDefault) {
+                                std::string nameStr;
+                                nameStr = artName.as_UTF8();
+                                if (nameStr == targetName) {
+                                    sAIArt->SetArtUserAttr((*matches)[i], kArtSelected, kArtSelected);
+                                    affected++;
+                                }
+                            }
+                        }
+                        sAIMdMemory->MdMemoryDisposeHandle((AIMdMemoryHandle)matches);
+                    }
+                }
+                resp["ok"] = true;
+                resp["selected"] = affected;
+            }
+            else if (action == "by_type") {
+                std::string typeName = body.value("type", "path");
+                short artType = kPathArt;
+                if (typeName == "group") artType = kGroupArt;
+                else if (typeName == "placed") artType = kPlacedArt;
+                else if (typeName == "compound_path") artType = kCompoundPathArt;
+                else if (typeName == "text_frame") artType = kTextFrameArt;
+
+                AIMatchingArtSpec spec;
+                spec.type = artType;
+                spec.whichAttr = 0;
+                spec.attr = 0;
+                AIArtHandle** matches = nullptr;
+                ai::int32 numMatches = 0;
+                if (GetMatchingArtIsolationAware(&spec, 1, &matches, &numMatches) == kNoErr && numMatches > 0) {
+                    for (ai::int32 i = 0; i < numMatches; i++) {
+                        ai::int32 attrs = 0;
+                        sAIArt->GetArtUserAttr((*matches)[i], kArtLocked | kArtHidden, &attrs);
+                        if (attrs & (kArtLocked | kArtHidden)) continue;
+                        sAIArt->SetArtUserAttr((*matches)[i], kArtSelected, kArtSelected);
+                        affected++;
+                    }
+                    sAIMdMemory->MdMemoryDisposeHandle((AIMdMemoryHandle)matches);
+                }
+                resp["ok"] = true;
+                resp["selected"] = affected;
+            }
+
+            fprintf(stderr, "[IllTool MCP] /api/select %s: %d affected\n", action.c_str(), affected);
+            break;
+        }
+
+        //----------------------------------------------------------------
+        //  McpModify — transform/style/delete selected art
+        //----------------------------------------------------------------
+        case OpType::McpModify: {
+            json body = json::parse(op.strParam);
+            std::string action = body.value("action", "");
+            int modified = 0;
+
+            // Get selected art (paths, groups, placed, etc.)
+            short artTypes[] = {kPathArt, kGroupArt, kPlacedArt, kCompoundPathArt};
+            std::vector<AIArtHandle> selectedArt;
+            for (int t = 0; t < 4; t++) {
+                AIMatchingArtSpec spec;
+                spec.type = artTypes[t];
+                spec.whichAttr = kArtSelected;
+                spec.attr = kArtSelected;
+                AIArtHandle** matches = nullptr;
+                ai::int32 numMatches = 0;
+                if (GetMatchingArtIsolationAware(&spec, 1, &matches, &numMatches) == kNoErr && numMatches > 0) {
+                    for (ai::int32 i = 0; i < numMatches; i++) {
+                        selectedArt.push_back((*matches)[i]);
+                    }
+                    sAIMdMemory->MdMemoryDisposeHandle((AIMdMemoryHandle)matches);
+                }
+            }
+
+            if (selectedArt.empty()) {
+                resp["ok"] = true;
+                resp["modified"] = 0;
+                resp["message"] = "No art selected";
+                break;
+            }
+
+            if (action == "move") {
+                double dx = body.value("dx", 0.0);
+                double dy = body.value("dy", 0.0);
+                for (auto art : selectedArt) {
+                    short artType = kAnyArt;
+                    sAIArt->GetArtType(art, &artType);
+                    if (artType == kPathArt) {
+                        ai::int16 segCount = 0;
+                        sAIPath->GetPathSegmentCount(art, &segCount);
+                        if (segCount == 0) continue;
+                        std::vector<AIPathSegment> segs(segCount);
+                        sAIPath->GetPathSegments(art, 0, segCount, segs.data());
+                        for (auto& seg : segs) {
+                            seg.p.h   += (AIReal)dx;  seg.p.v   += (AIReal)dy;
+                            seg.in.h  += (AIReal)dx;  seg.in.v  += (AIReal)dy;
+                            seg.out.h += (AIReal)dx;  seg.out.v += (AIReal)dy;
+                        }
+                        sAIPath->SetPathSegments(art, 0, segCount, segs.data());
+                        modified++;
+                    }
+                    // For non-path art, we would need AITransformArtSuite which we may not have.
+                    // For now, only path art is transformed at the segment level.
+                }
+                resp["ok"] = true;
+                resp["modified"] = modified;
+            }
+            else if (action == "scale") {
+                double sx = body.value("sx", 1.0);
+                double sy = body.value("sy", 1.0);
+                for (auto art : selectedArt) {
+                    short artType = kAnyArt;
+                    sAIArt->GetArtType(art, &artType);
+                    if (artType != kPathArt) continue;
+
+                    AIRealRect bounds;
+                    sAIArt->GetArtBounds(art, &bounds);
+                    double cx = (bounds.left + bounds.right) / 2.0;
+                    double cy = (bounds.top + bounds.bottom) / 2.0;
+
+                    ai::int16 segCount = 0;
+                    sAIPath->GetPathSegmentCount(art, &segCount);
+                    if (segCount == 0) continue;
+                    std::vector<AIPathSegment> segs(segCount);
+                    sAIPath->GetPathSegments(art, 0, segCount, segs.data());
+                    for (auto& seg : segs) {
+                        auto scalePoint = [&](AIRealPoint& pt) {
+                            pt.h = (AIReal)(cx + (pt.h - cx) * sx);
+                            pt.v = (AIReal)(cy + (pt.v - cy) * sy);
+                        };
+                        scalePoint(seg.p);
+                        scalePoint(seg.in);
+                        scalePoint(seg.out);
+                    }
+                    sAIPath->SetPathSegments(art, 0, segCount, segs.data());
+                    modified++;
+                }
+                resp["ok"] = true;
+                resp["modified"] = modified;
+            }
+            else if (action == "rotate") {
+                double degrees = body.value("degrees", 0.0);
+                double rad = degrees * M_PI / 180.0;
+                double cosA = std::cos(rad);
+                double sinA = std::sin(rad);
+                for (auto art : selectedArt) {
+                    short artType = kAnyArt;
+                    sAIArt->GetArtType(art, &artType);
+                    if (artType != kPathArt) continue;
+
+                    AIRealRect bounds;
+                    sAIArt->GetArtBounds(art, &bounds);
+                    double cx = (bounds.left + bounds.right) / 2.0;
+                    double cy = (bounds.top + bounds.bottom) / 2.0;
+
+                    ai::int16 segCount = 0;
+                    sAIPath->GetPathSegmentCount(art, &segCount);
+                    if (segCount == 0) continue;
+                    std::vector<AIPathSegment> segs(segCount);
+                    sAIPath->GetPathSegments(art, 0, segCount, segs.data());
+                    for (auto& seg : segs) {
+                        auto rotatePoint = [&](AIRealPoint& pt) {
+                            double dx = pt.h - cx;
+                            double dy = pt.v - cy;
+                            pt.h = (AIReal)(cx + dx * cosA - dy * sinA);
+                            pt.v = (AIReal)(cy + dx * sinA + dy * cosA);
+                        };
+                        rotatePoint(seg.p);
+                        rotatePoint(seg.in);
+                        rotatePoint(seg.out);
+                    }
+                    sAIPath->SetPathSegments(art, 0, segCount, segs.data());
+                    modified++;
+                }
+                resp["ok"] = true;
+                resp["modified"] = modified;
+            }
+            else if (action == "set_stroke") {
+                double r = body.value("r", 0.0) / 255.0;
+                double g = body.value("g", 0.0) / 255.0;
+                double b = body.value("b", 0.0) / 255.0;
+                double w = body.value("width", 1.0);
+                for (auto art : selectedArt) {
+                    short artType = kAnyArt;
+                    sAIArt->GetArtType(art, &artType);
+                    if (artType != kPathArt) continue;
+
+                    AIPathStyle style;
+                    AIBoolean hasAdvFill = false;
+                    if (sAIPathStyle->GetPathStyle(art, &style, &hasAdvFill) == kNoErr) {
+                        style.strokePaint = true;
+                        style.stroke.width = (AIReal)w;
+                        style.stroke.color.kind = kThreeColor;
+                        style.stroke.color.c.rgb.red   = (AIReal)r;
+                        style.stroke.color.c.rgb.green = (AIReal)g;
+                        style.stroke.color.c.rgb.blue  = (AIReal)b;
+                        sAIPathStyle->SetPathStyle(art, &style);
+                        modified++;
+                    }
+                }
+                resp["ok"] = true;
+                resp["modified"] = modified;
+            }
+            else if (action == "set_fill") {
+                bool removeFill = body.value("none", false);
+                for (auto art : selectedArt) {
+                    short artType = kAnyArt;
+                    sAIArt->GetArtType(art, &artType);
+                    if (artType != kPathArt) continue;
+
+                    AIPathStyle style;
+                    AIBoolean hasAdvFill = false;
+                    if (sAIPathStyle->GetPathStyle(art, &style, &hasAdvFill) == kNoErr) {
+                        if (removeFill) {
+                            style.fillPaint = false;
+                        } else {
+                            style.fillPaint = true;
+                            style.fill.color.kind = kThreeColor;
+                            style.fill.color.c.rgb.red   = (AIReal)(body.value("r", 0.0) / 255.0);
+                            style.fill.color.c.rgb.green = (AIReal)(body.value("g", 0.0) / 255.0);
+                            style.fill.color.c.rgb.blue  = (AIReal)(body.value("b", 0.0) / 255.0);
+                        }
+                        sAIPathStyle->SetPathStyle(art, &style);
+                        modified++;
+                    }
+                }
+                resp["ok"] = true;
+                resp["modified"] = modified;
+            }
+            else if (action == "set_name") {
+                std::string name = body.value("name", "");
+                for (auto art : selectedArt) {
+                    sAIArt->SetArtName(art, ai::UnicodeString(name));
+                    modified++;
+                }
+                resp["ok"] = true;
+                resp["modified"] = modified;
+            }
+            else if (action == "delete") {
+                // Deduplicate handles to prevent double-dispose
+                // (same art can appear via multiple type queries or parent/child)
+                std::set<AIArtHandle> unique(selectedArt.begin(), selectedArt.end());
+                // Delete in reverse order of insertion (top-level first)
+                std::vector<AIArtHandle> deduped(unique.begin(), unique.end());
+                for (int i = (int)deduped.size() - 1; i >= 0; i--) {
+                    short artType = 0;
+                    ASErr dispErr = sAIArt->GetArtType(deduped[i], &artType);
+                    if (dispErr == kNoErr) {
+                        sAIArt->DisposeArt(deduped[i]);
+                        modified++;
+                    }
+                }
+                resp["ok"] = true;
+                resp["deleted"] = modified;
+            }
+
+            if (modified > 0 && sAIDocument) {
+                sAIDocument->RedrawDocument();
+            }
+            fprintf(stderr, "[IllTool MCP] /api/modify %s: %d modified\n", action.c_str(), modified);
+            break;
+        }
+
+        default:
+            resp["ok"] = false;
+            resp["error"] = "Unknown MCP operation type";
+            break;
+        }
+    }
+    catch (const std::exception& e) {
+        resp["ok"] = false;
+        resp["error"] = std::string("SDK error: ") + e.what();
+        fprintf(stderr, "[IllTool MCP] Exception: %s\n", e.what());
+    }
+    catch (...) {
+        resp["ok"] = false;
+        resp["error"] = "Unknown SDK error";
+        fprintf(stderr, "[IllTool MCP] Unknown exception\n");
+    }
+
+    // Post the result back to the waiting HTTP thread
+    BridgeMcpPostResponse(resp.dump());
 }
 
 /*
@@ -713,19 +1569,65 @@ ASErr IllToolPlugin::TrackToolCursor(AIToolMessage* message)
             }
         }
 
-        // Set cursor — arrow when editing handles (cleanup or perspective), lasso icon otherwise
+        // Set cursor — context-dependent:
+        //   Working mode + rotate zone → cross cursor (rotation)
+        //   Working mode + Option held → IBeam cursor (add point affordance)
+        //   Working mode + Shift held → cross cursor (toggle sharp/smooth)
+        //   Working mode default → arrow cursor (handle editing)
+        //   Perspective edit mode → arrow cursor
+        //   Otherwise → custom lasso SVG cursor
         if (sAIUser != NULL) {
-            bool showArrow = false;
-            if (cleanup && cleanup->IsInWorkingMode()) showArrow = true;
+            // Check modifier keys via Cocoa (always available, unlike AIEvent)
+            NSUInteger modFlags = [NSEvent modifierFlags];
+            bool optionHeld = (modFlags & NSEventModifierFlagOption) != 0;
+            bool shiftHeld  = (modFlags & NSEventModifierFlagShift) != 0;
 
-            // Show arrow when in perspective edit mode
-            if (!showArrow) {
-                auto* persp = GetModule<PerspectiveModule>();
-                if (persp && persp->IsInEditMode()) showArrow = true;
+            int cursorID = -1;  // -1 = use SVG cursor
+
+            if (cleanup && cleanup->IsInWorkingMode()) {
+                if (cleanup->fHoverBBoxIdx == 8) {
+                    cursorID = kAICrossCursorID;   // rotate zone
+                } else if (optionHeld) {
+                    cursorID = kAIIBeamCursorID;   // add point (pen+ affordance)
+                } else if (shiftHeld) {
+                    cursorID = kAICrossCursorID;   // toggle sharp/smooth
+                } else {
+                    cursorID = kAIArrowCursorID;   // handle editing
+                }
             }
 
-            if (showArrow) {
-                sAIUser->SetCursor(kAIArrowCursorID, fResourceManagerHandle);
+            // Blend pick mode — custom SVG cursor with A/B badge
+            if (cursorID < 0) {
+                int blendPick = BridgeGetBlendPickMode();
+                if (blendPick == 1) {
+                    sAIUser->SetSVGCursor(kIllToolPickACursorID, fResourceManagerHandle);
+                    cursorID = -2;  // sentinel: SVG cursor already set
+                } else if (blendPick == 2) {
+                    sAIUser->SetSVGCursor(kIllToolPickBCursorID, fResourceManagerHandle);
+                    cursorID = -2;  // sentinel: SVG cursor already set
+                }
+            }
+
+            // Surface extract mode — crosshair cursor
+            if (cursorID < 0 && BridgeGetSurfaceExtractMode()) {
+                cursorID = kAICrossCursorID;
+            }
+
+            // Shading eyedropper mode
+            if (cursorID < 0 && BridgeGetShadingEyedropperMode()) {
+                cursorID = kAIIBeamCursorID;  // eyedropper-like
+            }
+
+            // Show arrow when in perspective edit mode
+            if (cursorID < 0) {
+                auto* persp = GetModule<PerspectiveModule>();
+                if (persp && persp->IsInEditMode()) cursorID = kAIArrowCursorID;
+            }
+
+            if (cursorID == -2) {
+                // SVG cursor already set above (blend pick A/B)
+            } else if (cursorID >= 0) {
+                sAIUser->SetCursor(cursorID, fResourceManagerHandle);
             } else {
                 result = sAIUser->SetSVGCursor(kIllToolIconResourceID, fResourceManagerHandle);
             }
@@ -777,6 +1679,9 @@ ASErr IllToolPlugin::DeselectTool(AIToolMessage* message)
         } else {
             fprintf(stderr, "[IllTool] Tool deselected\n");
         }
+
+        // Clear drag-in-progress flag — tool switch can interrupt a drag
+        fDragInProgress = false;
 
         // Do NOT deactivate the annotator -- perspective grid, bounding box,
         // and other overlays must remain visible regardless of active tool.
@@ -1035,7 +1940,41 @@ ASErr IllToolPlugin::AddAppMenu(SPInterfaceMessage* message)
             fprintf(stderr, "[IllTool] AddAppMenu: Perspective item failed: %d\n", (int)result);
         }
 
-        fprintf(stderr, "[IllTool] AddAppMenu: submenu registered with 9 items + separator\n");
+        // Toggle Perspective Lock (shortcut: Shift+Cmd+P)
+        itemData.itemText = ai::UnicodeString("Toggle Perspective Lock");
+        result = sAIMenu->AddMenuItem(message->d.self, kIllToolMenuPerspToggleItem,
+                                       &itemData, kMenuItemWantsUpdateOption,
+                                       &fMenuPerspToggleHandle);
+        if (result == kNoErr) {
+            // Assign Cmd+Shift+P as default shortcut
+            sAIMenu->SetItemCmd(fMenuPerspToggleHandle, 'P', kMenuItemCmdShiftModifier);
+        }
+
+        // Transform All
+        itemData.itemText = ai::UnicodeString("Transform All");
+        result = sAIMenu->AddMenuItem(message->d.self, "IllTool Menu Transform",
+                                       &itemData, kMenuItemWantsUpdateOption,
+                                       &fTransformMenuHandle);
+
+        // Ill Trace
+        itemData.itemText = ai::UnicodeString("Ill Trace");
+        result = sAIMenu->AddMenuItem(message->d.self, "IllTool Menu Trace",
+                                       &itemData, kMenuItemWantsUpdateOption,
+                                       &fTraceMenuHandle);
+
+        // Ill Surface
+        itemData.itemText = ai::UnicodeString("Ill Surface");
+        result = sAIMenu->AddMenuItem(message->d.self, "IllTool Menu Surface",
+                                       &itemData, kMenuItemWantsUpdateOption,
+                                       &fSurfaceMenuHandle);
+
+        // Step 5: Assign default keyboard shortcuts
+        // All shortcuts use Cmd+Shift+key (kMenuItemCmdShiftModifier = Cmd is implied).
+        // These appear in Edit > Keyboard Shortcuts and can be customized by the user.
+        if (fMenuLassoHandle)  sAIMenu->SetItemCmd(fMenuLassoHandle, 'L', kMenuItemCmdShiftModifier);
+        if (fMenuSmartHandle)  sAIMenu->SetItemCmd(fMenuSmartHandle, 'J', kMenuItemCmdShiftModifier);
+
+        fprintf(stderr, "[IllTool] AddAppMenu: submenu registered with shortcuts\n");
         result = kNoErr;  // Individual item failures are non-fatal
     }
     catch (ai::Error& ex) {

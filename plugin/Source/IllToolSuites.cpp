@@ -38,6 +38,11 @@ extern "C"
     AIDictionarySuite*          sAIDictionary = NULL;
     AIMeshSuite*                sAIMesh = NULL;
     AIMeshVertexIteratorSuite*  sAIMeshVertex = NULL;
+    AIUndoSuite*                sAIUndo = NULL;
+    AIPlacedSuite*              sAIPlaced = NULL;
+    AICursorSnapSuite*          sAICursorSnap = NULL;
+    AIPreferenceSuite*          sAIPreference = NULL;
+    AIArtboardSuite*            sAIArtboard = NULL;
 }
 
 ImportSuite gImportSuites[] =
@@ -67,6 +72,11 @@ ImportSuite gImportSuites[] =
     kAIDictionarySuite, kAIDictionarySuiteVersion, &sAIDictionary,
     kAIMeshSuite, kAIMeshSuiteVersion, &sAIMesh,
     kAIMeshVertexIteratorSuite, kAIMeshVertexIteratorSuiteVersion, &sAIMeshVertex,
+    kAIUndoSuite, kAIUndoSuiteVersion, &sAIUndo,
+    kAIPlacedSuite, kAIPlacedSuiteVersion, &sAIPlaced,
+    kAICursorSnapSuite, kAICursorSnapVersion, &sAICursorSnap,
+    kAIPreferenceSuite, kAIPreferenceVersion, &sAIPreference,
+    kAIArtboardSuite, kAIArtboardSuiteVersion, &sAIArtboard,
     nullptr, 0, nullptr
 };
 // End IllToolSuites.cpp

@@ -21,6 +21,7 @@ public:
     bool HandleOp(const PluginOp& op) override;
     bool CanUndo() override;
     void Undo() override;
+    void DrawOverlay(AIAnnotatorMessage* msg) override;
     void OnDocumentChanged() override;
 
 private:
