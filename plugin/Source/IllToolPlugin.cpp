@@ -765,6 +765,27 @@ void IllToolPlugin::ProcessOperationQueue()
             BridgeRequeueOp(op);  // put it back for next tick
             break;
         }
+        // Set undo context for all mutating operations so Cmd+Z works globally.
+        // Read-only ops (Classify) don't need this, but it's harmless to set it.
+        if (sAIUndo) {
+            const char* undoName = "Undo IllTool";
+            switch (op.type) {
+                case OpType::Trace:              undoName = "Undo Trace"; break;
+                case OpType::AverageSelection:   undoName = "Undo Shape Cleanup"; break;
+                case OpType::WorkingApply:       undoName = "Undo Apply"; break;
+                case OpType::BlendExecute:       undoName = "Undo Blend"; break;
+                case OpType::MergeEndpoints:     undoName = "Undo Merge"; break;
+                case OpType::ShadingApplyBlend:
+                case OpType::ShadingApplyMesh:   undoName = "Undo Shading"; break;
+                case OpType::TransformApply:     undoName = "Undo Transform"; break;
+                case OpType::Decompose:          undoName = "Undo Decompose"; break;
+                case OpType::SurfaceExtract:     undoName = "Undo Extract"; break;
+                default: break;
+            }
+            sAIUndo->SetUndoTextUS(ai::UnicodeString(undoName),
+                                    ai::UnicodeString(undoName));  // redo text same
+        }
+
         bool handled = false;
         for (auto& mod : fModules) {
             if (mod->HandleOp(op)) { handled = true; break; }

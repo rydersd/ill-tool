@@ -194,6 +194,11 @@ bool TraceModule::HandleOp(const PluginOp& op)
 {
     switch (op.type) {
         case OpType::Trace: {
+            // Set undo context so Cmd+Z can undo the entire trace operation
+            if (sAIUndo) {
+                sAIUndo->SetUndoTextUS(ai::UnicodeString("Undo Trace"),
+                                        ai::UnicodeString("Redo Trace"));
+            }
             // Dispatch based on backend name in strParam
             std::string backend = op.strParam;
             if (backend == "normal_ref" || backend == "form_edge") {
@@ -494,29 +499,74 @@ void TraceModule::ExecuteTrace()
     int colorPrec = BridgeGetTraceColorPrecision();
     int outputMode = BridgeGetTraceOutputMode();  // 0=outline, 1=fill, 2=centerline
 
-    // --- Centerline mode: skeletonize first, then trace the skeleton ---
+    // --- Centerline mode: Canny edges → skeletonize → trace ---
+    // Canny finds actual stroke edges (ignores gradual shading).
+    // Skeleton of the edge image gives single-pixel centerlines of drawn strokes.
     std::string traceInputPath = imagePath;
     if (outputMode == 2) {
-        BridgeSetTraceStatus("Skeletonizing...");
+        BridgeSetTraceStatus("Finding edges...");
+        VisionEngine& ve = VisionEngine::Instance();
+
         int imgW = 0, imgH = 0, imgC = 0;
         unsigned char* gray = stbi_load(imagePath.c_str(), &imgW, &imgH, &imgC, 1);
         if (!gray) {
-            BridgeSetTraceStatus("Failed to load image for skeletonization");
+            BridgeSetTraceStatus("Failed to load image for centerline");
             fTraceInProgress = false;
             return;
         }
-        unsigned char* skeleton = VisionEngine::Skeletonize(gray, imgW, imgH, 128);
+
+        // Step 1: Canny edge detection — finds actual drawn lines, not shaded regions
+        // Use the VisionEngine's built-in Canny
+        ve.LoadImage(imagePath.c_str());
+        auto edges = ve.CannyEdges(30.0, 100.0);  // low/high thresholds
+
+        if (edges.empty() || (int)edges.size() != imgW * imgH) {
+            fprintf(stderr, "[TraceModule] Canny failed (got %d pixels, expected %d)\n",
+                    (int)edges.size(), imgW * imgH);
+            stbi_image_free(gray);
+            BridgeSetTraceStatus("Edge detection failed");
+            fTraceInProgress = false;
+            return;
+        }
+
+        // Step 2: Dilate edges slightly (3x3 kernel) so skeleton has material to work with
+        std::vector<unsigned char> dilated(imgW * imgH, 0);
+        for (int y = 1; y < imgH - 1; y++) {
+            for (int x = 1; x < imgW - 1; x++) {
+                // If any pixel in 3x3 neighborhood is an edge, set this pixel
+                bool hasEdge = false;
+                for (int dy = -1; dy <= 1 && !hasEdge; dy++) {
+                    for (int dx = -1; dx <= 1 && !hasEdge; dx++) {
+                        if (edges[(y+dy) * imgW + (x+dx)] > 0) hasEdge = true;
+                    }
+                }
+                dilated[y * imgW + x] = hasEdge ? 255 : 0;
+            }
+        }
+
+        // Step 3: Skeletonize the dilated edge image
+        // Invert for Skeletonize (it expects dark=foreground): edges are white, need to flip
+        std::vector<unsigned char> inverted(imgW * imgH);
+        for (int i = 0; i < imgW * imgH; i++) {
+            inverted[i] = (dilated[i] > 0) ? 0 : 255;  // edge pixels become dark (foreground)
+        }
+
+        BridgeSetTraceStatus("Skeletonizing edges...");
+        unsigned char* skeleton = VisionEngine::Skeletonize(inverted.data(), imgW, imgH, 128);
         stbi_image_free(gray);
+
         if (!skeleton) {
             BridgeSetTraceStatus("Skeletonization failed");
             fTraceInProgress = false;
             return;
         }
+
         const char* skelPath = "/tmp/illtool_skeleton.png";
         stbi_write_png(skelPath, imgW, imgH, 1, skeleton, imgW);
         delete[] skeleton;
         traceInputPath = skelPath;
-        fprintf(stderr, "[TraceModule] Skeleton saved to %s (%dx%d)\n", skelPath, imgW, imgH);
+        fprintf(stderr, "[TraceModule] Centerline: Canny→dilate→skeleton saved to %s (%dx%d)\n",
+                skelPath, imgW, imgH);
     }
 
     const char* colormode = (outputMode == 2) ? "bw" : (outputMode == 0) ? "bw" : "color";
@@ -1040,8 +1090,8 @@ void TraceModule::CreatePathsFromSVG(const std::string& svgContent)
                 memset(&style, 0, sizeof(style));
                 style.stroke.miterLimit = (AIReal)4.0;
 
-                int traceOutputMode = BridgeGetTraceOutputMode();  // 0=outline, 1=fill
-                if (traceOutputMode == 0) {
+                int traceOutputMode = BridgeGetTraceOutputMode();  // 0=outline, 1=fill, 2=centerline
+                if (traceOutputMode == 0 || traceOutputMode == 2) {
                     // Outline mode: 1pt black stroke, no fill
                     style.fillPaint = false;
                     style.strokePaint = true;
