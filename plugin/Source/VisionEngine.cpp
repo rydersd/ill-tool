@@ -2042,3 +2042,124 @@ unsigned char* VisionEngine::GenerateNormalFromHeight(const unsigned char* heigh
     VE_LOG("GenerateNormalFromHeight: %dx%d strength=%.1f", w, h, strength);
     return normals;
 }
+
+//========================================================================================
+//  Skeletonize — Zhang-Suen thinning algorithm
+//========================================================================================
+
+unsigned char* VisionEngine::Skeletonize(const unsigned char* grayscale,
+                                          int w, int h, int threshold)
+{
+    if (!grayscale || w <= 0 || h <= 0) return nullptr;
+
+    const int size = w * h;
+
+    // Create binary image: pixel < threshold → 1 (foreground), else → 0
+    std::vector<uint8_t> img(size, 0);
+    for (int i = 0; i < size; i++) {
+        img[i] = (grayscale[i] < threshold) ? 1 : 0;
+    }
+
+    // Neighbor offsets: p2=N, p3=NE, p4=E, p5=SE, p6=S, p7=SW, p8=W, p9=NW
+    // Index order for clockwise traversal starting from N:
+    //   p2(N), p3(NE), p4(E), p5(SE), p6(S), p7(SW), p8(W), p9(NW)
+    const int dx[8] = {  0,  1,  1,  1,  0, -1, -1, -1 };  // column offsets
+    const int dy[8] = { -1, -1,  0,  1,  1,  1,  0, -1 };  // row offsets
+
+    std::vector<int> toDelete;
+    bool changed = true;
+
+    while (changed) {
+        changed = false;
+
+        // --- Sub-iteration 1 ---
+        toDelete.clear();
+        for (int y = 1; y < h - 1; y++) {
+            for (int x = 1; x < w - 1; x++) {
+                int idx = y * w + x;
+                if (img[idx] == 0) continue;
+
+                // Get 8 neighbors in clockwise order: p2,p3,p4,p5,p6,p7,p8,p9
+                uint8_t p[8];
+                for (int k = 0; k < 8; k++) {
+                    p[k] = img[(y + dy[k]) * w + (x + dx[k])];
+                }
+                // p[0]=p2(N), p[1]=p3(NE), p[2]=p4(E), p[3]=p5(SE),
+                // p[4]=p6(S), p[5]=p7(SW), p[6]=p8(W), p[7]=p9(NW)
+
+                // B(p1) = number of non-zero neighbors
+                int B = 0;
+                for (int k = 0; k < 8; k++) B += p[k];
+
+                if (B < 2 || B > 6) continue;
+
+                // A(p1) = number of 0→1 transitions in the ordered sequence
+                int A = 0;
+                for (int k = 0; k < 8; k++) {
+                    if (p[k] == 0 && p[(k + 1) % 8] == 1) A++;
+                }
+
+                if (A != 1) continue;
+
+                // Sub-iteration 1 conditions:
+                // p2 * p4 * p6 == 0
+                if (p[0] * p[2] * p[4] != 0) continue;
+                // p4 * p6 * p8 == 0
+                if (p[2] * p[4] * p[6] != 0) continue;
+
+                toDelete.push_back(idx);
+            }
+        }
+        for (int idx : toDelete) {
+            img[idx] = 0;
+            changed = true;
+        }
+
+        // --- Sub-iteration 2 ---
+        toDelete.clear();
+        for (int y = 1; y < h - 1; y++) {
+            for (int x = 1; x < w - 1; x++) {
+                int idx = y * w + x;
+                if (img[idx] == 0) continue;
+
+                uint8_t p[8];
+                for (int k = 0; k < 8; k++) {
+                    p[k] = img[(y + dy[k]) * w + (x + dx[k])];
+                }
+
+                int B = 0;
+                for (int k = 0; k < 8; k++) B += p[k];
+
+                if (B < 2 || B > 6) continue;
+
+                int A = 0;
+                for (int k = 0; k < 8; k++) {
+                    if (p[k] == 0 && p[(k + 1) % 8] == 1) A++;
+                }
+
+                if (A != 1) continue;
+
+                // Sub-iteration 2 conditions:
+                // p2 * p4 * p8 == 0
+                if (p[0] * p[2] * p[6] != 0) continue;
+                // p2 * p6 * p8 == 0
+                if (p[0] * p[4] * p[6] != 0) continue;
+
+                toDelete.push_back(idx);
+            }
+        }
+        for (int idx : toDelete) {
+            img[idx] = 0;
+            changed = true;
+        }
+    }
+
+    // Convert to output: foreground (1) → 255, background (0) → 0
+    unsigned char* result = new unsigned char[size];
+    for (int i = 0; i < size; i++) {
+        result[i] = img[i] ? 255 : 0;
+    }
+
+    VE_LOG("Skeletonize: %dx%d threshold=%d", w, h, threshold);
+    return result;
+}

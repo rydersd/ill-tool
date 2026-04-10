@@ -533,7 +533,7 @@ int  BridgeGetTraceColorPrecision();
 void BridgeSetTraceStatus(const std::string& status);
 std::string BridgeGetTraceStatus();
 
-/** Set/get trace output mode (0=outline, 1=fill). Thread-safe. */
+/** Set/get trace output mode (0=outline, 1=fill, 2=centerline). Thread-safe. */
 void BridgeSetTraceOutputMode(int mode);
 int  BridgeGetTraceOutputMode();
 

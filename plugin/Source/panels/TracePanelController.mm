@@ -40,6 +40,7 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
 @interface TraceModelSection : NSObject
 @property (nonatomic, strong) NSButton   *disclosureButton;  // triangle + title (always visible)
 @property (nonatomic, strong) NSButton   *runButton;         // [Run] button (always visible)
+@property (nonatomic, strong) NSProgressIndicator *progressBar; // replaces Run button while tracing
 @property (nonatomic, strong) NSView     *paramContainer;    // holds sliders (visible when expanded)
 @property (nonatomic, assign) BOOL        expanded;
 @property (nonatomic, assign) CGFloat     paramHeight;       // computed height of param container
@@ -192,8 +193,8 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
     title.font = [NSFont boldSystemFontOfSize:12];
     [self.contentView addSubview:title];
 
-    // --- Output mode segmented control (Outline | Fill) ---
-    self.outputModeControl = [NSSegmentedControl segmentedControlWithLabels:@[@"Outline", @"Fill"]
+    // --- Output mode segmented control (Outline | Fill | Centerline) ---
+    self.outputModeControl = [NSSegmentedControl segmentedControlWithLabels:@[@"Outline", @"Fill", @"Centerline"]
                                                               trackingMode:NSSegmentSwitchTrackingSelectOne
                                                                     target:self
                                                                     action:@selector(outputModeChanged:)];
@@ -334,6 +335,13 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
     sec.runButton.tag = tag;
     [self.contentView addSubview:sec.runButton];
 
+    // Progress bar (hidden by default, shown during trace)
+    sec.progressBar = [[NSProgressIndicator alloc] initWithFrame:NSZeroRect];
+    sec.progressBar.style = NSProgressIndicatorStyleBar;
+    sec.progressBar.indeterminate = YES;
+    sec.progressBar.hidden = YES;
+    [self.contentView addSubview:sec.progressBar];
+
     // Parameter container
     sec.paramContainer = [[TraceFlippedView alloc] initWithFrame:NSZeroRect];
     [self.contentView addSubview:sec.paramContainer];
@@ -399,8 +407,10 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
     for (TraceModelSection *sec in self.sections) {
         // Disclosure button (left side)
         sec.disclosureButton.frame = NSMakeRect(kPadding, y, disclosureW, 20);
-        // Run button (right side, same row)
-        sec.runButton.frame = NSMakeRect(kPadding + disclosureW + 4, y, runBtnW, 20);
+        // Run button / progress bar (right side, same row)
+        NSRect runFrame = NSMakeRect(kPadding + disclosureW + 4, y, runBtnW, 20);
+        sec.runButton.frame = runFrame;
+        sec.progressBar.frame = runFrame;
         y += 22;
 
         // Parameter container (indented)
@@ -718,6 +728,11 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
     TraceModelSection *sec = self.sections[idx];
     std::string backendStr = [sec.backendName UTF8String];
 
+    // Swap Run button → progress bar
+    sec.runButton.hidden = YES;
+    sec.progressBar.hidden = NO;
+    [sec.progressBar startAnimation:nil];
+
     BridgeRequestTrace(backendStr);
 
     self.statusLabel.stringValue = [NSString stringWithFormat:@"Running %@...", sec.backendName];
@@ -877,8 +892,9 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
 - (void)outputModeChanged:(id)sender
 {
     NSInteger selected = self.outputModeControl.selectedSegment;
-    BridgeSetTraceOutputMode((int)selected);  // 0=outline, 1=fill
-    fprintf(stderr, "[TracePanel] Output mode: %s\n", selected == 0 ? "outline" : "fill");
+    BridgeSetTraceOutputMode((int)selected);  // 0=outline, 1=fill, 2=centerline
+    const char* names[] = {"outline", "fill", "centerline"};
+    fprintf(stderr, "[TracePanel] Output mode: %s\n", (selected >= 0 && selected <= 2) ? names[selected] : "unknown");
 }
 
 //----------------------------------------------------------------------------------------
@@ -890,6 +906,23 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
     std::string status = BridgeGetTraceStatus();
     if (!status.empty()) {
         self.statusLabel.stringValue = [NSString stringWithUTF8String:status.c_str()];
+
+        // Check if trace completed — status contains "Traced:" or "failed" or "error"
+        // Restore Run buttons from progress bars
+        bool done = (status.find("Traced:") != std::string::npos ||
+                     status.find("failed") != std::string::npos ||
+                     status.find("error") != std::string::npos ||
+                     status.find("references") != std::string::npos ||
+                     status.find("No image") != std::string::npos);
+        if (done) {
+            for (TraceModelSection *sec in self.sections) {
+                if (sec.runButton.hidden) {
+                    [sec.progressBar stopAnimation:nil];
+                    sec.progressBar.hidden = YES;
+                    sec.runButton.hidden = NO;
+                }
+            }
+        }
     }
 }
 

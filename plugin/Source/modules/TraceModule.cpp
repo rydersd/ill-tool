@@ -492,8 +492,36 @@ void TraceModule::ExecuteTrace()
 
     int speckle = BridgeGetTraceSpeckle();
     int colorPrec = BridgeGetTraceColorPrecision();
-    int outputMode = BridgeGetTraceOutputMode();  // 0=outline, 1=fill
-    const char* colormode = (outputMode == 0) ? "bw" : "color";
+    int outputMode = BridgeGetTraceOutputMode();  // 0=outline, 1=fill, 2=centerline
+
+    // --- Centerline mode: skeletonize first, then trace the skeleton ---
+    std::string traceInputPath = imagePath;
+    if (outputMode == 2) {
+        BridgeSetTraceStatus("Skeletonizing...");
+        int imgW = 0, imgH = 0, imgC = 0;
+        unsigned char* gray = stbi_load(imagePath.c_str(), &imgW, &imgH, &imgC, 1);
+        if (!gray) {
+            BridgeSetTraceStatus("Failed to load image for skeletonization");
+            fTraceInProgress = false;
+            return;
+        }
+        unsigned char* skeleton = VisionEngine::Skeletonize(gray, imgW, imgH, 128);
+        stbi_image_free(gray);
+        if (!skeleton) {
+            BridgeSetTraceStatus("Skeletonization failed");
+            fTraceInProgress = false;
+            return;
+        }
+        const char* skelPath = "/tmp/illtool_skeleton.png";
+        stbi_write_png(skelPath, imgW, imgH, 1, skeleton, imgW);
+        delete[] skeleton;
+        traceInputPath = skelPath;
+        fprintf(stderr, "[TraceModule] Skeleton saved to %s (%dx%d)\n", skelPath, imgW, imgH);
+    }
+
+    const char* colormode = (outputMode == 2) ? "bw" : (outputMode == 0) ? "bw" : "color";
+    // Centerline uses speckle=1 since skeleton is already clean
+    int effectiveSpeckle = (outputMode == 2) ? 1 : speckle;
 
     // Call vtracer via the project Python venv directly
     // vtracer.convert_image_to_svg_py writes SVG to disk
@@ -520,7 +548,7 @@ void TraceModule::ExecuteTrace()
         "splice_threshold=45, "
         "path_precision=3"
         ")\" 2>&1",
-        imagePath.c_str(), svgPath.c_str(), colormode, speckle, colorPrec);
+        traceInputPath.c_str(), svgPath.c_str(), colormode, effectiveSpeckle, colorPrec);
 
     fprintf(stderr, "[TraceModule] Running: %s\n", cmd);
     BridgeSetTraceStatus("Running vtracer...");

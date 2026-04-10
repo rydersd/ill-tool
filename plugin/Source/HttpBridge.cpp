@@ -581,7 +581,7 @@ std::string BridgeGetTraceStatus() {
     return gTraceStatus;
 }
 
-static std::atomic<int> gTraceOutputMode{1};  // 0=outline, 1=fill (default: fill)
+static std::atomic<int> gTraceOutputMode{1};  // 0=outline, 1=fill, 2=centerline (default: fill)
 
 void BridgeSetTraceOutputMode(int mode)  { gTraceOutputMode.store(mode); }
 int  BridgeGetTraceOutputMode()          { return gTraceOutputMode.load(); }

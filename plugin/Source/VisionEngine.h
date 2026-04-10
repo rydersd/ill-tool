@@ -194,6 +194,17 @@ public:
     static unsigned char* GenerateNormalFromHeight(const unsigned char* heightMap,
                                                     int w, int h, double strength = 2.0);
 
+    /** Skeletonize a binary image using Zhang-Suen thinning.
+        Input: grayscale image where dark pixels are foreground (< threshold).
+        Output: binary image (0=bg, 255=skeleton) same dimensions as input.
+        Caller must delete[] the result.
+        @param grayscale  Input grayscale pixels (1 channel)
+        @param w, h       Image dimensions
+        @param threshold  Pixels darker than this are foreground (default 128)
+        @return Skeletonized binary image, or nullptr on failure. */
+    static unsigned char* Skeletonize(const unsigned char* grayscale,
+                                       int w, int h, int threshold = 128);
+
     //------------------------------------------------------------------------------------
     //  Learning-integrated operations
     //------------------------------------------------------------------------------------
