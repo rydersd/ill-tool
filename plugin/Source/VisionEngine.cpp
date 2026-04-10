@@ -16,6 +16,7 @@
 #include "VisionEngine.h"
 #include "LearningEngine.h"
 
+#include <mutex>
 #include <cstdio>
 #include <cstring>
 #include <cmath>
@@ -50,6 +51,7 @@ VisionEngine::~VisionEngine() {}
 
 bool VisionEngine::LoadImage(const char* filePath)
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     if (!filePath || filePath[0] == '\0') {
         VE_LOG("ERROR: LoadImage called with null/empty path");
         return false;
@@ -76,11 +78,12 @@ bool VisionEngine::LoadImage(const char* filePath)
 
 bool VisionEngine::IsLoaded() const
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     return !pixels.empty() && imgWidth > 0 && imgHeight > 0;
 }
 
-int VisionEngine::Width() const  { return imgWidth; }
-int VisionEngine::Height() const { return imgHeight; }
+int VisionEngine::Width() const  { std::lock_guard<std::recursive_mutex> lock(mMutex); return imgWidth; }
+int VisionEngine::Height() const { std::lock_guard<std::recursive_mutex> lock(mMutex); return imgHeight; }
 
 //========================================================================================
 //  2. Gaussian blur (separable 1D convolutions)
@@ -303,7 +306,8 @@ std::vector<uint8_t> VisionEngine::HysteresisThreshold(const std::vector<double>
 // 4c. Full Canny pipeline
 std::vector<uint8_t> VisionEngine::CannyEdges(double lowThresh, double highThresh)
 {
-    if (!IsLoaded()) {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
+    if (pixels.empty() || imgWidth <= 0 || imgHeight <= 0) {
         VE_LOG("ERROR: CannyEdges called with no image loaded");
         return {};
     }
@@ -327,7 +331,8 @@ std::vector<uint8_t> VisionEngine::CannyEdges(double lowThresh, double highThres
 // Sobel edges (simpler: just threshold the gradient magnitude)
 std::vector<uint8_t> VisionEngine::SobelEdges(double threshold)
 {
-    if (!IsLoaded()) {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
+    if (pixels.empty() || imgWidth <= 0 || imgHeight <= 0) {
         VE_LOG("ERROR: SobelEdges called with no image loaded");
         return {};
     }
@@ -435,6 +440,7 @@ VisionEngine::Contour VisionEngine::TraceContour(const std::vector<uint8_t>& bin
 std::vector<VisionEngine::Contour> VisionEngine::FindContours(
     const std::vector<uint8_t>& binary, int w, int h, int minLength)
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     std::vector<Contour> contours;
     std::vector<bool> visited(w * h, false);
 
@@ -533,7 +539,8 @@ std::vector<std::pair<double,double>> VisionEngine::DouglasPeucker(
 
 std::vector<uint8_t> VisionEngine::MultiScaleEdges(int numScales, double voteThreshold)
 {
-    if (!IsLoaded()) {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
+    if (pixels.empty() || imgWidth <= 0 || imgHeight <= 0) {
         VE_LOG("ERROR: MultiScaleEdges called with no image loaded");
         return {};
     }
@@ -577,7 +584,8 @@ std::vector<uint8_t> VisionEngine::MultiScaleEdges(int numScales, double voteThr
 
 std::vector<uint8_t> VisionEngine::FloodFillMask(int seedX, int seedY, int tolerance)
 {
-    if (!IsLoaded()) {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
+    if (pixels.empty() || imgWidth <= 0 || imgHeight <= 0) {
         VE_LOG("ERROR: FloodFillMask called with no image loaded");
         return {};
     }
@@ -667,6 +675,7 @@ private:
 std::vector<std::vector<std::pair<int,int>>> VisionEngine::ConnectedComponents(
     const std::vector<uint8_t>& binary, int w, int h)
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     int n = w * h;
     DisjointSet ds(n);
 
@@ -715,6 +724,7 @@ std::vector<VisionEngine::HoughLine> VisionEngine::DetectLines(
     const std::vector<uint8_t>& edges,
     double rhoRes, double thetaRes, int threshold)
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     if (edges.empty()) return {};
 
     int w = imgWidth;
@@ -783,6 +793,7 @@ std::vector<VisionEngine::Circle> VisionEngine::DetectCircles(
     const std::vector<uint8_t>& edges,
     double minRadius, double maxRadius, int threshold)
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     if (edges.empty()) return {};
 
     int w = imgWidth;
@@ -882,7 +893,8 @@ std::vector<std::pair<double,double>> VisionEngine::SnapToEdge(
     const std::vector<std::pair<double,double>>& initialPath,
     double alpha, double beta, double gamma, int iterations)
 {
-    if (initialPath.size() < 3 || !IsLoaded()) {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
+    if (initialPath.size() < 3 || pixels.empty() || imgWidth <= 0 || imgHeight <= 0) {
         return initialPath;
     }
 
@@ -1056,6 +1068,7 @@ std::pair<double,double> VisionEngine::Centroid(const Contour& c)
 
 std::vector<int> VisionEngine::DetectNoise(const std::vector<Contour>& contours)
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     std::vector<int> noiseIndices;
 
     LearningEngine& le = LearningEngine::Instance();
@@ -1087,6 +1100,7 @@ std::vector<int> VisionEngine::DetectNoise(const std::vector<Contour>& contours)
 std::vector<VisionEngine::ContourGroup> VisionEngine::SuggestGroups(
     const std::vector<Contour>& contours)
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     int n = static_cast<int>(contours.size());
     if (n < 2) return {};
 
@@ -1249,6 +1263,187 @@ std::vector<VisionEngine::ContourGroup> VisionEngine::SuggestGroups(
 }
 
 //========================================================================================
+//  Vanishing point estimation
+//========================================================================================
+
+std::vector<VisionEngine::VanishingPointEstimate> VisionEngine::EstimateVanishingPoints(
+    int maxVPs, double cannyLow, double cannyHigh, int houghThreshold)
+{
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
+    std::vector<VanishingPointEstimate> results;
+
+    if (!IsLoaded()) {
+        VE_LOG("EstimateVanishingPoints: no image loaded");
+        return results;
+    }
+
+    VE_LOG("EstimateVanishingPoints: image %dx%d, maxVPs=%d, canny=[%.0f,%.0f], hough=%d",
+           imgWidth, imgHeight, maxVPs, cannyLow, cannyHigh, houghThreshold);
+
+    // Step 1: Edge detection
+    auto edges = CannyEdges(cannyLow, cannyHigh);
+    if (edges.empty()) {
+        VE_LOG("EstimateVanishingPoints: edge detection returned empty");
+        return results;
+    }
+
+    // Step 2: Hough line detection
+    auto lines = DetectLines(edges, 1.0, M_PI / 180.0, houghThreshold);
+    VE_LOG("EstimateVanishingPoints: %d raw lines detected", (int)lines.size());
+    if (lines.size() < 2) {
+        VE_LOG("EstimateVanishingPoints: not enough lines for VP estimation");
+        return results;
+    }
+
+    // Cap lines to top 200 by vote count (already sorted descending)
+    if (lines.size() > 200) lines.resize(200);
+
+    // Step 3: Filter near-horizontal (theta near 0 or pi) and near-vertical (theta near pi/2)
+    // In Hough space theta is in [0, pi). Horizontal lines have theta near pi/2,
+    // vertical lines have theta near 0 or pi.
+    const double kFilterDeg = 5.0;
+    const double kFilterRad = kFilterDeg * M_PI / 180.0;
+    std::vector<HoughLine> perspLines;
+    for (auto& l : lines) {
+        double theta = l.theta;
+        // Near-vertical: theta close to 0 or close to pi
+        if (theta < kFilterRad || theta > (M_PI - kFilterRad)) continue;
+        // Near-horizontal: theta close to pi/2
+        if (std::abs(theta - M_PI / 2.0) < kFilterRad) continue;
+        perspLines.push_back(l);
+    }
+    VE_LOG("EstimateVanishingPoints: %d lines after filtering horiz/vert", (int)perspLines.size());
+    if (perspLines.size() < 2) {
+        VE_LOG("EstimateVanishingPoints: not enough perspective lines after filtering");
+        return results;
+    }
+
+    // Step 4: Cluster by theta angle using 10-degree bins
+    const double kBinWidth = 10.0 * M_PI / 180.0;  // 10 degrees in radians
+    const int kNumBins = static_cast<int>(std::ceil(M_PI / kBinWidth));
+    std::vector<std::vector<int>> bins(kNumBins);
+    for (int i = 0; i < (int)perspLines.size(); i++) {
+        int bin = static_cast<int>(perspLines[i].theta / kBinWidth);
+        if (bin >= kNumBins) bin = kNumBins - 1;
+        bins[bin].push_back(i);
+    }
+
+    // Step 5: Find the largest clusters (merge adjacent bins for robustness)
+    // Build cluster list: each cluster is a set of line indices
+    struct Cluster {
+        std::vector<int> lineIndices;
+        double avgTheta;
+        int totalVotes;
+    };
+    std::vector<Cluster> clusters;
+
+    // Merge adjacent non-empty bins into clusters
+    for (int b = 0; b < kNumBins; b++) {
+        if (bins[b].empty()) continue;
+
+        Cluster c;
+        c.lineIndices = bins[b];
+        c.totalVotes = 0;
+        c.avgTheta = 0;
+
+        // Merge with next bin if also non-empty (handles lines on bin boundaries)
+        if (b + 1 < kNumBins && !bins[b + 1].empty()) {
+            c.lineIndices.insert(c.lineIndices.end(), bins[b + 1].begin(), bins[b + 1].end());
+            b++;  // skip the merged bin
+        }
+
+        // Compute weighted average theta and total votes
+        double sumTheta = 0;
+        for (int idx : c.lineIndices) {
+            sumTheta += perspLines[idx].theta * perspLines[idx].votes;
+            c.totalVotes += perspLines[idx].votes;
+        }
+        c.avgTheta = (c.totalVotes > 0) ? sumTheta / c.totalVotes : 0;
+        clusters.push_back(std::move(c));
+    }
+
+    // Sort clusters by total votes (proxy for size/importance)
+    std::sort(clusters.begin(), clusters.end(),
+              [](const Cluster& a, const Cluster& b) { return a.totalVotes > b.totalVotes; });
+
+    VE_LOG("EstimateVanishingPoints: %d angle clusters formed", (int)clusters.size());
+
+    // Step 6: For each of the top clusters, compute VP by median intersection
+    int vpCount = std::min(maxVPs, (int)clusters.size());
+    for (int ci = 0; ci < vpCount; ci++) {
+        const Cluster& cluster = clusters[ci];
+        if ((int)cluster.lineIndices.size() < 2) continue;
+
+        // Intersect all pairs of lines in this cluster
+        std::vector<double> xs, ys;
+        int nLines = (int)cluster.lineIndices.size();
+        // Limit pairs to avoid O(n^2) explosion
+        int maxPairs = 500;
+        int pairCount = 0;
+        for (int a = 0; a < nLines && pairCount < maxPairs; a++) {
+            for (int b = a + 1; b < nLines && pairCount < maxPairs; b++) {
+                const HoughLine& l1 = perspLines[cluster.lineIndices[a]];
+                const HoughLine& l2 = perspLines[cluster.lineIndices[b]];
+
+                // Skip if lines are too parallel (theta difference < 2 degrees)
+                double thetaDiff = std::abs(l1.theta - l2.theta);
+                if (thetaDiff < 2.0 * M_PI / 180.0) continue;
+
+                // Solve 2x2 system:
+                // cos(t1)*x + sin(t1)*y = rho1
+                // cos(t2)*x + sin(t2)*y = rho2
+                double c1 = std::cos(l1.theta), s1 = std::sin(l1.theta);
+                double c2 = std::cos(l2.theta), s2 = std::sin(l2.theta);
+                double det = c1 * s2 - c2 * s1;
+                if (std::abs(det) < 1e-10) continue;  // parallel
+
+                double ix = (l1.rho * s2 - l2.rho * s1) / det;
+                double iy = (l2.rho * c1 - l1.rho * c2) / det;
+
+                // Filter out intersection points that are absurdly far away
+                // (more than 5x image diagonal from image center)
+                double diagLen = std::sqrt((double)(imgWidth * imgWidth + imgHeight * imgHeight));
+                double cx = imgWidth * 0.5, cy = imgHeight * 0.5;
+                double dist = std::sqrt((ix - cx) * (ix - cx) + (iy - cy) * (iy - cy));
+                if (dist > 5.0 * diagLen) continue;
+
+                xs.push_back(ix);
+                ys.push_back(iy);
+                pairCount++;
+            }
+        }
+
+        if (xs.size() < 3) {
+            VE_LOG("EstimateVanishingPoints: cluster %d has too few intersections (%d)", ci, (int)xs.size());
+            continue;
+        }
+
+        // Median intersection point (robust to outliers)
+        std::sort(xs.begin(), xs.end());
+        std::sort(ys.begin(), ys.end());
+        double medX = xs[xs.size() / 2];
+        double medY = ys[ys.size() / 2];
+
+        VanishingPointEstimate vp;
+        vp.x = medX;
+        vp.y = medY;
+        vp.lineCount = nLines;
+        vp.dominantAngle = cluster.avgTheta;
+        // Confidence: ratio of this cluster's votes to total votes, capped at 1.0
+        int totalAllVotes = 0;
+        for (auto& c : clusters) totalAllVotes += c.totalVotes;
+        vp.confidence = (totalAllVotes > 0) ?
+            std::min(1.0, (double)cluster.totalVotes / (double)totalAllVotes * 2.0) : 0.0;
+
+        results.push_back(vp);
+        VE_LOG("EstimateVanishingPoints: VP%d at (%.1f, %.1f) conf=%.2f lines=%d angle=%.1f°",
+               ci, medX, medY, vp.confidence, nLines, cluster.avgTheta * 180.0 / M_PI);
+    }
+
+    return results;
+}
+
+//========================================================================================
 //  C-callable wrappers
 //========================================================================================
 
@@ -1270,4 +1465,701 @@ int PluginVisionGetWidth()
 int PluginVisionGetHeight()
 {
     return VisionEngine::Instance().Height();
+}
+
+//========================================================================================
+//  Surface type inference (Gap 1)
+//========================================================================================
+
+void VisionEngine::ArtToPixelMapping::ArtRectToPixelRect(
+    double aLeft, double aTop, double aRight, double aBottom,
+    int& pX, int& pY, int& pW, int& pH) const
+{
+    if (!valid || pixelWidth == 0 || pixelHeight == 0) {
+        pX = pY = pW = pH = 0;
+        return;
+    }
+    double artW = artRight - artLeft;
+    double artH = artTop - artBottom;  // Illustrator Y-up: top > bottom
+    if (artW < 1e-6 || artH < 1e-6) { pX = pY = pW = pH = 0; return; }
+
+    double scaleX = pixelWidth / artW;
+    double scaleY = pixelHeight / artH;
+
+    // Artwork coords: origin bottom-left, Y-up. Pixel coords: origin top-left, Y-down.
+    pX = (int)((aLeft - artLeft) * scaleX);
+    pY = (int)((artTop - aTop) * scaleY);   // flip Y
+    pW = (int)((aRight - aLeft) * scaleX);
+    pH = (int)((aTop - aBottom) * scaleY);
+
+    // Clamp to image bounds
+    if (pX < 0) { pW += pX; pX = 0; }
+    if (pY < 0) { pH += pY; pY = 0; }
+    if (pX + pW > pixelWidth)  pW = pixelWidth - pX;
+    if (pY + pH > pixelHeight) pH = pixelHeight - pY;
+    if (pW < 0) pW = 0;
+    if (pH < 0) pH = 0;
+}
+
+void VisionEngine::SetArtToPixelMapping(double aLeft, double aTop, double aRight, double aBottom)
+{
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
+    artMapping.artLeft   = aLeft;
+    artMapping.artTop    = aTop;
+    artMapping.artRight  = aRight;
+    artMapping.artBottom = aBottom;
+    artMapping.pixelWidth  = imgWidth;
+    artMapping.pixelHeight = imgHeight;
+    artMapping.valid = (imgWidth > 0 && imgHeight > 0);
+    VE_LOG("SetArtToPixelMapping: art=[%.0f,%.0f,%.0f,%.0f] px=[%d,%d] valid=%d",
+           aLeft, aTop, aRight, aBottom, imgWidth, imgHeight, artMapping.valid);
+}
+
+VisionEngine::SurfaceHint VisionEngine::InferSurfaceType(int x, int y, int w, int h)
+{
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
+    SurfaceHint result;
+    result.type = SurfaceType::Unknown;
+    result.confidence = 0.0;
+    result.gradientAngle = 0.0;
+
+    if (!IsLoaded() || w < 5 || h < 5) return result;
+
+    // Clamp region to image bounds
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > imgWidth)  w = imgWidth - x;
+    if (y + h > imgHeight) h = imgHeight - y;
+    if (w < 5 || h < 5) return result;
+
+    // Step 1: Extract sub-region, downsample if large
+    int step = 1;
+    while (w / step > 200 || h / step > 200) step++;
+    int sw = w / step, sh = h / step;
+    if (sw < 5 || sh < 5) return result;
+
+    std::vector<uint8_t> subImage(sw * sh);
+    for (int sy = 0; sy < sh; sy++) {
+        for (int sx = 0; sx < sw; sx++) {
+            int srcX = x + sx * step;
+            int srcY = y + sy * step;
+            subImage[sy * sw + sx] = pixels[srcY * imgWidth + srcX];
+        }
+    }
+
+    // Step 2: Blur and compute gradient on sub-region
+    auto blurred = GaussianBlur(subImage, sw, sh, 1.5);
+    Gradient grad = ComputeGradient(blurred, sw, sh);
+
+    // Step 3: Find magnitude threshold (5% of max) to ignore noise
+    double maxMag = 0;
+    for (int i = 0; i < sw * sh; i++) {
+        if (grad.magnitude[i] > maxMag) maxMag = grad.magnitude[i];
+    }
+    double magThresh = maxMag * 0.05;
+    if (maxMag < 1.0) {
+        // No significant gradients — flat region
+        result.type = SurfaceType::Flat;
+        result.confidence = 0.9;
+        return result;
+    }
+
+    // Step 4: Build AXIAL gradient direction histogram (18 bins, 10 degrees each, 0..180°)
+    // Gradients are axial — edges on both sides of a ridge point in opposite directions.
+    // Folding to 0..π merges them into the same bin (Codex P1 fix).
+    const int NBINS = 18;
+    double histogram[NBINS] = {};
+    double totalWeight = 0;
+    int pixelsAboveThresh = 0;
+
+    for (int i = 0; i < sw * sh; i++) {
+        if (grad.magnitude[i] < magThresh) continue;
+        pixelsAboveThresh++;
+        double angle = grad.direction[i];  // radians, -pi to pi
+        // Fold to 0..pi (axial: direction and direction+pi are the same axis)
+        if (angle < 0) angle += M_PI;
+        if (angle >= M_PI) angle -= M_PI;
+        int bin = (int)(angle / M_PI * NBINS);
+        if (bin >= NBINS) bin = NBINS - 1;
+        histogram[bin] += grad.magnitude[i];
+        totalWeight += grad.magnitude[i];
+    }
+
+    double activeRatio = (double)pixelsAboveThresh / (sw * sh);
+
+    // Step 5: If very few active pixels, it's flat
+    if (activeRatio < 0.15) {
+        result.type = SurfaceType::Flat;
+        result.confidence = 0.7 + 0.3 * (1.0 - activeRatio / 0.15);
+        return result;
+    }
+
+    // Step 6: Find peaks and classify histogram shape
+    int peakBin = 0;
+    double peakVal = 0;
+    for (int b = 0; b < NBINS; b++) {
+        if (histogram[b] > peakVal) { peakVal = histogram[b]; peakBin = b; }
+    }
+
+    // Weight in peak bin + neighbors (wrapped)
+    double peakWeight = histogram[peakBin]
+                      + histogram[(peakBin + 1) % NBINS]
+                      + histogram[(peakBin + NBINS - 1) % NBINS];
+    double peakRatio = (totalWeight > 0) ? peakWeight / totalWeight : 0;
+
+    // Dominant gradient angle from peak bin (in axial range 0..pi)
+    result.gradientAngle = (peakBin + 0.5) * (M_PI / NBINS);
+
+    // Check for cylindrical: one strong directional peak in the axial histogram
+    if (peakRatio > 0.50) {
+        result.type = SurfaceType::Cylindrical;
+        result.confidence = 0.5 + 0.5 * (peakRatio - 0.50) / 0.50;
+        if (result.confidence > 1.0) result.confidence = 1.0;
+        return result;
+    }
+
+    // Check for saddle: two peaks ~45 degrees apart in axial space (= 90° in full space)
+    // In 18-bin axial histogram, 45° = 4.5 bins
+    int peak2Bin = -1;
+    double peak2Val = 0;
+    for (int b = 0; b < NBINS; b++) {
+        int dist = abs(b - peakBin);
+        if (dist > NBINS / 2) dist = NBINS - dist;
+        if (dist < 3) continue;  // too close to first peak
+        if (histogram[b] > peak2Val) { peak2Val = histogram[b]; peak2Bin = b; }
+    }
+
+    if (peak2Bin >= 0) {
+        int angularDist = abs(peak2Bin - peakBin);
+        if (angularDist > NBINS / 2) angularDist = NBINS - angularDist;
+        double degreesDist = angularDist * (180.0 / NBINS);  // axial degrees
+
+        double peak2Weight = histogram[peak2Bin]
+                           + histogram[(peak2Bin + 1) % NBINS]
+                           + histogram[(peak2Bin + NBINS - 1) % NBINS];
+        double peak2Ratio = (totalWeight > 0) ? peak2Weight / totalWeight : 0;
+
+        // Saddle: two axial peaks 35-55° apart (= 70-110° in full space), each > 15% weight
+        if (degreesDist >= 35 && degreesDist <= 55 && peakRatio > 0.15 && peak2Ratio > 0.15) {
+            result.type = SurfaceType::Saddle;
+            result.confidence = 0.5 + 0.3 * fmin(peakRatio, peak2Ratio) / 0.25;
+            if (result.confidence > 1.0) result.confidence = 1.0;
+            return result;
+        }
+    }
+
+    // Step 7: Broad histogram — curved surface (convex or concave).
+    // Codex P1 fix: divergence sign is NOT reliable (flips with contrast polarity).
+    // Instead, use absolute divergence magnitude to detect curvature WITHOUT
+    // distinguishing convex from concave. Report as Convex with a note that
+    // the Python MCP pipeline (DSINE normals) can refine this.
+    std::vector<double> gx(sw * sh, 0), gy(sw * sh, 0);
+    for (int i = 0; i < sw * sh; i++) {
+        gx[i] = grad.magnitude[i] * cos(grad.direction[i]);
+        gy[i] = grad.magnitude[i] * sin(grad.direction[i]);
+    }
+
+    double totalAbsDiv = 0;
+    int divCount = 0;
+    for (int py = 1; py < sh - 1; py++) {
+        for (int px = 1; px < sw - 1; px++) {
+            int idx = py * sw + px;
+            if (grad.magnitude[idx] < magThresh) continue;
+            double dGxdx = (gx[idx + 1] - gx[idx - 1]) * 0.5;
+            double dGydy = (gy[idx + sw] - gy[idx - sw]) * 0.5;
+            totalAbsDiv += fabs(dGxdx + dGydy);
+            divCount++;
+        }
+    }
+
+    double avgAbsDiv = (divCount > 0) ? totalAbsDiv / divCount : 0;
+
+    if (avgAbsDiv > 0.5) {
+        // Significant divergence = curved surface. Report as Convex (heuristic).
+        // Python MCP override can refine to Concave when DSINE data is available.
+        result.type = SurfaceType::Convex;
+        result.confidence = 0.35 + 0.35 * fmin(avgAbsDiv / 3.0, 1.0);
+    } else {
+        // Low divergence + broad histogram = ambiguous. Default flat, low confidence.
+        result.type = SurfaceType::Flat;
+        result.confidence = 0.3;
+    }
+
+    if (result.confidence > 1.0) result.confidence = 1.0;
+    VE_LOG("InferSurfaceType: region=[%d,%d,%dx%d] type=%d conf=%.2f angle=%.1f°",
+           x, y, w, h, (int)result.type, result.confidence,
+           result.gradientAngle * 180.0 / M_PI);
+    return result;
+}
+
+//========================================================================================
+//  ClusterNormalMapRegions — k-means on RGB normal vectors from a DSINE normal map
+//========================================================================================
+
+std::vector<VisionEngine::NormalRegion> VisionEngine::ClusterNormalMapRegions(
+    const unsigned char* normalMapRGB, int width, int height, int k)
+{
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
+    std::vector<NormalRegion> result;
+
+    if (!normalMapRGB || width < 1 || height < 1 || k < 1) return result;
+
+    // 1. Sample every Nth pixel (stride=4 for speed on large images)
+    const int stride = 4;
+    struct Sample { double r, g, b; double px, py; };
+    std::vector<Sample> samples;
+    samples.reserve((width / stride + 1) * (height / stride + 1));
+
+    for (int y = 0; y < height; y += stride) {
+        for (int x = 0; x < width; x += stride) {
+            int idx = (y * width + x) * 3;
+            double r = normalMapRGB[idx]     / 255.0;
+            double g = normalMapRGB[idx + 1] / 255.0;
+            double b = normalMapRGB[idx + 2] / 255.0;
+            samples.push_back({r, g, b, (double)x, (double)y});
+        }
+    }
+
+    if (samples.empty()) return result;
+
+    VE_LOG("ClusterNormalMapRegions: %d samples from %dx%d image, k=%d",
+           (int)samples.size(), width, height, k);
+
+    // 2. Initialize centroids from evenly-spaced samples
+    int actualK = std::min(k, (int)samples.size());
+    struct Centroid { double r, g, b; };
+    std::vector<Centroid> centroids(actualK);
+    for (int i = 0; i < actualK; i++) {
+        int idx = (int)((double)i / actualK * samples.size());
+        centroids[i] = {samples[idx].r, samples[idx].g, samples[idx].b};
+    }
+
+    // 3. K-means: 20 iterations of Lloyd's algorithm
+    std::vector<int> assignment(samples.size(), 0);
+    const int maxIter = 20;
+
+    for (int iter = 0; iter < maxIter; iter++) {
+        // Assign each sample to nearest centroid (by Euclidean distance in RGB)
+        for (size_t s = 0; s < samples.size(); s++) {
+            double bestDist = 1e30;
+            int bestC = 0;
+            for (int c = 0; c < actualK; c++) {
+                double dr = samples[s].r - centroids[c].r;
+                double dg = samples[s].g - centroids[c].g;
+                double db = samples[s].b - centroids[c].b;
+                double dist = dr * dr + dg * dg + db * db;
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    bestC = c;
+                }
+            }
+            assignment[s] = bestC;
+        }
+
+        // Update centroids
+        std::vector<double> sumR(actualK, 0), sumG(actualK, 0), sumB(actualK, 0);
+        std::vector<int> counts(actualK, 0);
+        for (size_t s = 0; s < samples.size(); s++) {
+            int c = assignment[s];
+            sumR[c] += samples[s].r;
+            sumG[c] += samples[s].g;
+            sumB[c] += samples[s].b;
+            counts[c]++;
+        }
+        for (int c = 0; c < actualK; c++) {
+            if (counts[c] > 0) {
+                centroids[c].r = sumR[c] / counts[c];
+                centroids[c].g = sumG[c] / counts[c];
+                centroids[c].b = sumB[c] / counts[c];
+            }
+        }
+    }
+
+    // 4. Build results: centroid normal, pixel count, spatial center
+    for (int c = 0; c < actualK; c++) {
+        NormalRegion region;
+        region.nx = centroids[c].r;
+        region.ny = centroids[c].g;
+        region.nz = centroids[c].b;
+        region.pixelCount = 0;
+        region.centerX = 0;
+        region.centerY = 0;
+
+        for (size_t s = 0; s < samples.size(); s++) {
+            if (assignment[s] == c) {
+                region.pixelCount++;
+                region.centerX += samples[s].px;
+                region.centerY += samples[s].py;
+            }
+        }
+
+        if (region.pixelCount > 0) {
+            region.centerX /= region.pixelCount;
+            region.centerY /= region.pixelCount;
+        }
+
+        // Scale pixel count back to full image (account for stride sampling)
+        region.pixelCount *= (stride * stride);
+
+        result.push_back(region);
+    }
+
+    // 5. Sort by pixel count (largest first)
+    std::sort(result.begin(), result.end(),
+              [](const NormalRegion& a, const NormalRegion& b) {
+                  return a.pixelCount > b.pixelCount;
+              });
+
+    // 6. Label by spatial position (quadrant of cluster center)
+    for (size_t i = 0; i < result.size(); i++) {
+        double relX = result[i].centerX / width;   // 0=left, 1=right
+        double relY = result[i].centerY / height;  // 0=top, 1=bottom
+
+        std::string vLabel, hLabel;
+        if (relY < 0.33)      vLabel = "Top";
+        else if (relY > 0.66) vLabel = "Bottom";
+        else                   vLabel = "";
+
+        if (relX < 0.33)      hLabel = "Left";
+        else if (relX > 0.66) hLabel = "Right";
+        else                   hLabel = "";
+
+        if (vLabel.empty() && hLabel.empty()) {
+            result[i].label = "Center";
+        } else if (vLabel.empty()) {
+            result[i].label = hLabel;
+        } else if (hLabel.empty()) {
+            result[i].label = vLabel;
+        } else {
+            result[i].label = vLabel + "-" + hLabel;
+        }
+
+        VE_LOG("ClusterNormalMapRegions: region %d label='%s' n=(%.2f,%.2f,%.2f) px=%d center=(%.0f,%.0f)",
+               (int)i, result[i].label.c_str(),
+               result[i].nx, result[i].ny, result[i].nz,
+               result[i].pixelCount, result[i].centerX, result[i].centerY);
+    }
+
+    return result;
+}
+
+//========================================================================================
+//  ClusterNormalDirections — k-means on gradient direction histogram
+//========================================================================================
+
+std::vector<VisionEngine::PlaneCluster> VisionEngine::ClusterNormalDirections(int maxPlanes)
+{
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
+    std::vector<PlaneCluster> result;
+
+    if (pixels.empty() || imgWidth < 2 || imgHeight < 2) return result;
+
+    // Build high-resolution angle histogram (36 bins = 5° each, axial: 0-π)
+    const int NUM_BINS = 36;
+    std::vector<int> histogram(NUM_BINS, 0);
+    int totalGrad = 0;
+
+    for (int y = 1; y < imgHeight - 1; y++) {
+        for (int x = 1; x < imgWidth - 1; x++) {
+            int idx = y * imgWidth + x;
+
+            // Grayscale gradient (Sobel-like)
+            double gx = (double)pixels[idx + 1] - (double)pixels[idx - 1];
+            double gy = (double)pixels[idx + imgWidth] - (double)pixels[idx - imgWidth];
+            double mag = std::sqrt(gx * gx + gy * gy);
+
+            if (mag < 10.0) continue;  // skip low-gradient pixels
+
+            double angle = std::atan2(gy, gx);
+            if (angle < 0) angle += M_PI;
+            if (angle >= M_PI) angle -= M_PI;  // fold to 0-π
+
+            int bin = (int)(angle / M_PI * NUM_BINS);
+            if (bin >= NUM_BINS) bin = NUM_BINS - 1;
+            histogram[bin]++;
+            totalGrad++;
+        }
+    }
+
+    if (totalGrad < 100) return result;  // too few gradient pixels
+
+    // Find peaks: local maxima in the histogram (with wrapping for circular data)
+    struct Peak { int bin; int count; double angle; };
+    std::vector<Peak> peaks;
+
+    for (int i = 0; i < NUM_BINS; i++) {
+        int prev = histogram[(i - 1 + NUM_BINS) % NUM_BINS];
+        int next = histogram[(i + 1) % NUM_BINS];
+        if (histogram[i] > prev && histogram[i] > next && histogram[i] > totalGrad / NUM_BINS) {
+            double angle = (i + 0.5) * M_PI / NUM_BINS;
+            peaks.push_back({i, histogram[i], angle});
+        }
+    }
+
+    // Sort peaks by count (strongest first)
+    std::sort(peaks.begin(), peaks.end(), [](const Peak& a, const Peak& b) {
+        return a.count > b.count;
+    });
+
+    // Take top maxPlanes peaks
+    int nPlanes = std::min((int)peaks.size(), maxPlanes);
+    for (int i = 0; i < nPlanes; i++) {
+        PlaneCluster pc;
+        pc.normalAngle = peaks[i].angle;
+        pc.strength = (double)peaks[i].count / (double)totalGrad;
+        pc.pixelCount = peaks[i].count;
+        result.push_back(pc);
+
+        VE_LOG("ClusterNormals: plane %d angle=%.1f° strength=%.2f (%d pixels)",
+               i, pc.normalAngle * 180.0 / M_PI, pc.strength, pc.pixelCount);
+    }
+
+    return result;
+}
+
+//========================================================================================
+//  EstimateVPsFromNormals — derive VPs from dominant surface plane orientations
+//========================================================================================
+
+std::vector<VisionEngine::VanishingPointEstimate> VisionEngine::EstimateVPsFromNormals(int maxVPs)
+{
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
+    std::vector<VanishingPointEstimate> result;
+
+    // Get dominant plane clusters
+    auto planes = ClusterNormalDirections(maxVPs + 1);  // get extra for filtering
+    if (planes.size() < 1) return result;
+
+    // Each plane's gradient direction indicates the surface normal.
+    // The EDGE direction of that plane is perpendicular to the gradient.
+    // Parallel edges from the same plane family converge at a VP.
+    // The VP direction is along the edge direction (gradient + π/2).
+
+    double imgCx = imgWidth * 0.5;
+    double imgCy = imgHeight * 0.5;
+
+    for (int i = 0; i < (int)planes.size() && (int)result.size() < maxVPs; i++) {
+        // Edge direction = gradient direction + 90°
+        double edgeAngle = planes[i].normalAngle + M_PI / 2.0;
+        if (edgeAngle >= M_PI) edgeAngle -= M_PI;
+
+        // Place VP far along the edge direction from image center
+        // Distance proportional to image size (VPs are typically far from image)
+        double vpDist = std::max(imgWidth, imgHeight) * 2.0;
+        double vpX = imgCx + std::cos(edgeAngle) * vpDist;
+        double vpY = imgCy + std::sin(edgeAngle) * vpDist;
+
+        // Check this VP isn't too close to an existing one
+        bool tooClose = false;
+        for (auto& existing : result) {
+            double dx = vpX - existing.x, dy = vpY - existing.y;
+            double angleDiff = std::abs(edgeAngle - existing.dominantAngle);
+            if (angleDiff < M_PI / 6.0 || angleDiff > 5.0 * M_PI / 6.0) {
+                tooClose = true;
+                break;
+            }
+        }
+        if (tooClose) continue;
+
+        VanishingPointEstimate vpe;
+        vpe.x = vpX;
+        vpe.y = vpY;
+        vpe.confidence = planes[i].strength;
+        vpe.lineCount = planes[i].pixelCount;
+        vpe.dominantAngle = edgeAngle;
+        result.push_back(vpe);
+
+        VE_LOG("VPFromNormals: VP%d at (%.0f, %.0f) edge_angle=%.1f° conf=%.2f",
+               (int)result.size(), vpX, vpY, edgeAngle * 180.0 / M_PI, planes[i].strength);
+    }
+
+    return result;
+}
+
+//========================================================================================
+//  GenerateNormalFromHeight — Sobel-based normal map from a grayscale height map
+//========================================================================================
+
+unsigned char* VisionEngine::GenerateNormalFromHeight(const unsigned char* heightMap,
+                                                       int w, int h, double strength)
+{
+    if (!heightMap || w < 3 || h < 3) return nullptr;
+
+    unsigned char* normals = new (std::nothrow) unsigned char[w * h * 3];
+    if (!normals) return nullptr;
+
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            int outIdx = (y * w + x) * 3;
+
+            // Border pixels: default flat normal (pointing straight out)
+            if (x == 0 || x == w - 1 || y == 0 || y == h - 1) {
+                normals[outIdx]     = 128;  // R = nx
+                normals[outIdx + 1] = 128;  // G = ny
+                normals[outIdx + 2] = 255;  // B = nz
+                continue;
+            }
+
+            // For illustrations: dark lines = creases/valleys = low height.
+            // Invert brightness so dark = low, bright = high.
+            // Then Sobel computes slope from height differences.
+            double left  = 255.0 - (double)heightMap[y * w + (x - 1)];
+            double right = 255.0 - (double)heightMap[y * w + (x + 1)];
+            double top   = 255.0 - (double)heightMap[(y - 1) * w + x];
+            double bot   = 255.0 - (double)heightMap[(y + 1) * w + x];
+
+            // Sobel dX: right - left (height gradient in X)
+            double dX = right - left;
+            // Sobel dY: bottom - top (height gradient in Y, image Y-down)
+            double dY = bot - top;
+
+            // Normal = normalize(-dX * strength, -dY * strength, 255.0)
+            double nx = -dX * strength;
+            double ny = -dY * strength;
+            double nz = 255.0;
+            double len = std::sqrt(nx * nx + ny * ny + nz * nz);
+            if (len < 1e-10) len = 1.0;
+            nx /= len;
+            ny /= len;
+            nz /= len;
+
+            // Map from [-1,1] to [0,255]
+            int r = (int)((nx + 1.0) * 127.5);
+            int g = (int)((ny + 1.0) * 127.5);
+            int b = (int)((nz + 1.0) * 127.5);
+
+            // Clamp
+            if (r < 0) r = 0; if (r > 255) r = 255;
+            if (g < 0) g = 0; if (g > 255) g = 255;
+            if (b < 0) b = 0; if (b > 255) b = 255;
+
+            normals[outIdx]     = (unsigned char)r;
+            normals[outIdx + 1] = (unsigned char)g;
+            normals[outIdx + 2] = (unsigned char)b;
+        }
+    }
+
+    VE_LOG("GenerateNormalFromHeight: %dx%d strength=%.1f", w, h, strength);
+    return normals;
+}
+
+//========================================================================================
+//  Skeletonize — Zhang-Suen thinning algorithm
+//========================================================================================
+
+unsigned char* VisionEngine::Skeletonize(const unsigned char* grayscale,
+                                          int w, int h, int threshold)
+{
+    if (!grayscale || w <= 0 || h <= 0) return nullptr;
+
+    const int size = w * h;
+
+    // Create binary image: pixel < threshold → 1 (foreground), else → 0
+    std::vector<uint8_t> img(size, 0);
+    for (int i = 0; i < size; i++) {
+        img[i] = (grayscale[i] < threshold) ? 1 : 0;
+    }
+
+    // Neighbor offsets: p2=N, p3=NE, p4=E, p5=SE, p6=S, p7=SW, p8=W, p9=NW
+    // Index order for clockwise traversal starting from N:
+    //   p2(N), p3(NE), p4(E), p5(SE), p6(S), p7(SW), p8(W), p9(NW)
+    const int dx[8] = {  0,  1,  1,  1,  0, -1, -1, -1 };  // column offsets
+    const int dy[8] = { -1, -1,  0,  1,  1,  1,  0, -1 };  // row offsets
+
+    std::vector<int> toDelete;
+    bool changed = true;
+
+    while (changed) {
+        changed = false;
+
+        // --- Sub-iteration 1 ---
+        toDelete.clear();
+        for (int y = 1; y < h - 1; y++) {
+            for (int x = 1; x < w - 1; x++) {
+                int idx = y * w + x;
+                if (img[idx] == 0) continue;
+
+                // Get 8 neighbors in clockwise order: p2,p3,p4,p5,p6,p7,p8,p9
+                uint8_t p[8];
+                for (int k = 0; k < 8; k++) {
+                    p[k] = img[(y + dy[k]) * w + (x + dx[k])];
+                }
+                // p[0]=p2(N), p[1]=p3(NE), p[2]=p4(E), p[3]=p5(SE),
+                // p[4]=p6(S), p[5]=p7(SW), p[6]=p8(W), p[7]=p9(NW)
+
+                // B(p1) = number of non-zero neighbors
+                int B = 0;
+                for (int k = 0; k < 8; k++) B += p[k];
+
+                if (B < 2 || B > 6) continue;
+
+                // A(p1) = number of 0→1 transitions in the ordered sequence
+                int A = 0;
+                for (int k = 0; k < 8; k++) {
+                    if (p[k] == 0 && p[(k + 1) % 8] == 1) A++;
+                }
+
+                if (A != 1) continue;
+
+                // Sub-iteration 1 conditions:
+                // p2 * p4 * p6 == 0
+                if (p[0] * p[2] * p[4] != 0) continue;
+                // p4 * p6 * p8 == 0
+                if (p[2] * p[4] * p[6] != 0) continue;
+
+                toDelete.push_back(idx);
+            }
+        }
+        for (int idx : toDelete) {
+            img[idx] = 0;
+            changed = true;
+        }
+
+        // --- Sub-iteration 2 ---
+        toDelete.clear();
+        for (int y = 1; y < h - 1; y++) {
+            for (int x = 1; x < w - 1; x++) {
+                int idx = y * w + x;
+                if (img[idx] == 0) continue;
+
+                uint8_t p[8];
+                for (int k = 0; k < 8; k++) {
+                    p[k] = img[(y + dy[k]) * w + (x + dx[k])];
+                }
+
+                int B = 0;
+                for (int k = 0; k < 8; k++) B += p[k];
+
+                if (B < 2 || B > 6) continue;
+
+                int A = 0;
+                for (int k = 0; k < 8; k++) {
+                    if (p[k] == 0 && p[(k + 1) % 8] == 1) A++;
+                }
+
+                if (A != 1) continue;
+
+                // Sub-iteration 2 conditions:
+                // p2 * p4 * p8 == 0
+                if (p[0] * p[2] * p[6] != 0) continue;
+                // p2 * p6 * p8 == 0
+                if (p[0] * p[4] * p[6] != 0) continue;
+
+                toDelete.push_back(idx);
+            }
+        }
+        for (int idx : toDelete) {
+            img[idx] = 0;
+            changed = true;
+        }
+    }
+
+    // Convert to output: foreground (1) → 255, background (0) → 0
+    unsigned char* result = new unsigned char[size];
+    for (int i = 0; i < size; i++) {
+        result[i] = img[i] ? 255 : 0;
+    }
+
+    VE_LOG("Skeletonize: %dx%d threshold=%d", w, h, threshold);
+    return result;
 }

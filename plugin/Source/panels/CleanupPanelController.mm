@@ -9,6 +9,7 @@
 
 #import "CleanupPanelController.h"
 #include "IllToolPlugin.h"
+#include "modules/CleanupModule.h"
 #include "HttpBridge.h"
 #import <cstdio>
 
@@ -66,6 +67,33 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
 }
 
 //========================================================================================
+//  FlippedView — NSView subclass with y=0 at top (like UIKit)
+//  Prevents top-of-panel clipping when panel window is shorter than content.
+//========================================================================================
+
+@interface FlippedView : NSView
+@end
+
+@implementation FlippedView
+- (BOOL)isFlipped { return YES; }
+- (BOOL)acceptsFirstResponder { return YES; }
+- (void)keyDown:(NSEvent *)event
+{
+    // Enter/Return → Apply, Escape → Cancel (queued for SDK context)
+    unsigned short keyCode = event.keyCode;
+    if (keyCode == 36 || keyCode == 76) {  // Return or Enter (numpad)
+        BridgeRequestWorkingApply(true);  // default: delete originals
+        fprintf(stderr, "[IllTool Panel] Enter key → Apply\n");
+    } else if (keyCode == 53) {  // Escape
+        BridgeRequestWorkingCancel();
+        fprintf(stderr, "[IllTool Panel] Escape key → Cancel\n");
+    } else {
+        [super keyDown:event];
+    }
+}
+@end
+
+//========================================================================================
 //  CleanupPanelController
 //========================================================================================
 
@@ -73,7 +101,14 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
 
 @property (nonatomic, strong) NSView *rootViewInternal;
 
-// Controls we need references to
+// Tab control
+@property (nonatomic, strong) NSSegmentedControl *tabControl;
+@property (nonatomic, strong) NSView *shapeTabView;
+@property (nonatomic, strong) NSView *decomposeTabView;
+
+// Shape tab controls
+@property (nonatomic, strong) NSMutableArray<NSButton *> *shapeButtons;
+@property (nonatomic, assign) NSInteger activeShapeIndex;
 @property (nonatomic, strong) NSTextField *detectedLabel;
 @property (nonatomic, strong) NSSlider *tensionSlider;
 @property (nonatomic, strong) NSTextField *tensionValueLabel;
@@ -82,6 +117,12 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
 @property (nonatomic, strong) NSTextField *pointsCountLabel;
 @property (nonatomic, strong) NSTextField *layerNameField;
 @property (nonatomic, strong) NSTextField *selectSmallField;
+@property (nonatomic, strong) NSTextField *maxPointsField;
+
+// Decompose tab controls
+@property (nonatomic, strong) NSSlider *sensitivitySlider;
+@property (nonatomic, strong) NSTextField *sensitivityValueLabel;
+@property (nonatomic, strong) NSTextField *decomposeReadoutLabel;
 
 // Selection polling timer
 @property (nonatomic, strong) NSTimer *pollTimer;
@@ -145,7 +186,16 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
                 count, (int)self.lastPolledCount, changed ? "YES" : "no", pollCycle);
     }
 
-    // Only update the label when the count actually changes
+    // Poll decompose readout (every 5th cycle to avoid churn)
+    if (pollCycle % 5 == 0) {
+        std::string decompReadout = BridgeGetDecomposeReadout();
+        NSString *decompStr = [NSString stringWithUTF8String:decompReadout.c_str()];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.decomposeReadoutLabel.stringValue = decompStr;
+        });
+    }
+
+    // Only update the shape tab labels when the count actually changes
     if (!changed) return;
 
     fprintf(stderr, "[IllTool DEBUG] pollSelection: UPDATING label from %d -> %d\n",
@@ -153,7 +203,11 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
     self.lastPolledCount = count;
 
     // Also read the detected shape from the plugin
-    const char* detectedShape = gPlugin ? gPlugin->fLastDetectedShape : "---";
+    const char* detectedShape = "---";
+    if (gPlugin) {
+        auto* cleanup = gPlugin->GetModule<CleanupModule>();
+        if (cleanup) detectedShape = cleanup->GetLastDetectedShape();
+    }
 
     dispatch_async(dispatch_get_main_queue(), ^{
         self.pointsCountLabel.stringValue = [NSString stringWithFormat:@"Points: %d", count];
@@ -175,35 +229,84 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
 
 - (void)buildUI
 {
-    CGFloat totalHeight = 448.0;  // 420 + 28 for Delete Originals checkbox row
-    NSView *root = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, kPanelWidth, totalHeight)];
+    CGFloat totalHeight = 480.0;
+    FlippedView *root = [[FlippedView alloc] initWithFrame:NSMakeRect(0, 0, kPanelWidth, totalHeight)];
     root.wantsLayer = YES;
     root.layer.backgroundColor = ITBGColor().CGColor;
     root.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     self.rootViewInternal = root;
+    [root release];
 
-    CGFloat y = totalHeight - kPadding;
+    CGFloat y = kPadding;
+
+    // --- Tab segmented control ---
+    NSSegmentedControl *tabs = [NSSegmentedControl segmentedControlWithLabels:@[@"Shape", @"Decompose"]
+                                                                 trackingMode:NSSegmentSwitchTrackingSelectOne
+                                                                       target:self
+                                                                       action:@selector(onTabChanged:)];
+    tabs.selectedSegment = 0;
+    tabs.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, 22);
+    [root addSubview:tabs];
+    self.tabControl = tabs;
+    y += 30;
+
+    CGFloat tabTop = y;
+    CGFloat tabContentHeight = totalHeight - tabTop;
+
+    // --- Shape tab container ---
+    FlippedView *shapeTab = [[FlippedView alloc] initWithFrame:NSMakeRect(0, tabTop, kPanelWidth, tabContentHeight)];
+    [root addSubview:shapeTab];
+    self.shapeTabView = shapeTab;
+    [shapeTab release];
+
+    // --- Decompose tab container (hidden initially) ---
+    FlippedView *decompTab = [[FlippedView alloc] initWithFrame:NSMakeRect(0, tabTop, kPanelWidth, tabContentHeight)];
+    decompTab.hidden = YES;
+    [root addSubview:decompTab];
+    self.decomposeTabView = decompTab;
+    [decompTab release];
+
+    // Build shape tab content
+    [self buildShapeTab:shapeTab height:tabContentHeight];
+
+    // Build decompose tab content
+    [self buildDecomposeTab:decompTab height:tabContentHeight];
+}
+
+- (void)onTabChanged:(NSSegmentedControl *)sender
+{
+    NSInteger selectedTab = sender.selectedSegment;
+    self.shapeTabView.hidden = (selectedTab != 0);
+    self.decomposeTabView.hidden = (selectedTab != 1);
+    fprintf(stderr, "[IllTool Panel] Tab changed to %s\n",
+            selectedTab == 0 ? "Shape" : "Decompose");
+}
+
+- (void)buildShapeTab:(NSView *)container height:(CGFloat)totalHeight
+{
+    // Flipped container: y=0 is top, increments downward
+    CGFloat y = kPadding;
 
     // --- Title ---
     NSTextField *title = MakeLabel(@"Shape Cleanup", [NSFont boldSystemFontOfSize:12], ITTextColor());
-    title.frame = NSMakeRect(kPadding, y - 16, kPanelWidth - 2*kPadding, 16);
-    [root addSubview:title];
-    y -= 24;
+    title.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, 16);
+    [container addSubview:title];
+    y += 24;
 
     // --- Shape type buttons row (7 buttons with Unicode icons) ---
-    // Icons match the original CEP panel: —  ⌀  ∟  ▭  ∿  ○  ≋
     NSArray *icons  = @[@"\u2014", @"\u2312", @"\u221F", @"\u25AD", @"\u223F", @"\u25CB", @"\u224B"];
     NSArray *labels = @[@"LINE",   @"ARC",    @"L",      @"RECT",   @"S",      @"ELLIPSE",@"FREE"];
     CGFloat btnW = (kPanelWidth - 2*kPadding - 6*2) / 7.0;
-    CGFloat btnH = 36.0;  // taller to fit icon + label
+    CGFloat btnH = 36.0;
     CGFloat btnX = kPadding;
+    self.shapeButtons = [NSMutableArray arrayWithCapacity:7];
+    self.activeShapeIndex = -1;
     for (NSInteger i = 0; i < (NSInteger)icons.count; i++) {
-        // Icon + label stacked vertically
         NSString *btnTitle = [NSString stringWithFormat:@"%@\n%@", icons[i], labels[i]];
         NSButton *btn = MakeShapeButton(btnTitle, i, self, @selector(onShapeType:));
-        btn.frame = NSMakeRect(btnX, y - btnH, btnW, btnH);
+        btn.frame = NSMakeRect(btnX, y, btnW, btnH);
+        btn.wantsLayer = YES;
 
-        // Multi-line attributed string: icon large, label small
         NSMutableParagraphStyle *para = [[NSMutableParagraphStyle alloc] init];
         para.alignment = NSTextAlignmentCenter;
         para.lineSpacing = 0;
@@ -218,108 +321,118 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
             NSForegroundColorAttributeName: ITDimColor(),
             NSParagraphStyleAttributeName: para
         };
-        [attrStr appendAttributedString:[[NSAttributedString alloc] initWithString:icons[i] attributes:iconAttrs]];
-        [attrStr appendAttributedString:[[NSAttributedString alloc] initWithString:@"\n" attributes:iconAttrs]];
-        [attrStr appendAttributedString:[[NSAttributedString alloc] initWithString:labels[i] attributes:labelAttrs]];
+        NSAttributedString *iconPart = [[NSAttributedString alloc] initWithString:icons[i] attributes:iconAttrs];
+        [attrStr appendAttributedString:iconPart];
+        [iconPart release];
+        NSAttributedString *nlPart = [[NSAttributedString alloc] initWithString:@"\n" attributes:iconAttrs];
+        [attrStr appendAttributedString:nlPart];
+        [nlPart release];
+        NSAttributedString *labelPart = [[NSAttributedString alloc] initWithString:labels[i] attributes:labelAttrs];
+        [attrStr appendAttributedString:labelPart];
+        [labelPart release];
         btn.attributedTitle = attrStr;
+        [attrStr release];
+        [para release];
 
-        [root addSubview:btn];
+        [container addSubview:btn];
+        [self.shapeButtons addObject:btn];
         btnX += btnW + 2;
     }
-    y -= (btnH + kPadding);
+    y += (btnH + kPadding);
 
     // --- Detected shape label ---
     NSTextField *detLbl = MakeLabel(@"Detected:", ITLabelFont(), ITDimColor());
-    detLbl.frame = NSMakeRect(kPadding, y - 14, 60, 14);
-    [root addSubview:detLbl];
+    detLbl.frame = NSMakeRect(kPadding, y, 60, 14);
+    [container addSubview:detLbl];
 
     NSTextField *detVal = MakeLabel(@"---", ITMonoFont(), ITAccentColor());
-    detVal.frame = NSMakeRect(70, y - 14, kPanelWidth - 70 - kPadding, 14);
-    [root addSubview:detVal];
+    detVal.frame = NSMakeRect(70, y, kPanelWidth - 70 - kPadding, 14);
+    [container addSubview:detVal];
     self.detectedLabel = detVal;
-    y -= (14 + kPadding + 2);
+    y += (14 + kPadding + 2);
 
     // --- Separator ---
     NSBox *sep1 = [[NSBox alloc] initWithFrame:NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, 1)];
     sep1.boxType = NSBoxSeparator;
-    [root addSubview:sep1];
-    y -= (1 + kPadding);
+    [container addSubview:sep1];
+    [sep1 release];
+    y += (1 + kPadding);
 
     // --- Curve Tension slider ---
     NSTextField *tensLbl = MakeLabel(@"Curve Tension", ITLabelFont(), ITTextColor());
-    tensLbl.frame = NSMakeRect(kPadding, y - 14, 110, 14);
-    [root addSubview:tensLbl];
+    tensLbl.frame = NSMakeRect(kPadding, y, 110, 14);
+    [container addSubview:tensLbl];
 
     NSTextField *tensVal = MakeLabel(@"50", ITMonoFont(), ITAccentColor());
-    tensVal.frame = NSMakeRect(kPanelWidth - kPadding - 30, y - 14, 30, 14);
+    tensVal.frame = NSMakeRect(kPanelWidth - kPadding - 30, y, 30, 14);
     tensVal.alignment = NSTextAlignmentRight;
-    [root addSubview:tensVal];
+    [container addSubview:tensVal];
     self.tensionValueLabel = tensVal;
-    y -= (14 + 2);
+    y += (14 + 2);
 
     NSSlider *tensSlider = [NSSlider sliderWithValue:50 minValue:0 maxValue:100
                                               target:self action:@selector(onTensionChanged:)];
-    tensSlider.frame = NSMakeRect(kPadding, y - kSliderH, kPanelWidth - 2*kPadding, kSliderH);
-    [root addSubview:tensSlider];
+    tensSlider.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kSliderH);
+    [container addSubview:tensSlider];
     self.tensionSlider = tensSlider;
-    y -= (kSliderH + kPadding);
+    y += (kSliderH + kPadding);
 
     // --- Simplification slider ---
     NSTextField *simpLbl = MakeLabel(@"Simplification", ITLabelFont(), ITTextColor());
-    simpLbl.frame = NSMakeRect(kPadding, y - 14, 110, 14);
-    [root addSubview:simpLbl];
+    simpLbl.frame = NSMakeRect(kPadding, y, 110, 14);
+    [container addSubview:simpLbl];
 
     NSTextField *simpVal = MakeLabel(@"50", ITMonoFont(), ITAccentColor());
-    simpVal.frame = NSMakeRect(kPanelWidth - kPadding - 30, y - 14, 30, 14);
+    simpVal.frame = NSMakeRect(kPanelWidth - kPadding - 30, y, 30, 14);
     simpVal.alignment = NSTextAlignmentRight;
-    [root addSubview:simpVal];
+    [container addSubview:simpVal];
     self.simplificationValueLabel = simpVal;
-    y -= (14 + 2);
+    y += (14 + 2);
 
     NSSlider *simpSlider = [NSSlider sliderWithValue:50 minValue:0 maxValue:100
                                               target:self action:@selector(onSimplificationChanged:)];
-    simpSlider.frame = NSMakeRect(kPadding, y - kSliderH, kPanelWidth - 2*kPadding, kSliderH);
-    [root addSubview:simpSlider];
+    simpSlider.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kSliderH);
+    [container addSubview:simpSlider];
     self.simplificationSlider = simpSlider;
-    y -= (kSliderH + kPadding);
+    y += (kSliderH + kPadding);
 
     // --- Points count ---
     NSTextField *ptsLbl = MakeLabel(@"Points: 0", ITMonoFont(), ITAccentColor());
-    ptsLbl.frame = NSMakeRect(kPadding, y - 14, kPanelWidth - 2*kPadding, 14);
-    [root addSubview:ptsLbl];
+    ptsLbl.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, 14);
+    [container addSubview:ptsLbl];
     self.pointsCountLabel = ptsLbl;
-    y -= (14 + kPadding);
+    y += (14 + kPadding);
 
     // --- Layer name field ---
     NSTextField *layerLbl = MakeLabel(@"Layer Name", ITLabelFont(), ITTextColor());
-    layerLbl.frame = NSMakeRect(kPadding, y - 14, 80, 14);
-    [root addSubview:layerLbl];
-    y -= (14 + 2);
+    layerLbl.frame = NSMakeRect(kPadding, y, 80, 14);
+    [container addSubview:layerLbl];
+    y += (14 + 2);
 
     NSTextField *layerField = [[NSTextField alloc] initWithFrame:
-        NSMakeRect(kPadding, y - kRowHeight, kPanelWidth - 2*kPadding, kRowHeight)];
+        NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kRowHeight)];
     layerField.font = ITLabelFont();
     layerField.placeholderString = @"Layer name...";
     layerField.bezelStyle = NSTextFieldSquareBezel;
     layerField.bordered = YES;
     layerField.editable = YES;
-    [root addSubview:layerField];
+    [container addSubview:layerField];
     self.layerNameField = layerField;
-    y -= (kRowHeight + kPadding);
+    [layerField release];
+    y += (kRowHeight + kPadding);
 
     // --- Average Selection button ---
     NSButton *avgBtn = MakeButton(@"Average Selection", self, @selector(onAverageSelection:));
-    avgBtn.frame = NSMakeRect(kPadding, y - kRowHeight, kPanelWidth - 2*kPadding, kRowHeight);
-    [root addSubview:avgBtn];
-    y -= (kRowHeight + kPadding/2);
+    avgBtn.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kRowHeight);
+    [container addSubview:avgBtn];
+    y += (kRowHeight + kPadding/2);
 
     // --- Delete Originals checkbox ---
     NSButton *delOrigCB = [NSButton checkboxWithTitle:@"Delete Originals"
                                                target:self
                                                action:@selector(onDeleteOriginalsChanged:)];
     delOrigCB.font = ITLabelFont();
-    delOrigCB.state = NSControlStateValueOn;  // checked by default
-    // Style the checkbox text for dark theme
+    delOrigCB.state = NSControlStateValueOn;
     NSMutableAttributedString *cbTitle = [[NSMutableAttributedString alloc]
         initWithString:@"Delete Originals"
         attributes:@{
@@ -327,47 +440,191 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
             NSFontAttributeName: ITLabelFont()
         }];
     delOrigCB.attributedTitle = cbTitle;
-    delOrigCB.frame = NSMakeRect(kPadding, y - kRowHeight, kPanelWidth - 2*kPadding, kRowHeight);
-    [root addSubview:delOrigCB];
+    [cbTitle release];
+    delOrigCB.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kRowHeight);
+    [container addSubview:delOrigCB];
     self.deleteOriginalsCheckbox = delOrigCB;
-    y -= (kRowHeight + kPadding/2);
+    y += (kRowHeight + kPadding/2);
 
     // --- Apply / Cancel row ---
     CGFloat halfW = (kPanelWidth - 2*kPadding - 4) / 2.0;
     NSButton *applyBtn = MakeButton(@"Apply", self, @selector(onApply:));
-    applyBtn.frame = NSMakeRect(kPadding, y - kRowHeight, halfW, kRowHeight);
-    [root addSubview:applyBtn];
+    applyBtn.frame = NSMakeRect(kPadding, y, halfW, kRowHeight);
+    [container addSubview:applyBtn];
 
     NSButton *cancelBtn = MakeButton(@"Cancel", self, @selector(onCancel:));
-    cancelBtn.frame = NSMakeRect(kPadding + halfW + 4, y - kRowHeight, halfW, kRowHeight);
-    [root addSubview:cancelBtn];
-    y -= (kRowHeight + kPadding);
+    cancelBtn.frame = NSMakeRect(kPadding + halfW + 4, y, halfW, kRowHeight);
+    [container addSubview:cancelBtn];
+    y += (kRowHeight + kPadding);
 
     // --- Separator ---
     NSBox *sep2 = [[NSBox alloc] initWithFrame:NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, 1)];
     sep2.boxType = NSBoxSeparator;
-    [root addSubview:sep2];
-    y -= (1 + kPadding);
+    [container addSubview:sep2];
+    [sep2 release];
+    y += (1 + kPadding);
 
     // --- Select Small row ---
     NSButton *selSmallBtn = MakeButton(@"Select Small", self, @selector(onSelectSmall:));
-    selSmallBtn.frame = NSMakeRect(kPadding, y - kRowHeight, 100, kRowHeight);
-    [root addSubview:selSmallBtn];
+    selSmallBtn.frame = NSMakeRect(kPadding, y, 100, kRowHeight);
+    [container addSubview:selSmallBtn];
 
     NSTextField *threshField = [[NSTextField alloc] initWithFrame:
-        NSMakeRect(kPadding + 104, y - kRowHeight, 50, kRowHeight)];
+        NSMakeRect(kPadding + 104, y, 50, kRowHeight)];
     threshField.font = ITMonoFont();
     threshField.placeholderString = @"pt";
     threshField.bezelStyle = NSTextFieldSquareBezel;
     threshField.bordered = YES;
     threshField.editable = YES;
     threshField.stringValue = @"2";
-    [root addSubview:threshField];
+    [container addSubview:threshField];
     self.selectSmallField = threshField;
+    [threshField release];
 
     NSTextField *ptLabel = MakeLabel(@"pt", ITLabelFont(), ITDimColor());
-    ptLabel.frame = NSMakeRect(kPadding + 158, y - kRowHeight + 3, 20, 14);
-    [root addSubview:ptLabel];
+    ptLabel.frame = NSMakeRect(kPadding + 158, y + 3, 20, 14);
+    [container addSubview:ptLabel];
+
+    // Max Points field (point-count threshold for SelectSmall)
+    NSTextField *maxPtsLabel = MakeLabel(@"Max Pts", ITLabelFont(), ITDimColor());
+    maxPtsLabel.frame = NSMakeRect(kPadding + 182, y + 3, 50, 14);
+    [container addSubview:maxPtsLabel];
+
+    NSTextField *maxPtsField = [[NSTextField alloc] initWithFrame:
+        NSMakeRect(kPadding + 182 + 50, y, 36, kRowHeight)];
+    maxPtsField.font = ITMonoFont();
+    maxPtsField.placeholderString = @"0";
+    maxPtsField.bezelStyle = NSTextFieldSquareBezel;
+    maxPtsField.bordered = YES;
+    maxPtsField.editable = YES;
+    maxPtsField.stringValue = @"0";
+    [container addSubview:maxPtsField];
+    self.maxPointsField = maxPtsField;
+    [maxPtsField release];
+}
+
+//----------------------------------------------------------------------------------------
+//  Decompose tab layout
+//----------------------------------------------------------------------------------------
+
+- (void)buildDecomposeTab:(NSView *)container height:(CGFloat)totalHeight
+{
+    // Flipped container: y=0 is top, increments downward
+    CGFloat y = kPadding;
+
+    // --- Title ---
+    NSTextField *title = MakeLabel(@"Auto-Decompose", [NSFont boldSystemFontOfSize:12], ITTextColor());
+    title.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, 16);
+    [container addSubview:title];
+    y += 24;
+
+    // --- Analyze button ---
+    NSButton *analyzeBtn = MakeButton(@"Analyze", self, @selector(onDecomposeAnalyze:));
+    analyzeBtn.frame = NSMakeRect(kPadding, y, 80, kRowHeight);
+    [container addSubview:analyzeBtn];
+
+    // --- Sensitivity label + value (same row as Analyze) ---
+    NSTextField *sensLbl = MakeLabel(@"Sensitivity:", ITLabelFont(), ITDimColor());
+    sensLbl.frame = NSMakeRect(kPadding + 88, y + 3, 70, 14);
+    [container addSubview:sensLbl];
+
+    NSTextField *sensVal = MakeLabel(@"50", ITMonoFont(), ITAccentColor());
+    sensVal.frame = NSMakeRect(kPanelWidth - kPadding - 25, y + 3, 25, 14);
+    sensVal.alignment = NSTextAlignmentRight;
+    [container addSubview:sensVal];
+    self.sensitivityValueLabel = sensVal;
+    y += (kRowHeight + 4);
+
+    // --- Sensitivity slider ---
+    NSSlider *sensSlider = [NSSlider sliderWithValue:50 minValue:0 maxValue:100
+                                              target:self action:@selector(onSensitivityChanged:)];
+    sensSlider.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kSliderH);
+    [container addSubview:sensSlider];
+    self.sensitivitySlider = sensSlider;
+    y += (kSliderH + kPadding);
+
+    // --- Separator ---
+    NSBox *sep1 = [[NSBox alloc] initWithFrame:NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, 1)];
+    sep1.boxType = NSBoxSeparator;
+    [container addSubview:sep1];
+    [sep1 release];
+    y += (1 + kPadding);
+
+    // --- Clusters readout ---
+    NSTextField *clustersLbl = MakeLabel(@"Clusters:", ITLabelFont(), ITDimColor());
+    clustersLbl.frame = NSMakeRect(kPadding, y, 55, 14);
+    [container addSubview:clustersLbl];
+
+    NSTextField *readout = MakeLabel(@"---", ITMonoFont(), ITAccentColor());
+    readout.frame = NSMakeRect(kPadding + 60, y, kPanelWidth - kPadding - 68, 14);
+    [container addSubview:readout];
+    self.decomposeReadoutLabel = readout;
+    y += (14 + kPadding);
+
+    // --- Accept All / Cancel row ---
+    CGFloat halfW = (kPanelWidth - 2*kPadding - 4) / 2.0;
+    NSButton *acceptBtn = MakeButton(@"Accept All", self, @selector(onDecomposeAcceptAll:));
+    acceptBtn.frame = NSMakeRect(kPadding, y, halfW, kRowHeight);
+    [container addSubview:acceptBtn];
+
+    NSButton *cancelBtn = MakeButton(@"Cancel", self, @selector(onDecomposeCancel:));
+    cancelBtn.frame = NSMakeRect(kPadding + halfW + 4, y, halfW, kRowHeight);
+    [container addSubview:cancelBtn];
+    y += (kRowHeight + kPadding / 2);
+
+    // --- Split / Merge row ---
+    NSButton *splitBtn = MakeButton(@"Split", self, @selector(onDecomposeSplit:));
+    splitBtn.frame = NSMakeRect(kPadding, y, halfW, kRowHeight);
+    [container addSubview:splitBtn];
+
+    NSButton *mergeBtn = MakeButton(@"Merge Groups", self, @selector(onDecomposeMerge:));
+    mergeBtn.frame = NSMakeRect(kPadding + halfW + 4, y, halfW, kRowHeight);
+    [container addSubview:mergeBtn];
+}
+
+//----------------------------------------------------------------------------------------
+//  Decompose actions
+//----------------------------------------------------------------------------------------
+
+- (void)onDecomposeAnalyze:(id)sender
+{
+    float sensitivity = (float)(self.sensitivitySlider.doubleValue / 100.0);
+    fprintf(stderr, "[IllTool Panel] Decompose Analyze (sensitivity=%.2f)\n", sensitivity);
+    BridgeRequestDecompose(sensitivity);
+}
+
+- (void)onSensitivityChanged:(NSSlider *)sender
+{
+    int value = (int)sender.integerValue;
+    self.sensitivityValueLabel.stringValue = [NSString stringWithFormat:@"%d", value];
+    fprintf(stderr, "[IllTool Panel] Decompose Sensitivity: %d\n", value);
+    BridgeSetDecomposeSensitivity((float)value / 100.0f);
+}
+
+- (void)onDecomposeAcceptAll:(id)sender
+{
+    fprintf(stderr, "[IllTool Panel] Decompose Accept All\n");
+    BridgeRequestDecomposeAccept();
+}
+
+- (void)onDecomposeCancel:(id)sender
+{
+    fprintf(stderr, "[IllTool Panel] Decompose Cancel\n");
+    BridgeRequestDecomposeCancel();
+}
+
+- (void)onDecomposeSplit:(id)sender
+{
+    // Split cluster 0 (first cluster) — a future UI could allow picking
+    fprintf(stderr, "[IllTool Panel] Decompose Split (cluster 0)\n");
+    BridgeRequestDecomposeSplit(0);
+}
+
+- (void)onDecomposeMerge:(id)sender
+{
+    // Merge clusters 0 and 1 — a future UI could allow picking
+    fprintf(stderr, "[IllTool Panel] Decompose Merge (clusters 0+1)\n");
+    BridgeRequestDecomposeMergeGroups(0, 1);
 }
 
 //----------------------------------------------------------------------------------------
@@ -380,7 +637,48 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
     NSString *name = (sender.tag < (NSInteger)names.count) ? names[sender.tag] : @"?";
     fprintf(stderr, "[IllTool Panel] Shape type selected: %s (tag=%ld) — queuing reclassify\n",
             name.UTF8String, (long)sender.tag);
+    [self setActiveShapeButton:sender.tag];
     BridgeRequestReclassify(static_cast<BridgeShapeType>((int)sender.tag));
+}
+
+- (void)setActiveShapeButton:(NSInteger)index
+{
+    NSArray *icons  = @[@"\u2014", @"\u2312", @"\u221F", @"\u25AD", @"\u223F", @"\u25CB", @"\u224B"];
+    NSArray *labels = @[@"LINE",   @"ARC",    @"L",      @"RECT",   @"S",      @"ELLIPSE",@"FREE"];
+
+    for (NSInteger i = 0; i < (NSInteger)self.shapeButtons.count; i++) {
+        NSButton *btn = self.shapeButtons[i];
+        bool active = (i == index);
+        btn.layer.backgroundColor = active ? ITAccentColor().CGColor : [NSColor clearColor].CGColor;
+        btn.layer.cornerRadius = active ? 3.0 : 0.0;
+
+        // Rebuild attributed title with inverted colors when active
+        if (i < (NSInteger)icons.count) {
+            NSMutableParagraphStyle *para = [[NSMutableParagraphStyle alloc] init];
+            para.alignment = NSTextAlignmentCenter;
+            para.lineSpacing = 0;
+            NSColor *iconColor = active ? [NSColor blackColor] : ITTextColor();
+            NSColor *labelColor = active ? [NSColor colorWithRed:0.15 green:0.15 blue:0.15 alpha:1.0] : ITDimColor();
+            NSDictionary *iconAttrs = @{
+                NSFontAttributeName: [NSFont systemFontOfSize:14],
+                NSForegroundColorAttributeName: iconColor,
+                NSParagraphStyleAttributeName: para
+            };
+            NSDictionary *labelAttrs = @{
+                NSFontAttributeName: [NSFont systemFontOfSize:7 weight:NSFontWeightMedium],
+                NSForegroundColorAttributeName: labelColor,
+                NSParagraphStyleAttributeName: para
+            };
+            NSMutableAttributedString *attrStr = [[NSMutableAttributedString alloc] init];
+            [attrStr appendAttributedString:[[[NSAttributedString alloc] initWithString:icons[i] attributes:iconAttrs] autorelease]];
+            [attrStr appendAttributedString:[[[NSAttributedString alloc] initWithString:@"\n" attributes:iconAttrs] autorelease]];
+            [attrStr appendAttributedString:[[[NSAttributedString alloc] initWithString:labels[i] attributes:labelAttrs] autorelease]];
+            btn.attributedTitle = attrStr;
+            [attrStr release];
+            [para release];
+        }
+    }
+    self.activeShapeIndex = index;
 }
 
 - (void)onTensionChanged:(NSSlider *)sender
@@ -388,6 +686,8 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
     int value = (int)sender.integerValue;
     self.tensionValueLabel.stringValue = [NSString stringWithFormat:@"%d", value];
     fprintf(stderr, "[IllTool Panel] Tension: %d\n", value);
+    BridgeSetTension((double)value);
+    BridgeEnqueueOp({OpType::Resmooth});
 }
 
 - (void)onSimplificationChanged:(NSSlider *)sender
@@ -427,7 +727,14 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
 - (void)onSelectSmall:(id)sender
 {
     double threshold = self.selectSmallField.doubleValue;
-    fprintf(stderr, "[IllTool Panel] Select Small (threshold: %.1f pt)\n", threshold);
+    int maxPoints = (int)self.maxPointsField.integerValue;
+    fprintf(stderr, "[IllTool Panel] Select Small (threshold: %.1f pt, maxPoints: %d) — queuing request\n",
+            threshold, maxPoints);
+    PluginOp op;
+    op.type = OpType::SelectSmall;
+    op.param1 = threshold;
+    op.intParam = maxPoints;
+    BridgeEnqueueOp(op);
 }
 
 //----------------------------------------------------------------------------------------
@@ -442,6 +749,11 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
 - (void)updatePointsCount:(NSInteger)count
 {
     self.pointsCountLabel.stringValue = [NSString stringWithFormat:@"Points: %ld", (long)count];
+}
+
+- (void)updateDecomposeReadout:(NSString *)text
+{
+    self.decomposeReadoutLabel.stringValue = text;
 }
 
 @end

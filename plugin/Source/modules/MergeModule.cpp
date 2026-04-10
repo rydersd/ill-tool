@@ -1,12 +1,15 @@
 //========================================================================================
-//  IllTool — Merge Operations
-//  Extracted from IllToolPlugin.cpp for modularity.
+//  MergeModule — Endpoint scanning, merging, and undo
+//  Ported from IllToolMerge.cpp
+//  Matches CEP spec: sm_scanEndpoints, sm_executeMerge, sm_doUndoMerge
 //========================================================================================
 
 #include "IllustratorSDK.h"
+#include "MergeModule.h"
 #include "IllToolPlugin.h"
 #include "IllToolSuites.h"
-#include "HttpBridge.h"
+#include "ShapeUtils.h"
+#include "LearningEngine.h"
 #include <cstdio>
 #include <cmath>
 #include <cfloat>
@@ -16,20 +19,148 @@
 extern IllToolPlugin* gPlugin;
 
 //========================================================================================
-//  Stage 6: Merge Operations
+//  Utility
 //========================================================================================
 
-static double PointDistance(const AIRealPoint& a, const AIRealPoint& b)
+double MergeModule::PointDistance(const AIRealPoint& a, const AIRealPoint& b)
 {
     double dx = (double)a.h - (double)b.h;
     double dy = (double)a.v - (double)b.v;
     return sqrt(dx * dx + dy * dy);
 }
 
-void IllToolPlugin::ScanEndpoints(double tolerance)
+//========================================================================================
+//  Operation dispatch
+//========================================================================================
+
+bool MergeModule::HandleOp(const PluginOp& op)
+{
+    switch (op.type) {
+        case OpType::ScanEndpoints:
+            fprintf(stderr, "[MergeModule] Scan Endpoints (tolerance=%.1f)\n", op.param1);
+            ScanEndpoints(op.param1);
+            InvalidateFullView();
+            return true;
+
+        case OpType::MergeEndpoints:
+            fprintf(stderr, "[MergeModule] Merge Endpoints (chain=%s, preserve=%s)\n",
+                    op.boolParam1 ? "true" : "false", op.boolParam2 ? "true" : "false");
+            MergeEndpoints(op.boolParam1, op.boolParam2);
+            InvalidateFullView();
+            return true;
+
+        case OpType::UndoMerge:
+            fprintf(stderr, "[MergeModule] Undo Merge\n");
+            UndoMerge();
+            InvalidateFullView();
+            return true;
+
+        default:
+            return false;
+    }
+}
+
+bool MergeModule::CanUndo()
+{
+    return fMergeSnapshot.valid;
+}
+
+void MergeModule::Undo()
+{
+    UndoMerge();
+}
+
+void MergeModule::OnDocumentChanged()
+{
+    fMergePairs.clear();
+    fMergeSnapshot = MergeSnapshot();
+    fLastScanTolerance = 5.0;
+}
+
+//========================================================================================
+//  DrawOverlay — green connector lines between matched endpoint pairs
+//========================================================================================
+
+void MergeModule::DrawOverlay(AIAnnotatorMessage* msg)
+{
+    if (!msg || !msg->drawer) return;
+    if (fMergePairs.empty()) return;
+    if (!sAIDocumentView || !sAIAnnotatorDrawer || !sAIPath) return;
+
+    AIAnnotatorDrawer* drawer = msg->drawer;
+
+    // Green connector color
+    AIRGBColor green;
+    green.red   = 0;
+    green.green = (ai::uint16)(0.76 * 65535);  // ~50000
+    green.blue  = 0;
+
+    AIFloat dashPattern[] = {4.0f, 4.0f};
+
+    for (const auto& pair : fMergePairs) {
+        // Get the actual endpoint positions for this pair
+        ai::int16 segCountA = 0, segCountB = 0;
+        if (sAIPath->GetPathSegmentCount(pair.artA, &segCountA) != kNoErr || segCountA < 1) continue;
+        if (sAIPath->GetPathSegmentCount(pair.artB, &segCountB) != kNoErr || segCountB < 1) continue;
+
+        AIPathSegment segA, segB;
+
+        // Get the matched endpoint from path A
+        if (pair.endA_is_end) {
+            sAIPath->GetPathSegments(pair.artA, segCountA - 1, 1, &segA);
+        } else {
+            sAIPath->GetPathSegments(pair.artA, 0, 1, &segA);
+        }
+
+        // Get the matched endpoint from path B
+        if (pair.endB_is_start) {
+            sAIPath->GetPathSegments(pair.artB, 0, 1, &segB);
+        } else {
+            sAIPath->GetPathSegments(pair.artB, segCountB - 1, 1, &segB);
+        }
+
+        // Convert artwork points to view points
+        AIPoint vA, vB;
+        if (sAIDocumentView->ArtworkPointToViewPoint(NULL, &segA.p, &vA) != kNoErr) continue;
+        if (sAIDocumentView->ArtworkPointToViewPoint(NULL, &segB.p, &vB) != kNoErr) continue;
+
+        // Draw dashed green connector line
+        sAIAnnotatorDrawer->SetColor(drawer, green);
+        sAIAnnotatorDrawer->SetOpacity(drawer, 0.7);
+        sAIAnnotatorDrawer->SetLineWidth(drawer, 1.5);
+        sAIAnnotatorDrawer->SetLineDashedEx(drawer, dashPattern, 2);
+        sAIAnnotatorDrawer->DrawLine(drawer, vA, vB);
+
+        // Draw small circles at endpoints for visibility
+        int radius = 4;
+        AIRect rA;
+        rA.left = vA.h - radius; rA.top = vA.v - radius;
+        rA.right = vA.h + radius; rA.bottom = vA.v + radius;
+        sAIAnnotatorDrawer->SetLineDashedEx(drawer, nullptr, 0);
+        sAIAnnotatorDrawer->SetColor(drawer, green);
+        sAIAnnotatorDrawer->SetOpacity(drawer, 0.8);
+        sAIAnnotatorDrawer->SetLineWidth(drawer, 1.5);
+        sAIAnnotatorDrawer->DrawEllipse(drawer, rA, false);
+
+        AIRect rB;
+        rB.left = vB.h - radius; rB.top = vB.v - radius;
+        rB.right = vB.h + radius; rB.bottom = vB.v + radius;
+        sAIAnnotatorDrawer->DrawEllipse(drawer, rB, false);
+    }
+
+    // Reset dash state
+    sAIAnnotatorDrawer->SetLineDashedEx(drawer, nullptr, 0);
+}
+
+//========================================================================================
+//  ScanEndpoints — find open path endpoint pairs within tolerance
+//========================================================================================
+
+void MergeModule::ScanEndpoints(double tolerance)
 {
     try {
-        fprintf(stderr, "[IllTool] ScanEndpoints: begin (tolerance=%.1f)\n", tolerance);
+        fLastScanTolerance = tolerance;
+        fprintf(stderr, "[MergeModule] ScanEndpoints: begin (tolerance=%.1f)\n", tolerance);
         fMergePairs.clear();
 
         AIMatchingArtSpec spec(kPathArt, 0, 0);
@@ -80,12 +211,13 @@ void IllToolPlugin::ScanEndpoints(double tolerance)
         }
         if (matches) { sAIMdMemory->MdMemoryDisposeHandle((AIMdMemoryHandle)matches); matches = nullptr; }
 
-        fprintf(stderr, "[IllTool] ScanEndpoints: %zu open paths\n", openPaths.size());
+        fprintf(stderr, "[MergeModule] ScanEndpoints: %zu open paths\n", openPaths.size());
         if (openPaths.size() < 2) {
             char buf[64]; snprintf(buf, sizeof(buf), "0 pairs found, %d paths", (int)openPaths.size());
             BridgeSetMergeReadout(buf); return;
         }
 
+        // Find best endpoint pair for each path (greedy matching)
         std::vector<bool> used(openPaths.size(), false);
         for (size_t i = 0; i < openPaths.size(); i++) {
             if (used[i]) continue;
@@ -116,18 +248,22 @@ void IllToolPlugin::ScanEndpoints(double tolerance)
         char readout[128];
         snprintf(readout, sizeof(readout), "%d pairs found, %d paths", (int)fMergePairs.size(), (int)openPaths.size());
         BridgeSetMergeReadout(readout);
-        fprintf(stderr, "[IllTool] ScanEndpoints: %zu pairs among %zu paths\n", fMergePairs.size(), openPaths.size());
+        fprintf(stderr, "[MergeModule] ScanEndpoints: %zu pairs among %zu paths\n", fMergePairs.size(), openPaths.size());
     }
-    catch (ai::Error& ex) { fprintf(stderr, "[IllTool] ScanEndpoints error: %d\n", (int)ex); }
-    catch (...) { fprintf(stderr, "[IllTool] ScanEndpoints unknown error\n"); }
+    catch (ai::Error& ex) { fprintf(stderr, "[MergeModule] ScanEndpoints error: %d\n", (int)ex); }
+    catch (...) { fprintf(stderr, "[MergeModule] ScanEndpoints unknown error\n"); }
 }
 
-void IllToolPlugin::MergeEndpoints(bool chainMerge, bool preserveHandles)
+//========================================================================================
+//  MergeEndpoints — join paths at matched endpoints
+//========================================================================================
+
+void MergeModule::MergeEndpoints(bool chainMerge, bool preserveHandles)
 {
     try {
-        if (fMergePairs.empty()) { fprintf(stderr, "[IllTool] MergeEndpoints: no pairs\n"); return; }
+        if (fMergePairs.empty()) { fprintf(stderr, "[MergeModule] MergeEndpoints: no pairs\n"); return; }
 
-        fprintf(stderr, "[IllTool] MergeEndpoints: begin (chain=%s, preserve=%s, %zu pairs)\n",
+        fprintf(stderr, "[MergeModule] MergeEndpoints: begin (chain=%s, preserve=%s, %zu pairs)\n",
                 chainMerge ? "true" : "false", preserveHandles ? "true" : "false", fMergePairs.size());
 
         fMergeSnapshot = MergeSnapshot();
@@ -197,7 +333,7 @@ void IllToolPlugin::MergeEndpoints(bool chainMerge, bool preserveHandles)
 
                 AIArtHandle newPath = nullptr;
                 ASErr nr = sAIArt->NewArt(kPathArt, kPlaceAbove, pair.artA, &newPath);
-                if (nr != kNoErr || !newPath) { fprintf(stderr, "[IllTool] MergeEndpoints: NewArt failed: %d\n", (int)nr); continue; }
+                if (nr != kNoErr || !newPath) { fprintf(stderr, "[MergeModule] NewArt failed: %d\n", (int)nr); continue; }
 
                 sAIPath->SetPathSegmentCount(newPath, (ai::int16)merged.size());
                 sAIPath->SetPathSegments(newPath, 0, (ai::int16)merged.size(), merged.data());
@@ -211,9 +347,9 @@ void IllToolPlugin::MergeEndpoints(bool chainMerge, bool preserveHandles)
 
             for (AIArtHandle art : toDispose) sAIArt->DisposeArt(art);
 
-            // Chain merge: re-scan
+            // Chain merge: re-scan for new pairs among remaining open paths
             if (chainMerge && iteration < maxIterations - 1) {
-                double tol = BridgeGetScanTolerance();
+                double tol = fLastScanTolerance;
                 fMergePairs.clear();
 
                 AIMatchingArtSpec reSpec(kPathArt, 0, 0);
@@ -265,23 +401,27 @@ void IllToolPlugin::MergeEndpoints(bool chainMerge, bool preserveHandles)
         snprintf(readout, sizeof(readout), "Merged %d pairs", totalMerged);
         BridgeSetMergeReadout(readout);
         sAIDocument->RedrawDocument();
-        fprintf(stderr, "[IllTool] MergeEndpoints: merged %d pairs\n", totalMerged);
+        fprintf(stderr, "[MergeModule] MergeEndpoints: merged %d pairs\n", totalMerged);
     }
-    catch (ai::Error& ex) { fprintf(stderr, "[IllTool] MergeEndpoints error: %d\n", (int)ex); }
-    catch (...) { fprintf(stderr, "[IllTool] MergeEndpoints unknown error\n"); }
+    catch (ai::Error& ex) { fprintf(stderr, "[MergeModule] MergeEndpoints error: %d\n", (int)ex); }
+    catch (...) { fprintf(stderr, "[MergeModule] MergeEndpoints unknown error\n"); }
 }
 
-void IllToolPlugin::UndoMerge()
+//========================================================================================
+//  UndoMerge — restore originals from snapshot
+//========================================================================================
+
+void MergeModule::UndoMerge()
 {
     try {
-        if (!fMergeSnapshot.valid) { fprintf(stderr, "[IllTool] UndoMerge: no snapshot\n"); return; }
+        if (!fMergeSnapshot.valid) { fprintf(stderr, "[MergeModule] UndoMerge: no snapshot\n"); return; }
 
-        fprintf(stderr, "[IllTool] UndoMerge: %zu originals, %zu merged\n",
+        fprintf(stderr, "[MergeModule] UndoMerge: %zu originals, %zu merged\n",
                 fMergeSnapshot.originals.size(), fMergeSnapshot.mergedPaths.size());
 
         for (AIArtHandle art : fMergeSnapshot.mergedPaths) {
             ASErr r = sAIArt->DisposeArt(art);
-            if (r != kNoErr) fprintf(stderr, "[IllTool] UndoMerge: DisposeArt failed: %d\n", (int)r);
+            if (r != kNoErr) fprintf(stderr, "[MergeModule] UndoMerge: DisposeArt failed: %d\n", (int)r);
         }
 
         int restoredCount = 0;
@@ -289,7 +429,7 @@ void IllToolPlugin::UndoMerge()
             if (pd.segments.empty()) continue;
             AIArtHandle newPath = nullptr;
             ASErr r = sAIArt->NewArt(kPathArt, kPlaceAboveAll, nullptr, &newPath);
-            if (r != kNoErr || !newPath) { fprintf(stderr, "[IllTool] UndoMerge: NewArt failed: %d\n", (int)r); continue; }
+            if (r != kNoErr || !newPath) { fprintf(stderr, "[MergeModule] UndoMerge: NewArt failed: %d\n", (int)r); continue; }
 
             sAIPath->SetPathSegmentCount(newPath, (ai::int16)pd.segments.size());
             sAIPath->SetPathSegments(newPath, 0, (ai::int16)pd.segments.size(),
@@ -303,8 +443,8 @@ void IllToolPlugin::UndoMerge()
         snprintf(readout, sizeof(readout), "Undo: restored %d paths", restoredCount);
         BridgeSetMergeReadout(readout);
         sAIDocument->RedrawDocument();
-        fprintf(stderr, "[IllTool] UndoMerge: restored %d paths\n", restoredCount);
+        fprintf(stderr, "[MergeModule] UndoMerge: restored %d paths\n", restoredCount);
     }
-    catch (ai::Error& ex) { fprintf(stderr, "[IllTool] UndoMerge error: %d\n", (int)ex); }
-    catch (...) { fprintf(stderr, "[IllTool] UndoMerge unknown error\n"); }
+    catch (ai::Error& ex) { fprintf(stderr, "[MergeModule] UndoMerge error: %d\n", (int)ex); }
+    catch (...) { fprintf(stderr, "[MergeModule] UndoMerge unknown error\n"); }
 }

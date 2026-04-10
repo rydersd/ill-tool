@@ -34,6 +34,16 @@ extern "C"
     AIBlendStyleSuite*          sAIBlendStyle = NULL;
     AILayerSuite*               sAILayer = NULL;
     AITimerSuite*               sAITimer = NULL;
+    AIPathStyleSuite*           sAIPathStyle = NULL;
+    AIDictionarySuite*          sAIDictionary = NULL;
+    AIMeshSuite*                sAIMesh = NULL;
+    AIMeshVertexIteratorSuite*  sAIMeshVertex = NULL;
+    AIUndoSuite*                sAIUndo = NULL;
+    AIPlacedSuite*              sAIPlaced = NULL;
+    AICursorSnapSuite*          sAICursorSnap = NULL;
+    AIPreferenceSuite*          sAIPreference = NULL;
+    AIArtboardSuite*            sAIArtboard = NULL;
+    AIRasterSuite*              sAIRaster = NULL;
 }
 
 ImportSuite gImportSuites[] =
@@ -59,6 +69,16 @@ ImportSuite gImportSuites[] =
     kAIBlendStyleSuite, kAIBlendStyleSuiteVersion, &sAIBlendStyle,
     kAILayerSuite, kAILayerSuiteVersion, &sAILayer,
     kAITimerSuite, kAITimerSuiteVersion, &sAITimer,
+    kAIPathStyleSuite, kAIPathStyleSuiteVersion, &sAIPathStyle,
+    kAIDictionarySuite, kAIDictionarySuiteVersion, &sAIDictionary,
+    kAIMeshSuite, kAIMeshSuiteVersion, &sAIMesh,
+    kAIMeshVertexIteratorSuite, kAIMeshVertexIteratorSuiteVersion, &sAIMeshVertex,
+    kAIUndoSuite, kAIUndoSuiteVersion, &sAIUndo,
+    kAIPlacedSuite, kAIPlacedSuiteVersion, &sAIPlaced,
+    kAICursorSnapSuite, kAICursorSnapVersion, &sAICursorSnap,
+    kAIPreferenceSuite, kAIPreferenceVersion, &sAIPreference,
+    kAIArtboardSuite, kAIArtboardSuiteVersion, &sAIArtboard,
+    kAIRasterSuite, kAIRasterSuiteVersion, &sAIRaster,
     nullptr, 0, nullptr
 };
 // End IllToolSuites.cpp

@@ -23,6 +23,15 @@
 #include "AIMask.h"   // AIBlendStyleSuite — GetOpacity/SetOpacity
 #include "AILayer.h"  // AILayerSuite — layer creation and lookup
 #include "AITimer.h"  // AITimerSuite — SDK-context timer dispatch
+#include "AIPathStyle.h" // AIPathStyleSuite — read/write fill+stroke styles
+#include "AIDictionary.h" // AIDictionarySuite — per-art metadata storage
+#include "AIMesh.h"      // AIMeshSuite, AIMeshVertexIteratorSuite — mesh gradient creation
+#include "AIUndo.h"      // AIUndoSuite — undo context management
+#include "AIPlaced.h"    // AIPlacedSuite — placed image file path and transform
+#include "AICursorSnap_Wrapper.h"  // AICursorSnapSuite — custom snap constraints
+#include "AIPreference.h"  // AIPreferenceSuite — boolean preference get/put
+#include "AIArtboard.h"    // AIArtboardSuite — artboard list, bounds, active index
+#include "AIRaster.h"      // AIRasterSuite — raster pixel data access
 
 extern  "C" AIUnicodeStringSuite*       sAIUnicodeString;
 extern  "C" SPBlocksSuite*              sSPBlocks;
@@ -45,5 +54,15 @@ extern  "C" AIIsolationModeSuite*       sAIIsolationMode;
 extern  "C" AIBlendStyleSuite*          sAIBlendStyle;
 extern  "C" AILayerSuite*               sAILayer;
 extern  "C" AITimerSuite*               sAITimer;
+extern  "C" AIPathStyleSuite*           sAIPathStyle;
+extern  "C" AIDictionarySuite*          sAIDictionary;
+extern  "C" AIMeshSuite*               sAIMesh;
+extern  "C" AIMeshVertexIteratorSuite*  sAIMeshVertex;
+extern  "C" AIUndoSuite*              sAIUndo;
+extern  "C" AIPlacedSuite*            sAIPlaced;
+extern  "C" AICursorSnapSuite*        sAICursorSnap;
+extern  "C" AIPreferenceSuite*        sAIPreference;
+extern  "C" AIArtboardSuite*         sAIArtboard;
+extern  "C" AIRasterSuite*           sAIRaster;
 
 #endif // __ILLTOOLSUITES_H__

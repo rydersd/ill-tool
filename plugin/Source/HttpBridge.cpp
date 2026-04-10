@@ -3,7 +3,7 @@
 //  IllTool Plugin — HTTP Bridge implementation
 //
 //  Uses cpp-httplib (header-only) for the HTTP server.
-//  Runs on a detached std::thread; communicates with the main thread
+//  Runs on a joinable std::thread; communicates with the main thread
 //  through the DrawCommands buffer (mutex-protected).
 //
 //========================================================================================
@@ -23,13 +23,61 @@
 
 #include <thread>
 #include <mutex>
+#include <condition_variable>
 #include <atomic>
+#include <future>
 #include <vector>
+#include <deque>
 #include <string>
 #include <cstdio>
 #include <sstream>
 
 using json = nlohmann::json;
+
+//========================================================================================
+//  H1: Operation Queue
+//========================================================================================
+
+static std::mutex gOpMutex;
+static std::deque<PluginOp> gOpQueue;
+
+void BridgeEnqueueOp(PluginOp op) {
+    std::lock_guard<std::mutex> lock(gOpMutex);
+    gOpQueue.push_back(std::move(op));
+}
+
+bool BridgeDequeueOp(PluginOp& out) {
+    std::lock_guard<std::mutex> lock(gOpMutex);
+    if (gOpQueue.empty()) return false;
+    out = std::move(gOpQueue.front());
+    gOpQueue.pop_front();
+    return true;
+}
+
+void BridgeRequeueOp(PluginOp op) {
+    std::lock_guard<std::mutex> lock(gOpMutex);
+    gOpQueue.push_front(std::move(op));
+}
+
+//========================================================================================
+//  H2: Result Queue
+//========================================================================================
+
+static std::mutex gResultMutex;
+static std::deque<PluginResult> gResultQueue;
+
+void BridgePostResult(PluginResult result) {
+    std::lock_guard<std::mutex> lock(gResultMutex);
+    gResultQueue.push_back(std::move(result));
+}
+
+bool BridgePollResult(PluginResult& out) {
+    std::lock_guard<std::mutex> lock(gResultMutex);
+    if (gResultQueue.empty()) return false;
+    out = std::move(gResultQueue.front());
+    gResultQueue.pop_front();
+    return true;
+}
 
 //----------------------------------------------------------------------------------------
 //  Globals
@@ -47,18 +95,9 @@ struct SSEClient {
 };
 static std::vector<SSEClient>   gSSEClients;
 
-// Tool mode
+// Tool mode (continuous state — NOT an operation)
 static std::mutex               gModeMutex;
 static BridgeToolMode           gToolMode = BridgeToolMode::Lasso;
-
-// Lasso close/clear request flags (set from HTTP or panel, consumed by TrackToolCursor)
-static std::atomic<bool>        gLassoCloseRequested{false};
-static std::atomic<bool>        gLassoClearRequested{false};
-
-// Working mode apply/cancel request flags
-static std::atomic<bool>        gWorkingApplyRequested{false};
-static std::atomic<bool>        gWorkingApplyDeleteOriginals{true};
-static std::atomic<bool>        gWorkingCancelRequested{false};
 
 //----------------------------------------------------------------------------------------
 //  CORS helper — adds headers to every response
@@ -88,217 +127,63 @@ BridgeToolMode BridgeGetToolMode()
 }
 
 //----------------------------------------------------------------------------------------
-//  Lasso close/clear request accessors
+//  Operation request wrappers (H1: enqueue into operation queue)
+//  The BridgeRequest* API is preserved for callers (panels, HTTP endpoints).
+//  Deprecated BridgeIs*Requested, BridgeClear*, and BridgeGet* param accessors
+//  have been removed — the H1 queue handles the full lifecycle.
 //----------------------------------------------------------------------------------------
 
-void BridgeRequestLassoClose()
-{
-    gLassoCloseRequested.store(true);
+// Lasso
+void BridgeRequestLassoClose()          { BridgeEnqueueOp({OpType::LassoClose}); }
+void BridgeRequestLassoClear()          { BridgeEnqueueOp({OpType::LassoClear}); }
+
+// Working mode
+void BridgeRequestWorkingApply(bool deleteOriginals) {
+    BridgeEnqueueOp({OpType::WorkingApply, 0, 0, 0, deleteOriginals});
 }
+void BridgeRequestWorkingCancel()       { BridgeEnqueueOp({OpType::WorkingCancel}); }
 
-bool BridgeIsLassoCloseRequested()
-{
-    return gLassoCloseRequested.load();
-}
+// Average selection
+void BridgeRequestAverageSelection()       { BridgeEnqueueOp({OpType::AverageSelection}); }
 
-void BridgeClearLassoCloseRequest()
-{
-    gLassoCloseRequested.store(false);
-}
+// Shape classification
+void BridgeRequestClassify()          { BridgeEnqueueOp({OpType::Classify}); }
 
-void BridgeRequestLassoClear()
-{
-    gLassoClearRequested.store(true);
-}
-
-bool BridgeIsLassoClearRequested()
-{
-    return gLassoClearRequested.load();
-}
-
-void BridgeClearLassoClearRequest()
-{
-    gLassoClearRequested.store(false);
-}
-
-//----------------------------------------------------------------------------------------
-//  Working mode apply/cancel request accessors
-//----------------------------------------------------------------------------------------
-
-void BridgeRequestWorkingApply(bool deleteOriginals)
-{
-    gWorkingApplyDeleteOriginals.store(deleteOriginals);
-    gWorkingApplyRequested.store(true);
-}
-
-bool BridgeIsWorkingApplyRequested()
-{
-    return gWorkingApplyRequested.load();
-}
-
-bool BridgeGetWorkingApplyDeleteOriginals()
-{
-    return gWorkingApplyDeleteOriginals.load();
-}
-
-void BridgeClearWorkingApplyRequest()
-{
-    gWorkingApplyRequested.store(false);
-}
-
-void BridgeRequestWorkingCancel()
-{
-    gWorkingCancelRequested.store(true);
-}
-
-bool BridgeIsWorkingCancelRequested()
-{
-    return gWorkingCancelRequested.load();
-}
-
-void BridgeClearWorkingCancelRequest()
-{
-    gWorkingCancelRequested.store(false);
-}
-
-//----------------------------------------------------------------------------------------
-//  Average selection request
-//----------------------------------------------------------------------------------------
-
-static std::atomic<bool> gAverageSelectionRequested{false};
-
-void BridgeRequestAverageSelection()  { gAverageSelectionRequested.store(true); }
-bool BridgeIsAverageSelectionRequested() { return gAverageSelectionRequested.load(); }
-void BridgeClearAverageSelectionRequest() { gAverageSelectionRequested.store(false); }
-
-//----------------------------------------------------------------------------------------
-//  Shape classification request
-//----------------------------------------------------------------------------------------
-
-static std::atomic<bool> gClassifyRequested{false};
-
-void BridgeRequestClassify()          { gClassifyRequested.store(true); }
-bool BridgeIsClassifyRequested()      { return gClassifyRequested.load(); }
-void BridgeClearClassifyRequest()     { gClassifyRequested.store(false); }
-
-//----------------------------------------------------------------------------------------
-//  Shape reclassification request
-//----------------------------------------------------------------------------------------
-
-static std::atomic<bool>          gReclassifyRequested{false};
-static std::atomic<int>           gReclassifyShapeType{0};
-
+// Shape reclassification
 void BridgeRequestReclassify(BridgeShapeType shapeType) {
-    gReclassifyShapeType.store(static_cast<int>(shapeType));
-    gReclassifyRequested.store(true);
+    BridgeEnqueueOp({OpType::Reclassify, 0, 0, static_cast<int>(shapeType)});
 }
 
-bool BridgeIsReclassifyRequested()    { return gReclassifyRequested.load(); }
-
-BridgeShapeType BridgeGetReclassifyShapeType() {
-    return static_cast<BridgeShapeType>(gReclassifyShapeType.load());
-}
-
-void BridgeClearReclassifyRequest()   { gReclassifyRequested.store(false); }
-
-//----------------------------------------------------------------------------------------
-//  Simplification request
-//----------------------------------------------------------------------------------------
-
-static std::atomic<bool>   gSimplifyRequested{false};
-static std::atomic<double> gSimplifySliderValue{50.0};
-
+// Simplification
 void BridgeRequestSimplify(double sliderValue) {
-    gSimplifySliderValue.store(sliderValue);
-    gSimplifyRequested.store(true);
+    BridgeEnqueueOp({OpType::Simplify, sliderValue});
 }
 
-bool BridgeIsSimplifyRequested()      { return gSimplifyRequested.load(); }
-double BridgeGetSimplifySliderValue() { return gSimplifySliderValue.load(); }
-void BridgeClearSimplifyRequest()     { gSimplifyRequested.store(false); }
-
-//----------------------------------------------------------------------------------------
-//  Grouping operations (Stage 5)
-//----------------------------------------------------------------------------------------
-
-static std::atomic<bool>  gCopyToGroupRequested{false};
-static std::mutex         gCopyToGroupMutex;
-static std::string        gCopyToGroupName;
-
+// Grouping: Copy to Group
 void BridgeRequestCopyToGroup(const std::string& groupName) {
-    {
-        std::lock_guard<std::mutex> lock(gCopyToGroupMutex);
-        gCopyToGroupName = groupName;
-    }
-    gCopyToGroupRequested.store(true);
+    PluginOp op{OpType::CopyToGroup};
+    op.strParam = groupName;
+    BridgeEnqueueOp(std::move(op));
 }
 
-bool BridgeIsCopyToGroupRequested() { return gCopyToGroupRequested.load(); }
+// Grouping: Detach
+void BridgeRequestDetach()      { BridgeEnqueueOp({OpType::Detach}); }
 
-std::string BridgeGetCopyToGroupName() {
-    std::lock_guard<std::mutex> lock(gCopyToGroupMutex);
-    return gCopyToGroupName;
-}
+// Grouping: Split
+void BridgeRequestSplit()       { BridgeEnqueueOp({OpType::Split}); }
 
-void BridgeClearCopyToGroupRequest() { gCopyToGroupRequested.store(false); }
-
-static std::atomic<bool> gDetachRequested{false};
-
-void BridgeRequestDetach()      { gDetachRequested.store(true); }
-bool BridgeIsDetachRequested()  { return gDetachRequested.load(); }
-void BridgeClearDetachRequest() { gDetachRequested.store(false); }
-
-static std::atomic<bool> gSplitRequested{false};
-
-void BridgeRequestSplit()       { gSplitRequested.store(true); }
-bool BridgeIsSplitRequested()   { return gSplitRequested.load(); }
-void BridgeClearSplitRequest()  { gSplitRequested.store(false); }
-
-//----------------------------------------------------------------------------------------
-//  Merge operations (Stage 6)
-//----------------------------------------------------------------------------------------
-
-static std::atomic<bool>   gScanEndpointsRequested{false};
-static std::mutex          gScanToleranceMutex;
-static double              gScanTolerance = 5.0;
-
+// Merge: Scan Endpoints
 void BridgeRequestScanEndpoints(double tolerance) {
-    {
-        std::lock_guard<std::mutex> lock(gScanToleranceMutex);
-        gScanTolerance = tolerance;
-    }
-    gScanEndpointsRequested.store(true);
+    BridgeEnqueueOp({OpType::ScanEndpoints, tolerance});
 }
 
-bool BridgeIsScanEndpointsRequested() { return gScanEndpointsRequested.load(); }
-
-double BridgeGetScanTolerance() {
-    std::lock_guard<std::mutex> lock(gScanToleranceMutex);
-    return gScanTolerance;
-}
-
-void BridgeClearScanEndpointsRequest() { gScanEndpointsRequested.store(false); }
-
-static std::atomic<bool> gMergeEndpointsRequested{false};
-static std::atomic<bool> gMergeChainMerge{false};
-static std::atomic<bool> gMergePreserveHandles{false};
-
+// Merge: Merge Endpoints
 void BridgeRequestMergeEndpoints(bool chainMerge, bool preserveHandles) {
-    gMergeChainMerge.store(chainMerge);
-    gMergePreserveHandles.store(preserveHandles);
-    gMergeEndpointsRequested.store(true);
+    BridgeEnqueueOp({OpType::MergeEndpoints, 0, 0, 0, chainMerge, preserveHandles});
 }
 
-bool BridgeIsMergeEndpointsRequested() { return gMergeEndpointsRequested.load(); }
-bool BridgeGetMergeChainMerge()        { return gMergeChainMerge.load(); }
-bool BridgeGetMergePreserveHandles()   { return gMergePreserveHandles.load(); }
-void BridgeClearMergeEndpointsRequest(){ gMergeEndpointsRequested.store(false); }
-
-static std::atomic<bool> gUndoMergeRequested{false};
-
-void BridgeRequestUndoMerge()      { gUndoMergeRequested.store(true); }
-bool BridgeIsUndoMergeRequested()  { return gUndoMergeRequested.load(); }
-void BridgeClearUndoMergeRequest() { gUndoMergeRequested.store(false); }
+// Merge: Undo Merge
+void BridgeRequestUndoMerge()      { BridgeEnqueueOp({OpType::UndoMerge}); }
 
 // Merge readout text — written from SDK context, read by panel timer
 static std::mutex  gMergeReadoutMutex;
@@ -322,6 +207,536 @@ static std::atomic<double> gSmartThreshold{50.0};
 
 void BridgeSetSmartThreshold(double value) { gSmartThreshold.store(value); }
 double BridgeGetSmartThreshold()           { return gSmartThreshold.load(); }
+
+//----------------------------------------------------------------------------------------
+//  Curve tension (Gap 2 — controls bezier handle length in ReclassifyAs)
+//----------------------------------------------------------------------------------------
+
+static std::atomic<double> gTension{50.0};  // 0-100, default midpoint
+
+void BridgeSetTension(double value) { gTension.store(value); }
+double BridgeGetTension()           { return gTension.load(); }
+
+//----------------------------------------------------------------------------------------
+//  Add to Selection toggle (Gap 4 — shift-select mode for polygon lasso)
+//----------------------------------------------------------------------------------------
+
+static std::atomic<bool> gAddToSelection{false};
+
+void BridgeSetAddToSelection(bool enabled) { gAddToSelection.store(enabled); }
+bool BridgeGetAddToSelection()             { return gAddToSelection.load(); }
+
+//----------------------------------------------------------------------------------------
+//  Select Small (H1: queue-based)
+//----------------------------------------------------------------------------------------
+
+void BridgeRequestSelectSmall(double threshold) {
+    BridgeEnqueueOp({OpType::SelectSmall, threshold});
+}
+
+//----------------------------------------------------------------------------------------
+//  Surface hint (continuous state — NOT an operation, kept as-is)
+//----------------------------------------------------------------------------------------
+
+static std::atomic<int>    gSurfaceType{-1};
+static std::atomic<double> gSurfaceConfidence{0.0};
+static std::atomic<double> gSurfaceGradientAngle{0.0};
+
+void BridgeSetSurfaceHint(int surfaceType, double confidence, double gradientAngle) {
+    gSurfaceType.store(surfaceType);
+    gSurfaceConfidence.store(confidence);
+    gSurfaceGradientAngle.store(gradientAngle);
+}
+int    BridgeGetSurfaceType()       { return gSurfaceType.load(); }
+double BridgeGetSurfaceConfidence() { return gSurfaceConfidence.load(); }
+double BridgeGetGradientAngle()     { return gSurfaceGradientAngle.load(); }
+
+//----------------------------------------------------------------------------------------
+//  Shape undo (H1: queue-based)
+//----------------------------------------------------------------------------------------
+
+void BridgeRequestUndoShape()       { BridgeEnqueueOp({OpType::UndoShape}); }
+
+//----------------------------------------------------------------------------------------
+//  Perspective grid line state (Stage 10) — continuous state, mutex-protected
+//----------------------------------------------------------------------------------------
+
+static std::mutex gPerspMutex;
+static BridgePerspectiveLine gPerspLines[3];   // 0=left, 1=right, 2=vertical
+static double gPerspHorizonY = 33.0;
+static bool   gPerspLocked = false;
+
+void BridgeSetPerspectiveLine(int lineIndex, double h1x, double h1y, double h2x, double h2y) {
+    if (lineIndex < 0 || lineIndex > 2) return;
+    std::lock_guard<std::mutex> lock(gPerspMutex);
+    gPerspLines[lineIndex] = {h1x, h1y, h2x, h2y, true};
+    fprintf(stderr, "[IllTool Bridge] SetPerspectiveLine(%d) h1=[%.0f,%.0f] h2=[%.0f,%.0f]\n",
+            lineIndex, h1x, h1y, h2x, h2y);
+}
+
+void BridgeClearPerspectiveLine(int lineIndex) {
+    if (lineIndex < 0 || lineIndex > 2) return;
+    std::lock_guard<std::mutex> lock(gPerspMutex);
+    gPerspLines[lineIndex] = {};
+}
+
+BridgePerspectiveLine BridgeGetPerspectiveLine(int lineIndex) {
+    if (lineIndex < 0 || lineIndex > 2) return {};
+    std::lock_guard<std::mutex> lock(gPerspMutex);
+    return gPerspLines[lineIndex];
+}
+
+void BridgeSetHorizonY(double y) {
+    std::lock_guard<std::mutex> lock(gPerspMutex);
+    gPerspHorizonY = y;
+}
+
+double BridgeGetHorizonY() {
+    std::lock_guard<std::mutex> lock(gPerspMutex);
+    return gPerspHorizonY;
+}
+
+void BridgeSetPerspectiveLocked(bool locked) {
+    std::lock_guard<std::mutex> lock(gPerspMutex);
+    gPerspLocked = locked;
+}
+
+bool BridgeGetPerspectiveLocked() {
+    std::lock_guard<std::mutex> lock(gPerspMutex);
+    return gPerspLocked;
+}
+
+static bool gPerspVisible = true;
+
+void BridgeSetPerspectiveVisible(bool visible) {
+    std::lock_guard<std::mutex> lock(gPerspMutex);
+    gPerspVisible = visible;
+}
+
+bool BridgeGetPerspectiveVisible() {
+    std::lock_guard<std::mutex> lock(gPerspMutex);
+    return gPerspVisible;
+}
+
+//----------------------------------------------------------------------------------------
+//  Blend state (Stage 11)
+//----------------------------------------------------------------------------------------
+
+static std::atomic<int>  gBlendSteps{5};
+static std::atomic<int>  gBlendEasing{0};
+static std::atomic<int>  gBlendPickMode{0};   // 0=none, 1=pickA, 2=pickB
+static std::atomic<bool> gBlendHasPathA{false};
+static std::atomic<bool> gBlendHasPathB{false};
+
+void BridgeSetBlendSteps(int steps)    { gBlendSteps.store(steps); }
+int  BridgeGetBlendSteps()             { return gBlendSteps.load(); }
+void BridgeSetBlendEasing(int preset)  { gBlendEasing.store(preset); }
+int  BridgeGetBlendEasing()            { return gBlendEasing.load(); }
+// Custom easing control points (for preset 4)
+static std::mutex gCustomEasingMutex;
+static std::vector<double> gCustomEasingXY;  // [x1,y1,x2,y2,...] pairs
+
+void BridgeSetCustomEasingPoints(int count, const double* xyPairs) {
+    std::lock_guard<std::mutex> lock(gCustomEasingMutex);
+    gCustomEasingXY.assign(xyPairs, xyPairs + count * 2);
+}
+
+int BridgeGetCustomEasingPoints(double* xyPairs, int maxPairs) {
+    std::lock_guard<std::mutex> lock(gCustomEasingMutex);
+    int count = (int)(gCustomEasingXY.size() / 2);
+    if (count > maxPairs) count = maxPairs;
+    for (int i = 0; i < count * 2; i++) xyPairs[i] = gCustomEasingXY[i];
+    return count;
+}
+
+void BridgeSetBlendPickMode(int mode)  { gBlendPickMode.store(mode); }
+int  BridgeGetBlendPickMode()          { return gBlendPickMode.load(); }
+bool BridgeHasBlendPathA()             { return gBlendHasPathA.load(); }
+bool BridgeHasBlendPathB()             { return gBlendHasPathB.load(); }
+void BridgeSetBlendPathASet(bool set)  { gBlendHasPathA.store(set); }
+void BridgeSetBlendPathBSet(bool set)  { gBlendHasPathB.store(set); }
+
+//----------------------------------------------------------------------------------------
+//  Shading state (Stage 12) — continuous state, mutex-protected
+//----------------------------------------------------------------------------------------
+
+static std::atomic<int> gShadingMode{0};  // 0=blend, 1=mesh
+
+static std::mutex gShadingColorMutex;
+static double gShadingHighR = 1.0, gShadingHighG = 1.0, gShadingHighB = 1.0;
+static double gShadingShadR = 0.0, gShadingShadG = 0.0, gShadingShadB = 0.0;
+
+static std::atomic<double> gShadingLightAngle{315.0};  // degrees, 0=right, CCW
+static std::atomic<double> gShadingIntensity{70.0};     // 0-100
+static std::atomic<int>    gShadingBlendSteps{7};       // 3-15
+static std::atomic<int>    gShadingMeshGrid{3};         // 2-6
+
+void BridgeSetShadingMode(int mode)       { gShadingMode.store(mode); }
+int  BridgeGetShadingMode()               { return gShadingMode.load(); }
+
+void BridgeSetShadingHighlight(double r, double g, double b) {
+    std::lock_guard<std::mutex> lock(gShadingColorMutex);
+    gShadingHighR = r; gShadingHighG = g; gShadingHighB = b;
+}
+void BridgeGetShadingHighlight(double& r, double& g, double& b) {
+    std::lock_guard<std::mutex> lock(gShadingColorMutex);
+    r = gShadingHighR; g = gShadingHighG; b = gShadingHighB;
+}
+
+void BridgeSetShadingShadow(double r, double g, double b) {
+    std::lock_guard<std::mutex> lock(gShadingColorMutex);
+    gShadingShadR = r; gShadingShadG = g; gShadingShadB = b;
+}
+void BridgeGetShadingShadow(double& r, double& g, double& b) {
+    std::lock_guard<std::mutex> lock(gShadingColorMutex);
+    r = gShadingShadR; g = gShadingShadG; b = gShadingShadB;
+}
+
+void BridgeSetShadingLightAngle(double angle) { gShadingLightAngle.store(angle); }
+double BridgeGetShadingLightAngle()           { return gShadingLightAngle.load(); }
+
+void BridgeSetShadingIntensity(double intensity) { gShadingIntensity.store(intensity); }
+double BridgeGetShadingIntensity()               { return gShadingIntensity.load(); }
+
+void BridgeSetShadingBlendSteps(int steps) { gShadingBlendSteps.store(steps); }
+int  BridgeGetShadingBlendSteps()          { return gShadingBlendSteps.load(); }
+
+void BridgeSetShadingMeshGrid(int size) { gShadingMeshGrid.store(size); }
+int  BridgeGetShadingMeshGrid()         { return gShadingMeshGrid.load(); }
+
+static std::atomic<bool> gShadingEyedropperMode{false};
+static std::atomic<int>  gShadingEyedropperTarget{0};   // 0=highlight, 1=shadow
+
+void BridgeSetShadingEyedropperMode(bool active) { gShadingEyedropperMode.store(active); }
+bool BridgeGetShadingEyedropperMode()             { return gShadingEyedropperMode.load(); }
+
+void BridgeSetShadingEyedropperTarget(int target) { gShadingEyedropperTarget.store(target); }
+int  BridgeGetShadingEyedropperTarget()            { return gShadingEyedropperTarget.load(); }
+
+//----------------------------------------------------------------------------------------
+//  Decompose state (Stage 14)
+//----------------------------------------------------------------------------------------
+
+static std::mutex  gDecomposeReadoutMutex;
+static std::string gDecomposeReadoutText = "---";
+static std::atomic<float> gDecomposeSensitivity{0.5f};
+
+void BridgeSetDecomposeReadout(const std::string& text) {
+    std::lock_guard<std::mutex> lock(gDecomposeReadoutMutex);
+    gDecomposeReadoutText = text;
+}
+
+std::string BridgeGetDecomposeReadout() {
+    std::lock_guard<std::mutex> lock(gDecomposeReadoutMutex);
+    return gDecomposeReadoutText;
+}
+
+void BridgeSetDecomposeSensitivity(float value) { gDecomposeSensitivity.store(value); }
+float BridgeGetDecomposeSensitivity()           { return gDecomposeSensitivity.load(); }
+
+//----------------------------------------------------------------------------------------
+//  Perspective mirror/duplicate/paste state (Stage 10b-d)
+//----------------------------------------------------------------------------------------
+
+static std::atomic<int>   gMirrorAxis{0};        // 0=vertical, 1=horizontal, 2=custom
+static std::atomic<bool>  gMirrorReplace{false};
+static std::atomic<int>   gDuplicateCount{3};
+static std::atomic<int>   gDuplicateSpacing{0};   // 0=equal in perspective, 1=equal on screen
+static std::atomic<int>   gPastePlane{0};          // 0=floor, 1=left wall, 2=right wall, 3=custom
+static std::atomic<float> gPasteScale{1.0f};
+static std::atomic<bool>  gSnapToPerspective{true}; // snap cleanup output to perspective grid
+
+void BridgeSetSnapToPerspective(bool snap) { gSnapToPerspective.store(snap); }
+bool BridgeGetSnapToPerspective()          { return gSnapToPerspective.load(); }
+
+void BridgeSetMirrorAxis(int axis)        { gMirrorAxis.store(axis); }
+int  BridgeGetMirrorAxis()                { return gMirrorAxis.load(); }
+void BridgeSetMirrorReplace(bool replace) { gMirrorReplace.store(replace); }
+bool BridgeGetMirrorReplace()             { return gMirrorReplace.load(); }
+void BridgeSetDuplicateCount(int count)   { gDuplicateCount.store(count); }
+int  BridgeGetDuplicateCount()            { return gDuplicateCount.load(); }
+void BridgeSetDuplicateSpacing(int spacing) { gDuplicateSpacing.store(spacing); }
+int  BridgeGetDuplicateSpacing()          { return gDuplicateSpacing.load(); }
+void BridgeSetPastePlane(int plane)       { gPastePlane.store(plane); }
+int  BridgeGetPastePlane()                { return gPastePlane.load(); }
+void BridgeSetPasteScale(float scale)     { gPasteScale.store(scale); }
+float BridgeGetPasteScale()               { return gPasteScale.load(); }
+
+void BridgeRequestMirrorPerspective(int axis, bool replace) {
+    PluginOp op{OpType::MirrorPerspective};
+    op.intParam = axis;
+    op.boolParam1 = replace;
+    BridgeEnqueueOp(op);
+}
+
+void BridgeRequestDuplicatePerspective(int count, int spacing) {
+    PluginOp op{OpType::DuplicatePerspective};
+    op.intParam = count;
+    op.param1 = (double)spacing;
+    BridgeEnqueueOp(op);
+}
+
+void BridgeRequestPastePerspective(int plane, float scale) {
+    PluginOp op{OpType::PastePerspective};
+    op.intParam = plane;
+    op.param1 = (double)scale;
+    BridgeEnqueueOp(op);
+}
+
+void BridgeRequestPerspectiveSave() { BridgeEnqueueOp({OpType::PerspectiveSave}); }
+void BridgeRequestPerspectiveLoad() { BridgeEnqueueOp({OpType::PerspectiveLoad}); }
+
+//----------------------------------------------------------------------------------------
+//  Decompose request wrappers (Stage 14) — state lives above with readout
+//----------------------------------------------------------------------------------------
+
+void BridgeRequestDecompose(float sensitivity) {
+    PluginOp op{OpType::Decompose};
+    op.param1 = (double)sensitivity;
+    BridgeEnqueueOp(op);
+}
+void BridgeRequestDecomposeAccept()     { BridgeEnqueueOp({OpType::DecomposeAccept}); }
+void BridgeRequestDecomposeAcceptOne(int clusterIndex) {
+    PluginOp op{OpType::DecomposeAcceptOne};
+    op.intParam = clusterIndex;
+    BridgeEnqueueOp(op);
+}
+void BridgeRequestDecomposeSplit(int clusterIndex) {
+    PluginOp op{OpType::DecomposeSplit};
+    op.intParam = clusterIndex;
+    BridgeEnqueueOp(op);
+}
+void BridgeRequestDecomposeMergeGroups(int clusterA, int clusterB) {
+    PluginOp op{OpType::DecomposeMergeGroups};
+    op.intParam = clusterA;
+    op.param1 = (double)clusterB;
+    BridgeEnqueueOp(op);
+}
+void BridgeRequestDecomposeCancel()    { BridgeEnqueueOp({OpType::DecomposeCancel}); }
+
+//----------------------------------------------------------------------------------------
+//  Transform state (Stage 15)
+//----------------------------------------------------------------------------------------
+
+static std::atomic<double> gTransformWidth{0};
+static std::atomic<double> gTransformHeight{0};
+static std::atomic<double> gTransformRotation{0};
+static std::atomic<int>    gTransformMode{1};          // 0=absolute, 1=relative
+static std::atomic<bool>   gTransformRandom{false};
+static std::atomic<int>    gTransformUnitSize{0};      // 0=px, 1=%
+static std::atomic<int>    gTransformUnitRotation{0};  // 0=degrees, 1=%
+
+void BridgeSetTransformWidth(double w)         { gTransformWidth.store(w); }
+double BridgeGetTransformWidth()               { return gTransformWidth.load(); }
+
+void BridgeSetTransformHeight(double h)        { gTransformHeight.store(h); }
+double BridgeGetTransformHeight()              { return gTransformHeight.load(); }
+
+void BridgeSetTransformRotation(double deg)    { gTransformRotation.store(deg); }
+double BridgeGetTransformRotation()            { return gTransformRotation.load(); }
+
+void BridgeSetTransformMode(int mode)          { gTransformMode.store(mode); }
+int  BridgeGetTransformMode()                  { return gTransformMode.load(); }
+
+void BridgeSetTransformRandom(bool random)     { gTransformRandom.store(random); }
+bool BridgeGetTransformRandom()                { return gTransformRandom.load(); }
+
+void BridgeSetTransformUnitSize(int unit)      { gTransformUnitSize.store(unit); }
+int  BridgeGetTransformUnitSize()              { return gTransformUnitSize.load(); }
+
+void BridgeSetTransformUnitRotation(int unit)  { gTransformUnitRotation.store(unit); }
+int  BridgeGetTransformUnitRotation()          { return gTransformUnitRotation.load(); }
+
+static std::atomic<bool> gTransformLockAspectRatio{false};
+void BridgeSetTransformLockAspectRatio(bool lock) { gTransformLockAspectRatio.store(lock); }
+bool BridgeGetTransformLockAspectRatio()          { return gTransformLockAspectRatio.load(); }
+
+//----------------------------------------------------------------------------------------
+//  Trace state (Stage 16)
+//----------------------------------------------------------------------------------------
+
+static std::atomic<int>  gTraceSpeckle{4};
+static std::atomic<int>  gTraceColorPrecision{6};
+static std::mutex        gTraceStatusMutex;
+static std::string       gTraceStatus;
+
+void BridgeRequestTrace(const std::string& backend) {
+    PluginOp op{OpType::Trace};
+    op.strParam = backend;
+    BridgeEnqueueOp(op);
+}
+
+void BridgeSetTraceSpeckle(int size)        { gTraceSpeckle.store(size); }
+int  BridgeGetTraceSpeckle()                { return gTraceSpeckle.load(); }
+
+void BridgeSetTraceColorPrecision(int p)    { gTraceColorPrecision.store(p); }
+int  BridgeGetTraceColorPrecision()         { return gTraceColorPrecision.load(); }
+
+void BridgeSetTraceStatus(const std::string& status) {
+    std::lock_guard<std::mutex> lock(gTraceStatusMutex);
+    gTraceStatus = status;
+}
+std::string BridgeGetTraceStatus() {
+    std::lock_guard<std::mutex> lock(gTraceStatusMutex);
+    return gTraceStatus;
+}
+
+static std::atomic<int> gTraceOutputMode{1};  // 0=outline, 1=fill, 2=centerline (default: fill)
+
+void BridgeSetTraceOutputMode(int mode)  { gTraceOutputMode.store(mode); }
+int  BridgeGetTraceOutputMode()          { return gTraceOutputMode.load(); }
+
+//----------------------------------------------------------------------------------------
+//  Surface extraction state (Stage 17)
+//----------------------------------------------------------------------------------------
+
+static std::atomic<bool>   gSurfaceExtractMode{false};
+static std::atomic<double> gExtractionSensitivity{0.5};
+static std::mutex          gExtractionStatusMutex;
+static std::string         gExtractionStatus;
+
+void BridgeRequestSurfaceExtract(double x, double y, const std::string& action) {
+    PluginOp op{OpType::SurfaceExtract};
+    op.param1 = x;
+    op.param2 = y;
+    op.strParam = action;
+    BridgeEnqueueOp(op);
+}
+
+void BridgeRequestSurfaceExtractToggle(bool enable) {
+    PluginOp op{OpType::SurfaceExtractToggle};
+    op.boolParam1 = enable;
+    BridgeEnqueueOp(op);
+}
+
+void BridgeSetExtractionSensitivity(double s) { gExtractionSensitivity.store(s); }
+double BridgeGetExtractionSensitivity()       { return gExtractionSensitivity.load(); }
+
+void BridgeSetExtractionStatus(const std::string& status) {
+    std::lock_guard<std::mutex> lock(gExtractionStatusMutex);
+    gExtractionStatus = status;
+}
+std::string BridgeGetExtractionStatus() {
+    std::lock_guard<std::mutex> lock(gExtractionStatusMutex);
+    return gExtractionStatus;
+}
+
+void BridgeSetSurfaceExtractMode(bool active) { gSurfaceExtractMode.store(active); }
+bool BridgeGetSurfaceExtractMode()            { return gSurfaceExtractMode.load(); }
+
+//----------------------------------------------------------------------------------------
+//  Pen tool state (Stage 18) — continuous state for Ill Pen drawing tool
+//----------------------------------------------------------------------------------------
+
+static std::atomic<bool>   gPenModeActive{false};
+static std::atomic<double> gPenChamferRadius{0.0};
+static std::atomic<bool>   gPenUniformEdges{true};
+
+static std::mutex          gPenNameMutex;
+static std::string         gPenPathName;
+
+static std::mutex          gPenGroupMutex;
+static std::string         gPenTargetGroup;
+
+void BridgeSetPenMode(bool active)       { gPenModeActive.store(active); }
+bool BridgeGetPenMode()                  { return gPenModeActive.load(); }
+
+void BridgeSetPenChamferRadius(double r) { gPenChamferRadius.store(r); }
+double BridgeGetPenChamferRadius()       { return gPenChamferRadius.load(); }
+
+void BridgeSetPenUniformEdges(bool u)    { gPenUniformEdges.store(u); }
+bool BridgeGetPenUniformEdges()          { return gPenUniformEdges.load(); }
+
+void BridgeSetPenPathName(const std::string& name) {
+    std::lock_guard<std::mutex> lock(gPenNameMutex);
+    gPenPathName = name;
+}
+std::string BridgeGetPenPathName() {
+    std::lock_guard<std::mutex> lock(gPenNameMutex);
+    return gPenPathName;
+}
+
+void BridgeSetPenTargetGroup(const std::string& groupName) {
+    std::lock_guard<std::mutex> lock(gPenGroupMutex);
+    gPenTargetGroup = groupName;
+}
+std::string BridgeGetPenTargetGroup() {
+    std::lock_guard<std::mutex> lock(gPenGroupMutex);
+    return gPenTargetGroup;
+}
+
+//----------------------------------------------------------------------------------------
+//  MCP Synchronous Request/Response mechanism
+//  HTTP handler thread posts a request + waits on condvar.
+//  Timer callback (SDK context) processes it, posts result, signals condvar.
+//----------------------------------------------------------------------------------------
+
+static std::mutex              gMcpMutex;
+static std::condition_variable gMcpCondVar;
+static bool                    gMcpRequestPending = false;
+static PluginOp                gMcpRequestOp;
+static std::string             gMcpResponse;
+static bool                    gMcpResponseReady = false;
+static std::atomic<bool>       gMcpShuttingDown{false};
+
+std::string BridgeMcpSyncRequest(PluginOp op, int timeoutMs)
+{
+    // Reject immediately if shutting down
+    if (gMcpShuttingDown.load()) {
+        return "{\"ok\":false,\"error\":\"Plugin shutting down\"}";
+    }
+
+    std::unique_lock<std::mutex> lock(gMcpMutex);
+
+    // Only one sync request at a time
+    if (gMcpRequestPending) {
+        return "{\"ok\":false,\"error\":\"Another MCP request is in progress\"}";
+    }
+
+    gMcpRequestOp = std::move(op);
+    gMcpRequestPending = true;
+    gMcpResponseReady = false;
+    gMcpResponse.clear();
+
+    // Wait for the timer callback to fill the response, or shutdown
+    bool timedOut = !gMcpCondVar.wait_for(lock,
+        std::chrono::milliseconds(timeoutMs),
+        [] { return gMcpResponseReady || gMcpShuttingDown.load(); });
+
+    gMcpRequestPending = false;
+
+    if (gMcpShuttingDown.load()) {
+        return "{\"ok\":false,\"error\":\"Plugin shutting down\"}";
+    }
+
+    if (timedOut) {
+        return "{\"ok\":false,\"error\":\"SDK timeout — no document open or timer inactive\"}";
+    }
+
+    return std::move(gMcpResponse);
+}
+
+void BridgeMcpPostResponse(const std::string& jsonResult)
+{
+    std::lock_guard<std::mutex> lock(gMcpMutex);
+    gMcpResponse = jsonResult;
+    gMcpResponseReady = true;
+    gMcpCondVar.notify_one();
+}
+
+bool BridgeMcpPeekRequest(PluginOp& out)
+{
+    std::lock_guard<std::mutex> lock(gMcpMutex);
+    if (!gMcpRequestPending || gMcpResponseReady) return false;
+    out = gMcpRequestOp;
+    return true;
+}
+
+void BridgeMcpClearRequest()
+{
+    // No-op: the response posting + condvar notify handles cleanup.
+    // This exists for symmetry but isn't strictly needed.
+}
 
 //----------------------------------------------------------------------------------------
 //  SSE event emitter
@@ -368,777 +783,17 @@ bool StartHttpBridge(int port)
     });
 
     //------------------------------------------------------------------------------------
-    //  POST /draw — receive draw commands
+    //  Feature routes — /draw, /status, /events, /tool/mode, /lasso/*, /cleanup/*,
+    //  /working/*, /learning/*, /vision/*, /perspective/*, /shading/*,
+    //  /api/decompose/*, /api/batch, /api/journal, /api/trace, /api/surface_extract
     //------------------------------------------------------------------------------------
-    gServer->Post("/draw", [](const httplib::Request& req, httplib::Response& res) {
-        AddCorsHeaders(res);
-        auto commands = ParseDrawCommands(req.body);
-        UpdateDrawCommands(std::move(commands));
-        SetDirty(true);
-
-        json resp;
-        resp["ok"]    = true;
-        resp["count"] = (int)GetDrawCommandCount();
-        res.set_content(resp.dump(), "application/json");
-    });
+#include "HttpBridgeRoutes.cpp"
 
     //------------------------------------------------------------------------------------
-    //  POST /clear — clear all draw commands
+    //  MCP Tool Integration routes — /api/inspect, /api/create_path,
+    //  /api/create_shape, /api/layers, /api/select, /api/modify
     //------------------------------------------------------------------------------------
-    gServer->Post("/clear", [](const httplib::Request& /*req*/, httplib::Response& res) {
-        AddCorsHeaders(res);
-        UpdateDrawCommands({});
-        SetDirty(true);
-
-        json resp;
-        resp["ok"]      = true;
-        resp["count"]   = 0;
-        res.set_content(resp.dump(), "application/json");
-    });
-
-    //------------------------------------------------------------------------------------
-    //  GET /status — plugin status
-    //------------------------------------------------------------------------------------
-    gServer->Get("/status", [](const httplib::Request& /*req*/, httplib::Response& res) {
-        AddCorsHeaders(res);
-
-        json resp;
-        resp["version"]         = "0.1.0";
-        resp["commandCount"]    = (int)GetDrawCommandCount();
-        resp["annotatorActive"] = true;  // If HTTP is up, annotator is live
-
-        std::string modeStr;
-        {
-            BridgeToolMode m = BridgeGetToolMode();
-            modeStr = (m == BridgeToolMode::Lasso) ? "lasso" : "smart";
-        }
-        resp["toolMode"] = modeStr;
-
-        res.set_content(resp.dump(), "application/json");
-    });
-
-    //------------------------------------------------------------------------------------
-    //  GET /events — Server-Sent Events stream
-    //------------------------------------------------------------------------------------
-    gServer->Get("/events", [](const httplib::Request& /*req*/, httplib::Response& res) {
-        AddCorsHeaders(res);
-        res.set_header("Content-Type", "text/event-stream");
-        res.set_header("Cache-Control", "no-cache");
-        res.set_header("Connection", "keep-alive");
-
-        // Use chunked content provider for SSE
-        res.set_chunked_content_provider(
-            "text/event-stream",
-            [](size_t /*offset*/, httplib::DataSink& sink) -> bool {
-                // Register this sink as an SSE client
-                {
-                    std::lock_guard<std::mutex> lock(gSSEMutex);
-                    gSSEClients.push_back({&sink, true});
-                }
-
-                // Send initial keepalive
-                std::string keepalive = ": keepalive\n\n";
-                sink.write(keepalive.data(), keepalive.size());
-
-                // Block until client disconnects or server stops
-                // The sink.write() calls from BridgeEmitEvent push data
-                while (gRunning.load()) {
-                    std::this_thread::sleep_for(std::chrono::seconds(15));
-                    // Periodic keepalive
-                    std::string ka = ": keepalive\n\n";
-                    if (!sink.write(ka.data(), ka.size())) {
-                        break;  // Client disconnected
-                    }
-                }
-
-                // Remove from client list
-                {
-                    std::lock_guard<std::mutex> lock(gSSEMutex);
-                    for (auto it = gSSEClients.begin(); it != gSSEClients.end(); ++it) {
-                        if (it->sink == &sink) {
-                            gSSEClients.erase(it);
-                            break;
-                        }
-                    }
-                }
-                return false;  // Done
-            },
-            [](bool /*success*/) {
-                // Content provider done callback
-            }
-        );
-    });
-
-    //------------------------------------------------------------------------------------
-    //  POST /tool/mode — set tool mode
-    //------------------------------------------------------------------------------------
-    gServer->Post("/tool/mode", [](const httplib::Request& req, httplib::Response& res) {
-        AddCorsHeaders(res);
-        try {
-            json body = json::parse(req.body);
-            std::string mode = body.value("mode", "lasso");
-            if (mode == "smart") {
-                BridgeSetToolMode(BridgeToolMode::Smart);
-            } else {
-                BridgeSetToolMode(BridgeToolMode::Lasso);
-            }
-            json resp;
-            resp["ok"]   = true;
-            resp["mode"] = mode;
-            res.set_content(resp.dump(), "application/json");
-        }
-        catch (const json::exception& e) {
-            json resp;
-            resp["ok"]    = false;
-            resp["error"] = e.what();
-            res.status = 400;
-            res.set_content(resp.dump(), "application/json");
-        }
-    });
-
-    //------------------------------------------------------------------------------------
-    //  GET /tool/mode — get current tool mode
-    //------------------------------------------------------------------------------------
-    gServer->Get("/tool/mode", [](const httplib::Request& /*req*/, httplib::Response& res) {
-        AddCorsHeaders(res);
-        BridgeToolMode m = BridgeGetToolMode();
-        json resp;
-        resp["mode"] = (m == BridgeToolMode::Lasso) ? "lasso" : "smart";
-        res.set_content(resp.dump(), "application/json");
-    });
-
-    //------------------------------------------------------------------------------------
-    //  POST /lasso/close — close the polygon lasso and run selection
-    //------------------------------------------------------------------------------------
-    gServer->Post("/lasso/close", [](const httplib::Request& /*req*/, httplib::Response& res) {
-        AddCorsHeaders(res);
-        BridgeRequestLassoClose();
-        json resp;
-        resp["ok"] = true;
-        res.set_content(resp.dump(), "application/json");
-        fprintf(stderr, "[IllTool] HTTP /lasso/close requested\n");
-    });
-
-    //------------------------------------------------------------------------------------
-    //  POST /lasso/clear — cancel/clear the polygon lasso
-    //------------------------------------------------------------------------------------
-    gServer->Post("/lasso/clear", [](const httplib::Request& /*req*/, httplib::Response& res) {
-        AddCorsHeaders(res);
-        BridgeRequestLassoClear();
-        json resp;
-        resp["ok"] = true;
-        res.set_content(resp.dump(), "application/json");
-        fprintf(stderr, "[IllTool] HTTP /lasso/clear requested\n");
-    });
-
-    //------------------------------------------------------------------------------------
-    //  POST /cleanup/average — trigger Average Selection from the panel
-    //------------------------------------------------------------------------------------
-    gServer->Post("/cleanup/average", [](const httplib::Request& /*req*/, httplib::Response& res) {
-        AddCorsHeaders(res);
-        BridgeRequestAverageSelection();
-        json resp;
-        resp["ok"] = true;
-        res.set_content(resp.dump(), "application/json");
-        fprintf(stderr, "[IllTool] HTTP /cleanup/average executed\n");
-    });
-
-    //------------------------------------------------------------------------------------
-    //  POST /working/apply — apply working mode edits
-    //------------------------------------------------------------------------------------
-    gServer->Post("/working/apply", [](const httplib::Request& req, httplib::Response& res) {
-        AddCorsHeaders(res);
-        bool deleteOriginals = true;
-        try {
-            if (!req.body.empty()) {
-                json body = json::parse(req.body);
-                deleteOriginals = body.value("deleteOriginals", true);
-            }
-        } catch (...) {
-            // Default to true if body parsing fails
-        }
-        BridgeRequestWorkingApply(deleteOriginals);
-        json resp;
-        resp["ok"] = true;
-        resp["deleteOriginals"] = deleteOriginals;
-        res.set_content(resp.dump(), "application/json");
-        fprintf(stderr, "[IllTool] HTTP /working/apply requested (deleteOriginals=%s)\n",
-                deleteOriginals ? "true" : "false");
-    });
-
-    //------------------------------------------------------------------------------------
-    //  POST /working/cancel — cancel working mode, discard duplicates
-    //------------------------------------------------------------------------------------
-    gServer->Post("/working/cancel", [](const httplib::Request& /*req*/, httplib::Response& res) {
-        AddCorsHeaders(res);
-        BridgeRequestWorkingCancel();
-        json resp;
-        resp["ok"] = true;
-        res.set_content(resp.dump(), "application/json");
-        fprintf(stderr, "[IllTool] HTTP /working/cancel requested\n");
-    });
-
-    //------------------------------------------------------------------------------------
-    //  GET /learning/stats — learning engine statistics
-    //------------------------------------------------------------------------------------
-    gServer->Get("/learning/stats", [](const httplib::Request& /*req*/, httplib::Response& res) {
-        AddCorsHeaders(res);
-
-        LearningEngine& le = LearningEngine::Instance();
-        json resp;
-        resp["ok"]           = le.IsOpen();
-        resp["total"]        = le.GetTotalInteractionCount();
-        resp["shape_overrides"] = le.GetActionCount("shape_override");
-        resp["simplify"]     = le.GetActionCount("simplify");
-        resp["delete_noise"] = le.GetActionCount("delete_noise");
-        resp["group"]        = le.GetActionCount("group");
-
-        // Include current predictions for common surface types
-        json predictions;
-        const char* surfaces[] = {"flat", "cylindrical", "convex", "concave", "saddle"};
-        for (const char* s : surfaces) {
-            json p;
-            std::string shape = le.PredictShape(s, 0, 0.0);
-            double simplifyLevel = le.PredictSimplifyLevel(s);
-            p["predicted_shape"] = shape.empty() ? nullptr : json(shape);
-            p["predicted_simplify"] = (simplifyLevel < 0) ? nullptr : json(simplifyLevel);
-            predictions[s] = p;
-        }
-        resp["predictions"] = predictions;
-
-        double noiseThreshold = le.GetNoiseThreshold();
-        resp["noise_threshold"] = (noiseThreshold < 0) ? nullptr : json(noiseThreshold);
-
-        res.set_content(resp.dump(), "application/json");
-    });
-
-    //------------------------------------------------------------------------------------
-    //  POST /learning/predict-shape — predict shape for a surface type
-    //------------------------------------------------------------------------------------
-    gServer->Post("/learning/predict-shape", [](const httplib::Request& req, httplib::Response& res) {
-        AddCorsHeaders(res);
-        try {
-            json body = json::parse(req.body);
-            std::string surfaceType = body.value("surface_type", "");
-
-            LearningEngine& le = LearningEngine::Instance();
-            std::string shape = le.PredictShape(surfaceType.c_str(), 0, 0.0);
-
-            // Compute confidence: count for this shape / total shape overrides for this surface
-            double confidence = 0.0;
-            int totalOverrides = le.GetActionCount("shape_override");
-            if (totalOverrides > 0 && !shape.empty()) {
-                // Rough confidence based on sample count (caps at 0.95 with 20+ samples)
-                int count = totalOverrides; // conservative estimate
-                confidence = 1.0 - (1.0 / (1.0 + count * 0.15));
-                if (confidence > 0.95) confidence = 0.95;
-            }
-
-            json resp;
-            resp["ok"] = true;
-            resp["shape"] = shape.empty() ? nullptr : json(shape);
-            resp["confidence"] = shape.empty() ? 0.0 : confidence;
-            resp["surface_type"] = surfaceType;
-            res.set_content(resp.dump(), "application/json");
-        }
-        catch (const json::exception& e) {
-            json resp;
-            resp["ok"]    = false;
-            resp["error"] = e.what();
-            res.status = 400;
-            res.set_content(resp.dump(), "application/json");
-        }
-    });
-
-    //------------------------------------------------------------------------------------
-    //  GET /learning/noise-threshold — learned noise threshold
-    //------------------------------------------------------------------------------------
-    gServer->Get("/learning/noise-threshold", [](const httplib::Request& /*req*/, httplib::Response& res) {
-        AddCorsHeaders(res);
-        LearningEngine& le = LearningEngine::Instance();
-        double threshold = le.GetNoiseThreshold();
-
-        json resp;
-        resp["ok"] = true;
-        resp["threshold"] = (threshold < 0) ? nullptr : json(threshold);
-        resp["has_data"] = (threshold >= 0);
-        res.set_content(resp.dump(), "application/json");
-    });
-
-    //------------------------------------------------------------------------------------
-    //  POST /vision/load — load image into vision engine
-    //------------------------------------------------------------------------------------
-    gServer->Post("/vision/load", [](const httplib::Request& req, httplib::Response& res) {
-        AddCorsHeaders(res);
-        try {
-            json body = json::parse(req.body);
-            std::string imagePath = body.value("image_path", "");
-
-            if (imagePath.empty()) {
-                json resp;
-                resp["ok"]    = false;
-                resp["error"] = "image_path is required";
-                res.status = 400;
-                res.set_content(resp.dump(), "application/json");
-                return;
-            }
-
-            VisionEngine& ve = VisionEngine::Instance();
-            bool loaded = ve.LoadImage(imagePath.c_str());
-
-            json resp;
-            resp["ok"]     = loaded;
-            resp["width"]  = ve.Width();
-            resp["height"] = ve.Height();
-            if (!loaded) {
-                resp["error"] = "Failed to load image";
-                res.status = 400;
-            }
-            res.set_content(resp.dump(), "application/json");
-        }
-        catch (const json::exception& e) {
-            json resp;
-            resp["ok"]    = false;
-            resp["error"] = e.what();
-            res.status = 400;
-            res.set_content(resp.dump(), "application/json");
-        }
-    });
-
-    //------------------------------------------------------------------------------------
-    //  GET /vision/status — vision engine status
-    //------------------------------------------------------------------------------------
-    gServer->Get("/vision/status", [](const httplib::Request& /*req*/, httplib::Response& res) {
-        AddCorsHeaders(res);
-        VisionEngine& ve = VisionEngine::Instance();
-
-        json resp;
-        resp["loaded"] = ve.IsLoaded();
-        resp["width"]  = ve.Width();
-        resp["height"] = ve.Height();
-        res.set_content(resp.dump(), "application/json");
-    });
-
-    //------------------------------------------------------------------------------------
-    //  POST /vision/edges — run edge detection and return contours
-    //------------------------------------------------------------------------------------
-    gServer->Post("/vision/edges", [](const httplib::Request& req, httplib::Response& res) {
-        AddCorsHeaders(res);
-        VisionEngine& ve = VisionEngine::Instance();
-
-        if (!ve.IsLoaded()) {
-            json resp;
-            resp["ok"]    = false;
-            resp["error"] = "No image loaded";
-            res.status = 400;
-            res.set_content(resp.dump(), "application/json");
-            return;
-        }
-
-        try {
-            json body = json::parse(req.body);
-            std::string method = body.value("method", "canny");
-
-            std::vector<uint8_t> edges;
-
-            if (method == "canny") {
-                double low  = body.value("low", 50.0);
-                double high = body.value("high", 150.0);
-                edges = ve.CannyEdges(low, high);
-            } else if (method == "sobel") {
-                double threshold = body.value("threshold", 128.0);
-                edges = ve.SobelEdges(threshold);
-            } else if (method == "multiscale") {
-                int numScales      = body.value("num_scales", 5);
-                double voteThresh  = body.value("vote_threshold", 3.0);
-                edges = ve.MultiScaleEdges(numScales, voteThresh);
-            } else {
-                json resp;
-                resp["ok"]    = false;
-                resp["error"] = "Unknown method: " + method;
-                res.status = 400;
-                res.set_content(resp.dump(), "application/json");
-                return;
-            }
-
-            // Extract contours from edges
-            int minLength = body.value("min_length", 10);
-            auto contours = ve.FindContours(edges, ve.Width(), ve.Height(), minLength);
-
-            // Also run Douglas-Peucker if requested
-            double simplifyEpsilon = body.value("simplify", 0.0);
-
-            // Convert contours to JSON
-            json contoursJson = json::array();
-            for (const auto& c : contours) {
-                json cj;
-
-                auto pts = c.points;
-                if (simplifyEpsilon > 0.0) {
-                    pts = VisionEngine::DouglasPeucker(pts, simplifyEpsilon);
-                }
-
-                json pointsJson = json::array();
-                for (const auto& p : pts) {
-                    json pj;
-                    pj["x"] = p.first;
-                    pj["y"] = p.second;
-                    pointsJson.push_back(pj);
-                }
-                cj["points"]    = pointsJson;
-                cj["area"]      = c.area;
-                cj["arcLength"] = c.arcLength;
-                cj["closed"]    = c.closed;
-                contoursJson.push_back(cj);
-            }
-
-            json resp;
-            resp["ok"]       = true;
-            resp["method"]   = method;
-            resp["contours"] = contoursJson;
-            resp["count"]    = (int)contours.size();
-            resp["edge_pixels"] = 0;
-            // Count edge pixels
-            int edgeCount = 0;
-            for (auto v : edges) { if (v) ++edgeCount; }
-            resp["edge_pixels"] = edgeCount;
-            res.set_content(resp.dump(), "application/json");
-        }
-        catch (const json::exception& e) {
-            json resp;
-            resp["ok"]    = false;
-            resp["error"] = e.what();
-            res.status = 400;
-            res.set_content(resp.dump(), "application/json");
-        }
-    });
-
-    //------------------------------------------------------------------------------------
-    //  POST /vision/detect-lines — Hough line detection
-    //------------------------------------------------------------------------------------
-    gServer->Post("/vision/detect-lines", [](const httplib::Request& req, httplib::Response& res) {
-        AddCorsHeaders(res);
-        VisionEngine& ve = VisionEngine::Instance();
-
-        if (!ve.IsLoaded()) {
-            json resp;
-            resp["ok"]    = false;
-            resp["error"] = "No image loaded";
-            res.status = 400;
-            res.set_content(resp.dump(), "application/json");
-            return;
-        }
-
-        try {
-            json body = json::parse(req.body);
-            double rhoRes   = body.value("rho_res", 1.0);
-            double thetaRes = body.value("theta_res", M_PI / 180.0);
-            int threshold   = body.value("threshold", 50);
-            double edgeLow  = body.value("edge_low", 50.0);
-            double edgeHigh = body.value("edge_high", 150.0);
-
-            // First run edge detection
-            auto edges = ve.CannyEdges(edgeLow, edgeHigh);
-            auto lines = ve.DetectLines(edges, rhoRes, thetaRes, threshold);
-
-            json linesJson = json::array();
-            for (const auto& l : lines) {
-                json lj;
-                lj["rho"]   = l.rho;
-                lj["theta"] = l.theta;
-                lj["votes"] = l.votes;
-                // Also provide endpoint form for convenience
-                double a = std::cos(l.theta);
-                double b = std::sin(l.theta);
-                double x0 = a * l.rho;
-                double y0 = b * l.rho;
-                lj["x1"] = x0 + 1000.0 * (-b);
-                lj["y1"] = y0 + 1000.0 * a;
-                lj["x2"] = x0 - 1000.0 * (-b);
-                lj["y2"] = y0 - 1000.0 * a;
-                linesJson.push_back(lj);
-            }
-
-            json resp;
-            resp["ok"]    = true;
-            resp["lines"] = linesJson;
-            resp["count"] = (int)lines.size();
-            res.set_content(resp.dump(), "application/json");
-        }
-        catch (const json::exception& e) {
-            json resp;
-            resp["ok"]    = false;
-            resp["error"] = e.what();
-            res.status = 400;
-            res.set_content(resp.dump(), "application/json");
-        }
-    });
-
-    //------------------------------------------------------------------------------------
-    //  POST /vision/detect-circles — Hough circle detection
-    //------------------------------------------------------------------------------------
-    gServer->Post("/vision/detect-circles", [](const httplib::Request& req, httplib::Response& res) {
-        AddCorsHeaders(res);
-        VisionEngine& ve = VisionEngine::Instance();
-
-        if (!ve.IsLoaded()) {
-            json resp;
-            resp["ok"]    = false;
-            resp["error"] = "No image loaded";
-            res.status = 400;
-            res.set_content(resp.dump(), "application/json");
-            return;
-        }
-
-        try {
-            json body = json::parse(req.body);
-            double minRadius = body.value("min_radius", 5.0);
-            double maxRadius = body.value("max_radius", 100.0);
-            int threshold    = body.value("threshold", 30);
-            double edgeLow   = body.value("edge_low", 50.0);
-            double edgeHigh  = body.value("edge_high", 150.0);
-
-            auto edges   = ve.CannyEdges(edgeLow, edgeHigh);
-            auto circles = ve.DetectCircles(edges, minRadius, maxRadius, threshold);
-
-            json circlesJson = json::array();
-            for (const auto& c : circles) {
-                json cj;
-                cj["cx"]     = c.cx;
-                cj["cy"]     = c.cy;
-                cj["radius"] = c.radius;
-                cj["votes"]  = c.votes;
-                circlesJson.push_back(cj);
-            }
-
-            json resp;
-            resp["ok"]      = true;
-            resp["circles"] = circlesJson;
-            resp["count"]   = (int)circles.size();
-            res.set_content(resp.dump(), "application/json");
-        }
-        catch (const json::exception& e) {
-            json resp;
-            resp["ok"]    = false;
-            resp["error"] = e.what();
-            res.status = 400;
-            res.set_content(resp.dump(), "application/json");
-        }
-    });
-
-    //------------------------------------------------------------------------------------
-    //  POST /vision/suggest-groups — learning-integrated grouping suggestions
-    //------------------------------------------------------------------------------------
-    gServer->Post("/vision/suggest-groups", [](const httplib::Request& req, httplib::Response& res) {
-        AddCorsHeaders(res);
-        VisionEngine& ve = VisionEngine::Instance();
-
-        if (!ve.IsLoaded()) {
-            json resp;
-            resp["ok"]    = false;
-            resp["error"] = "No image loaded";
-            res.status = 400;
-            res.set_content(resp.dump(), "application/json");
-            return;
-        }
-
-        try {
-            json body = json::parse(req.body);
-            double edgeLow     = body.value("edge_low", 50.0);
-            double edgeHigh    = body.value("edge_high", 150.0);
-            int minLength      = body.value("min_length", 10);
-            double simplifyEps = body.value("simplify", 2.0);
-
-            // Run edge detection and contour extraction
-            auto edges    = ve.CannyEdges(edgeLow, edgeHigh);
-            auto contours = ve.FindContours(edges, ve.Width(), ve.Height(), minLength);
-
-            // Detect noise
-            auto noiseIndices = ve.DetectNoise(contours);
-
-            // Suggest groups
-            auto groups = ve.SuggestGroups(contours);
-
-            // Build response
-            json noiseJson = json::array();
-            for (int idx : noiseIndices) {
-                noiseJson.push_back(idx);
-            }
-
-            json groupsJson = json::array();
-            for (const auto& g : groups) {
-                json gj;
-                gj["name"]       = g.suggestedName;
-                gj["confidence"] = g.confidence;
-                json membersJson = json::array();
-                for (int idx : g.memberIndices) {
-                    membersJson.push_back(idx);
-                }
-                gj["members"] = membersJson;
-                gj["size"]    = (int)g.memberIndices.size();
-                groupsJson.push_back(gj);
-            }
-
-            json resp;
-            resp["ok"]              = true;
-            resp["total_contours"]  = (int)contours.size();
-            resp["noise_indices"]   = noiseJson;
-            resp["noise_count"]     = (int)noiseIndices.size();
-            resp["groups"]          = groupsJson;
-            resp["group_count"]     = (int)groups.size();
-            res.set_content(resp.dump(), "application/json");
-        }
-        catch (const json::exception& e) {
-            json resp;
-            resp["ok"]    = false;
-            resp["error"] = e.what();
-            res.status = 400;
-            res.set_content(resp.dump(), "application/json");
-        }
-    });
-
-    //------------------------------------------------------------------------------------
-    //  POST /vision/snap-to-edge — active contour snapping
-    //------------------------------------------------------------------------------------
-    gServer->Post("/vision/snap-to-edge", [](const httplib::Request& req, httplib::Response& res) {
-        AddCorsHeaders(res);
-        VisionEngine& ve = VisionEngine::Instance();
-
-        if (!ve.IsLoaded()) {
-            json resp;
-            resp["ok"]    = false;
-            resp["error"] = "No image loaded";
-            res.status = 400;
-            res.set_content(resp.dump(), "application/json");
-            return;
-        }
-
-        try {
-            json body = json::parse(req.body);
-
-            // Parse input points
-            std::vector<std::pair<double,double>> inputPoints;
-            if (body.contains("points") && body["points"].is_array()) {
-                for (const auto& pj : body["points"]) {
-                    double x = pj.value("x", 0.0);
-                    double y = pj.value("y", 0.0);
-                    inputPoints.push_back({x, y});
-                }
-            }
-
-            if (inputPoints.size() < 3) {
-                json resp;
-                resp["ok"]    = false;
-                resp["error"] = "Need at least 3 points";
-                res.status = 400;
-                res.set_content(resp.dump(), "application/json");
-                return;
-            }
-
-            double alpha      = body.value("alpha", 1.0);
-            double beta       = body.value("beta", 1.0);
-            double gamma      = body.value("gamma", 1.0);
-            int iterations    = body.value("iterations", 50);
-            double simplifyEps = body.value("simplify", 0.0);
-
-            auto snapped = ve.SnapToEdge(inputPoints, alpha, beta, gamma, iterations);
-
-            if (simplifyEps > 0.0) {
-                snapped = VisionEngine::DouglasPeucker(snapped, simplifyEps);
-            }
-
-            json pointsJson = json::array();
-            for (const auto& p : snapped) {
-                json pj;
-                pj["x"] = p.first;
-                pj["y"] = p.second;
-                pointsJson.push_back(pj);
-            }
-
-            json resp;
-            resp["ok"]              = true;
-            resp["points"]          = pointsJson;
-            resp["point_count"]     = (int)snapped.size();
-            resp["input_count"]     = (int)inputPoints.size();
-            res.set_content(resp.dump(), "application/json");
-        }
-        catch (const json::exception& e) {
-            json resp;
-            resp["ok"]    = false;
-            resp["error"] = e.what();
-            res.status = 400;
-            res.set_content(resp.dump(), "application/json");
-        }
-    });
-
-    //------------------------------------------------------------------------------------
-    //  POST /vision/flood-fill — flood fill from seed point
-    //------------------------------------------------------------------------------------
-    gServer->Post("/vision/flood-fill", [](const httplib::Request& req, httplib::Response& res) {
-        AddCorsHeaders(res);
-        VisionEngine& ve = VisionEngine::Instance();
-
-        if (!ve.IsLoaded()) {
-            json resp;
-            resp["ok"]    = false;
-            resp["error"] = "No image loaded";
-            res.status = 400;
-            res.set_content(resp.dump(), "application/json");
-            return;
-        }
-
-        try {
-            json body = json::parse(req.body);
-            int seedX     = body.value("seed_x", 0);
-            int seedY     = body.value("seed_y", 0);
-            int tolerance = body.value("tolerance", 10);
-
-            auto mask = ve.FloodFillMask(seedX, seedY, tolerance);
-
-            // Count filled pixels
-            int filledCount = 0;
-            for (auto v : mask) { if (v) ++filledCount; }
-
-            // Optionally extract contours from the mask
-            bool extractContours = body.value("extract_contours", false);
-            json contoursJson = json::array();
-            if (extractContours && !mask.empty()) {
-                int minLength = body.value("min_length", 10);
-                auto contours = ve.FindContours(mask, ve.Width(), ve.Height(), minLength);
-                for (const auto& c : contours) {
-                    json cj;
-                    json pointsJson = json::array();
-                    for (const auto& p : c.points) {
-                        json pj;
-                        pj["x"] = p.first;
-                        pj["y"] = p.second;
-                        pointsJson.push_back(pj);
-                    }
-                    cj["points"]    = pointsJson;
-                    cj["area"]      = c.area;
-                    cj["arcLength"] = c.arcLength;
-                    cj["closed"]    = c.closed;
-                    contoursJson.push_back(cj);
-                }
-            }
-
-            json resp;
-            resp["ok"]           = true;
-            resp["filled_pixels"] = filledCount;
-            resp["total_pixels"]  = ve.Width() * ve.Height();
-            if (extractContours) {
-                resp["contours"] = contoursJson;
-            }
-            res.set_content(resp.dump(), "application/json");
-        }
-        catch (const json::exception& e) {
-            json resp;
-            resp["ok"]    = false;
-            resp["error"] = e.what();
-            res.status = 400;
-            res.set_content(resp.dump(), "application/json");
-        }
-    });
+#include "HttpBridgeMcp.cpp"
 
     //------------------------------------------------------------------------------------
     //  Launch server on detached thread
@@ -1152,7 +807,7 @@ bool StartHttpBridge(int port)
         fprintf(stderr, "[IllTool] HTTP server thread exiting\n");
         gRunning.store(false);
     });
-    gServerThread.detach();
+    // P0: do NOT detach — StopHttpBridge joins this thread for clean shutdown
 
     fprintf(stderr, "[IllTool] HTTP bridge started on 127.0.0.1:%d\n", port);
     return true;
@@ -1171,10 +826,17 @@ void StopHttpBridge()
     fprintf(stderr, "[IllTool] Stopping HTTP bridge...\n");
     gRunning.store(false);
 
+    // Wake any blocked MCP sync request so it can exit cleanly
+    gMcpShuttingDown.store(true);
+    gMcpCondVar.notify_all();
+
     if (gServer) {
         gServer->stop();
-        // Thread is detached, so we just delete the server
-        // after stopping — the thread will exit its listen() call
+        // Detach immediately — don't block Illustrator quit
+        if (gServerThread.joinable()) {
+            gServerThread.detach();
+            fprintf(stderr, "[IllTool] HTTP bridge thread detached\n");
+        }
         delete gServer;
         gServer = nullptr;
     }

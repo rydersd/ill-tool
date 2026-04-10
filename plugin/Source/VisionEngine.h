@@ -17,6 +17,7 @@
 #include <string>
 #include <cmath>
 #include <utility>
+#include <mutex>
 
 //----------------------------------------------------------------------------------------
 //  VisionEngine -- singleton providing CV operations on loaded raster images
@@ -182,6 +183,28 @@ public:
     static std::vector<std::pair<double,double>> DouglasPeucker(
         const std::vector<std::pair<double,double>>& points, double epsilon);
 
+    /** Generate normal map from grayscale height map via Sobel gradient.
+        Bright = high, dark = low.  Returns RGB buffer (caller must delete[]).
+        Returns nullptr on failure.
+        @param heightMap  Grayscale pixel buffer (1 byte per pixel).
+        @param w          Image width in pixels.
+        @param h          Image height in pixels.
+        @param strength   Controls the steepness of perceived depth (default 2.0).
+        @return RGB buffer of size w*h*3, or nullptr on failure. */
+    static unsigned char* GenerateNormalFromHeight(const unsigned char* heightMap,
+                                                    int w, int h, double strength = 2.0);
+
+    /** Skeletonize a binary image using Zhang-Suen thinning.
+        Input: grayscale image where dark pixels are foreground (< threshold).
+        Output: binary image (0=bg, 255=skeleton) same dimensions as input.
+        Caller must delete[] the result.
+        @param grayscale  Input grayscale pixels (1 channel)
+        @param w, h       Image dimensions
+        @param threshold  Pixels darker than this are foreground (default 128)
+        @return Skeletonized binary image, or nullptr on failure. */
+    static unsigned char* Skeletonize(const unsigned char* grayscale,
+                                       int w, int h, int threshold = 128);
+
     //------------------------------------------------------------------------------------
     //  Learning-integrated operations
     //------------------------------------------------------------------------------------
@@ -205,9 +228,129 @@ public:
         @return Suggested groupings. */
     std::vector<ContourGroup> SuggestGroups(const std::vector<Contour>& contours);
 
+    //------------------------------------------------------------------------------------
+    //  Vanishing point estimation
+    //------------------------------------------------------------------------------------
+
+    /** Estimated vanishing point from line clustering. */
+    struct VanishingPointEstimate {
+        double x = 0, y = 0;       // VP position in image pixel coordinates
+        double confidence = 0;     // 0-1 based on cluster size relative to total lines
+        int lineCount = 0;         // number of lines in this cluster
+        double dominantAngle = 0;  // average theta of the line cluster (radians)
+    };
+
+    /** Estimate vanishing points from line convergence in the loaded image.
+        Runs Canny + Hough, clusters lines by angle, intersects pairs within
+        each cluster, and takes the median intersection point.
+        @param maxVPs        Maximum number of VPs to return (default 2).
+        @param cannyLow      Canny lower threshold.
+        @param cannyHigh     Canny upper threshold.
+        @param houghThreshold Minimum Hough accumulator votes.
+        @return Vector of VPs sorted by confidence (largest cluster first). */
+    std::vector<VanishingPointEstimate> EstimateVanishingPoints(
+        int maxVPs = 2,
+        double cannyLow = 50.0, double cannyHigh = 150.0,
+        int houghThreshold = 30);
+
+    //------------------------------------------------------------------------------------
+    //  Surface type inference
+    //------------------------------------------------------------------------------------
+
+    /** Surface type classification matching Python SURFACE_TYPE_NAMES. */
+    enum class SurfaceType : int {
+        Unknown     = -1,
+        Flat        = 0,
+        Convex      = 1,
+        Concave     = 2,
+        Saddle      = 3,
+        Cylindrical = 4
+    };
+
+    /** Result of surface type inference for a rectangular region. */
+    struct SurfaceHint {
+        SurfaceType type = SurfaceType::Unknown;
+        double      confidence = 0.0;        // 0.0 - 1.0
+        double      gradientAngle = 0.0;     // Dominant gradient direction (radians)
+    };
+
+    /** Mapping between Illustrator artwork coordinates and raster pixel coordinates. */
+    struct ArtToPixelMapping {
+        double artLeft = 0, artTop = 0, artRight = 0, artBottom = 0;
+        int    pixelWidth = 0, pixelHeight = 0;
+        bool   valid = false;
+
+        /** Convert a rect in artwork coords to pixel rect. */
+        void ArtRectToPixelRect(double aLeft, double aTop, double aRight, double aBottom,
+                                int& pX, int& pY, int& pW, int& pH) const;
+    };
+
+    /** Infer the dominant surface type within a rectangular region of the loaded image.
+        Uses gradient direction histogram analysis.
+        @param x  Left edge of the region in pixel coordinates.
+        @param y  Top edge of the region in pixel coordinates.
+        @param w  Width of the region in pixels.
+        @param h  Height of the region in pixels.
+        @return SurfaceHint with type, confidence, and dominant gradient angle. */
+    SurfaceHint InferSurfaceType(int x, int y, int w, int h);
+
+    /** Result of k-means clustering on a DSINE normal map (RGB pixel data). */
+    struct NormalRegion {
+        double nx, ny, nz;           // cluster centroid normal direction (from RGB)
+        int pixelCount;              // number of sampled pixels in this cluster
+        double centerX, centerY;     // average pixel position of cluster members
+        std::string label;           // auto-generated spatial label: "Top-Left", "Center", etc.
+    };
+
+    /** Cluster an RGB normal map into K surface regions via k-means on (R,G,B) vectors.
+        Samples every Nth pixel (stride=4) for speed, treats RGB as normal direction.
+        @param normalMapRGB  Raw RGB pixel data (3 bytes per pixel, row-major).
+        @param width         Image width in pixels.
+        @param height        Image height in pixels.
+        @param k             Number of clusters.
+        @return Vector of NormalRegion sorted by pixel count (largest first). */
+    std::vector<NormalRegion> ClusterNormalMapRegions(
+        const unsigned char* normalMapRGB, int width, int height, int k);
+
+    /** Result of normal direction clustering — a dominant surface plane. */
+    struct PlaneCluster {
+        double normalAngle = 0;    // Dominant gradient direction (radians, 0-pi)
+        double strength = 0;       // Fraction of pixels in this cluster (0-1)
+        int    pixelCount = 0;     // Number of pixels in cluster
+    };
+
+    /** Cluster gradient directions into dominant planes using k-means on angle histogram.
+        Returns up to maxPlanes clusters sorted by strength (largest first).
+        Each cluster represents a surface plane whose edges converge at a VP
+        perpendicular to the cluster's dominant gradient angle.
+        @param maxPlanes  Maximum number of plane clusters to return.
+        @return Vector of PlaneCluster sorted by strength. */
+    std::vector<PlaneCluster> ClusterNormalDirections(int maxPlanes = 3);
+
+    /** Estimate vanishing points from normal direction clustering.
+        Unlike Hough-based VP detection (which looks for line convergence),
+        this derives VPs from surface plane orientations:
+        - Cluster gradient directions into dominant planes
+        - Each plane's edge direction is perpendicular to its gradient
+        - Parallel edges from the same plane family converge at a VP
+        @param maxVPs  Maximum number of VPs to return.
+        @return Vector of VanishingPointEstimate derived from normal clusters. */
+    std::vector<VanishingPointEstimate> EstimateVPsFromNormals(int maxVPs = 2);
+
+    /** Set the artwork-to-pixel coordinate mapping.
+        Called after loading an image and determining where it's placed on the artboard. */
+    void SetArtToPixelMapping(double artLeft, double artTop, double artRight, double artBottom);
+
+    /** Get the current mapping (returns by value for thread safety). */
+    ArtToPixelMapping GetMapping() const { std::lock_guard<std::recursive_mutex> lock(mMutex); return artMapping; }
+
 private:
     VisionEngine();
     ~VisionEngine();
+
+    mutable std::recursive_mutex mMutex;  // P0: protects all mutable state (recursive for internal calls)
+
+    ArtToPixelMapping artMapping;
 
     // Non-copyable
     VisionEngine(const VisionEngine&) = delete;

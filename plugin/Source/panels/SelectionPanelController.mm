@@ -74,6 +74,7 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     [attrTitle addAttribute:NSFontAttributeName value:ITLabelFont()
                       range:NSMakeRange(0, title.length)];
     cb.attributedTitle = attrTitle;
+    [attrTitle release];
     cb.translatesAutoresizingMaskIntoConstraints = NO;
     return cb;
 }
@@ -173,6 +174,7 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     root.layer.backgroundColor = ITBGColor().CGColor;
     root.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     self.rootViewInternal = root;
+    [root release];  // P2: balance alloc — strong property retains
 
     CGFloat y = totalHeight - kPadding;
 
@@ -231,6 +233,7 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     NSBox *sep = [[NSBox alloc] initWithFrame:NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, 1)];
     sep.boxType = NSBoxSeparator;
     [root addSubview:sep];
+    [sep release];
     y -= (1 + kPadding);
 
     // --- Threshold slider (Smart mode only) ---
@@ -289,6 +292,7 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
 {
     BOOL checked = (sender.state == NSControlStateValueOn);
     fprintf(stderr, "[IllTool Panel] Add to Selection: %s\n", checked ? "ON" : "OFF");
+    BridgeSetAddToSelection((bool)checked);
 }
 
 - (void)onThresholdChanged:(NSSlider *)sender

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+  <!-- Arrow pointer -->
+  <path d="M4,2 L4,22 L9,17 L14,26 L17,24 L12,15 L19,15 Z" fill="#000" stroke="#fff" stroke-width="1"/>
+  <!-- "A" badge -->
+  <circle cx="24" cy="8" r="7" fill="#48B8E0" stroke="#fff" stroke-width="1"/>
+  <text x="24" y="12" font-family="Helvetica,Arial" font-size="11" font-weight="bold" fill="#fff" text-anchor="middle">A</text>
+</svg>

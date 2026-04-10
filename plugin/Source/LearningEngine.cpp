@@ -9,12 +9,27 @@
 
 #include "LearningEngine.h"
 
+// Ensure OpenSSL support IS enabled for telemetry HTTPS upload
+#ifndef CPPHTTPLIB_OPENSSL_SUPPORT
+// Telemetry uses plain HTTP fallback if OpenSSL not available
+#endif
+
+#include "vendor/httplib.h"
+#include "vendor/json.hpp"
+
 #include <sqlite3.h>
 
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <sys/stat.h>
+#include <thread>
+#include <fstream>
+#include <sstream>
+#include <functional>
+
+#include <CommonCrypto/CommonDigest.h>
 
 //----------------------------------------------------------------------------------------
 //  Logging prefix
@@ -66,6 +81,7 @@ std::string LearningEngine::GetDBPath()
 
 void LearningEngine::Open()
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     if (db) {
         LE_LOG("Database already open");
         return;
@@ -105,6 +121,7 @@ void LearningEngine::Open()
 
 void LearningEngine::Close()
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     if (db) {
         sqlite3_close(reinterpret_cast<sqlite3*>(db));
         db = nullptr;
@@ -114,6 +131,7 @@ void LearningEngine::Close()
 
 bool LearningEngine::IsOpen() const
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     return db != nullptr;
 }
 
@@ -196,6 +214,7 @@ void LearningEngine::CreateTables()
 
 void LearningEngine::RecordShapeOverride(const char* surfaceType, const char* autoShape, const char* userShape)
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     if (!db) return;
 
     sqlite3* sqldb = reinterpret_cast<sqlite3*>(db);
@@ -230,6 +249,7 @@ void LearningEngine::RecordShapeOverride(const char* surfaceType, const char* au
 
 void LearningEngine::RecordSimplifyLevel(const char* surfaceType, double level, int pointsBefore, int pointsAfter)
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     if (!db) return;
 
     sqlite3* sqldb = reinterpret_cast<sqlite3*>(db);
@@ -263,6 +283,7 @@ void LearningEngine::RecordSimplifyLevel(const char* surfaceType, double level, 
 
 void LearningEngine::RecordNoiseDelete(double pathLength, int pointCount, double curvatureVariance)
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     if (!db) return;
 
     sqlite3* sqldb = reinterpret_cast<sqlite3*>(db);
@@ -295,6 +316,7 @@ void LearningEngine::RecordNoiseDelete(double pathLength, int pointCount, double
 
 void LearningEngine::RecordGrouping(const std::vector<std::string>& pathNames)
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     if (!db) return;
 
     sqlite3* sqldb = reinterpret_cast<sqlite3*>(db);
@@ -330,12 +352,92 @@ void LearningEngine::RecordGrouping(const std::vector<std::string>& pathNames)
     sqlite3_finalize(stmt);
 }
 
+void LearningEngine::RecordCorrection(const char* surfaceType, double dx, double dy, const char* shapeType)
+{
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
+    if (!db) return;
+
+    sqlite3* sqldb = reinterpret_cast<sqlite3*>(db);
+    sqlite3_stmt* stmt = nullptr;
+
+    // Store correction delta: surface_type in surface_type field, shape in auto_shape,
+    // dx in simplify_level, dy in point_count_before (reusing existing columns)
+    const char* sql =
+        "INSERT INTO interactions (action, surface_type, auto_shape, simplify_level, point_count_before) "
+        "VALUES ('correction', ?, ?, ?, ?);";
+
+    int rc = sqlite3_prepare_v2(sqldb, sql, -1, &stmt, nullptr);
+    if (rc != SQLITE_OK) {
+        LE_LOG("ERROR preparing correction insert: %s", sqlite3_errmsg(sqldb));
+        return;
+    }
+
+    sqlite3_bind_text(stmt, 1, surfaceType ? surfaceType : "unknown", -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, shapeType ? shapeType : "unknown", -1, SQLITE_TRANSIENT);
+    sqlite3_bind_double(stmt, 3, dx);
+    sqlite3_bind_int(stmt, 4, (int)(dy * 1000));  // store dy as millipoints for int column
+
+    rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        LE_LOG("ERROR inserting correction: %s", sqlite3_errmsg(sqldb));
+    } else {
+        LE_LOG("Recorded correction: surface=%s shape=%s dx=%.1f dy=%.1f",
+               surfaceType, shapeType, dx, dy);
+    }
+
+    sqlite3_finalize(stmt);
+}
+
+//========================================================================================
+//  Interaction Journal (JSONL)
+//========================================================================================
+
+void LearningEngine::JournalLog(const char* action, const char* jsonFields)
+{
+    // Write to ~/Library/Application Support/illtool/interactions/journal.jsonl
+    const char* home = getenv("HOME");
+    if (!home) return;
+
+    std::string dir = std::string(home) + "/Library/Application Support/illtool/interactions";
+
+    // Create directory if needed
+    struct stat st;
+    if (stat(dir.c_str(), &st) != 0) {
+        mkdir(dir.c_str(), 0755);
+    }
+
+    std::string path = dir + "/journal.jsonl";
+
+    FILE* f = fopen(path.c_str(), "a");
+    if (!f) {
+        LE_LOG("ERROR opening journal: %s", path.c_str());
+        return;
+    }
+
+    // Timestamp
+    time_t now = time(nullptr);
+    struct tm tm;
+    localtime_r(&now, &tm);
+    char ts[64];
+    strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%S", &tm);
+
+    // Write JSONL line
+    fprintf(f, "{\"ts\":\"%s\",\"action\":\"%s\"", ts, action ? action : "unknown");
+    if (jsonFields && jsonFields[0]) {
+        fprintf(f, ",%s", jsonFields);
+    }
+    fprintf(f, "}\n");
+
+    fclose(f);
+}
+
 //========================================================================================
 //  Inference
 //========================================================================================
 
 std::string LearningEngine::PredictShape(const char* surfaceType, int /*pointCount*/, double /*curvatureVariance*/)
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     if (!db) return "";
 
     sqlite3* sqldb = reinterpret_cast<sqlite3*>(db);
@@ -379,6 +481,7 @@ std::string LearningEngine::PredictShape(const char* surfaceType, int /*pointCou
 
 double LearningEngine::PredictSimplifyLevel(const char* surfaceType)
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     if (!db) return -1.0;
 
     sqlite3* sqldb = reinterpret_cast<sqlite3*>(db);
@@ -418,6 +521,7 @@ double LearningEngine::PredictSimplifyLevel(const char* surfaceType)
 
 bool LearningEngine::IsLikelyNoise(double pathLength, int pointCount, double /*curvatureVariance*/)
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     if (!db) return false;
 
     sqlite3* sqldb = reinterpret_cast<sqlite3*>(db);
@@ -460,6 +564,7 @@ bool LearningEngine::IsLikelyNoise(double pathLength, int pointCount, double /*c
 
 double LearningEngine::GetNoiseThreshold()
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     if (!db) return -1.0;
 
     sqlite3* sqldb = reinterpret_cast<sqlite3*>(db);
@@ -499,6 +604,7 @@ double LearningEngine::GetNoiseThreshold()
 
 int LearningEngine::GetTotalInteractionCount()
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     if (!db) return 0;
 
     sqlite3* sqldb = reinterpret_cast<sqlite3*>(db);
@@ -521,6 +627,7 @@ int LearningEngine::GetTotalInteractionCount()
 
 int LearningEngine::GetActionCount(const char* action)
 {
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
     if (!db || !action) return 0;
 
     sqlite3* sqldb = reinterpret_cast<sqlite3*>(db);
@@ -541,6 +648,281 @@ int LearningEngine::GetActionCount(const char* action)
 
     sqlite3_finalize(stmt);
     return result;
+}
+
+//========================================================================================
+//  Anonymous Telemetry
+//========================================================================================
+
+std::string LearningEngine::GetConsentPath()
+{
+    const char* home = getenv("HOME");
+    if (!home) return "";
+    return std::string(home) + "/Library/Application Support/illtool/telemetry_consent";
+}
+
+std::string LearningEngine::GetLastUploadPath()
+{
+    const char* home = getenv("HOME");
+    if (!home) return "";
+    return std::string(home) + "/Library/Application Support/illtool/telemetry_last_upload";
+}
+
+void LearningEngine::SetTelemetryConsent(bool consented)
+{
+    std::string path = GetConsentPath();
+    if (path.empty()) return;
+
+    FILE* f = fopen(path.c_str(), "w");
+    if (!f) {
+        LE_LOG("ERROR: Failed to write consent file: %s", path.c_str());
+        return;
+    }
+    fprintf(f, "%s\n", consented ? "yes" : "no");
+    fclose(f);
+    LE_LOG("Telemetry consent set to: %s", consented ? "yes" : "no");
+}
+
+bool LearningEngine::GetTelemetryConsent()
+{
+    std::string path = GetConsentPath();
+    if (path.empty()) return false;
+
+    FILE* f = fopen(path.c_str(), "r");
+    if (!f) return false;  // No consent file = not consented
+
+    char buf[16] = {};
+    if (fgets(buf, sizeof(buf), f)) {
+        fclose(f);
+        // Trim whitespace
+        std::string val(buf);
+        while (!val.empty() && (val.back() == '\n' || val.back() == '\r' || val.back() == ' '))
+            val.pop_back();
+        return (val == "yes");
+    }
+    fclose(f);
+    return false;
+}
+
+std::string LearningEngine::GetAnonymousId()
+{
+    // Get hardware UUID via system_profiler (avoids IOKit framework dependency).
+    // Falls back to hostname + username hash if that fails.
+    std::string hwUUID;
+
+    FILE* pipe = popen("ioreg -rd1 -c IOPlatformExpertDevice 2>/dev/null | grep IOPlatformUUID", "r");
+    if (pipe) {
+        char buf[512] = {};
+        if (fgets(buf, sizeof(buf), pipe)) {
+            // Output looks like: "IOPlatformUUID" = "XXXXXXXX-XXXX-..."
+            std::string line(buf);
+            size_t eqPos = line.find('=');
+            if (eqPos != std::string::npos) {
+                // Extract the UUID between quotes after the =
+                size_t q1 = line.find('"', eqPos + 1);
+                size_t q2 = (q1 != std::string::npos) ? line.find('"', q1 + 1) : std::string::npos;
+                if (q1 != std::string::npos && q2 != std::string::npos) {
+                    hwUUID = line.substr(q1 + 1, q2 - q1 - 1);
+                }
+            }
+        }
+        pclose(pipe);
+    }
+
+    // Fallback: hostname + username
+    if (hwUUID.empty()) {
+        char hostname[256] = {};
+        gethostname(hostname, sizeof(hostname));
+        const char* user = getenv("USER");
+        hwUUID = std::string(hostname) + ":" + (user ? user : "unknown");
+    }
+
+    // SHA-256 hash so the original identifier is never transmitted
+    unsigned char hash[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256(hwUUID.c_str(), (CC_LONG)hwUUID.size(), hash);
+
+    // Convert to hex string (first 16 bytes = 32 hex chars)
+    char hexStr[33] = {};
+    for (int i = 0; i < 16; i++) {
+        snprintf(hexStr + i * 2, 3, "%02x", hash[i]);
+    }
+    return std::string(hexStr);
+}
+
+int LearningEngine::CountNewJournalEntries()
+{
+    const char* home = getenv("HOME");
+    if (!home) return 0;
+
+    std::string journalPath = std::string(home) + "/Library/Application Support/illtool/interactions/journal.jsonl";
+    std::string lastUploadPath = GetLastUploadPath();
+
+    // Read last upload line count
+    int lastUploadLine = 0;
+    {
+        FILE* f = fopen(lastUploadPath.c_str(), "r");
+        if (f) {
+            fscanf(f, "%d", &lastUploadLine);
+            fclose(f);
+        }
+    }
+
+    // Count total lines in journal
+    int totalLines = 0;
+    {
+        FILE* f = fopen(journalPath.c_str(), "r");
+        if (!f) return 0;
+        char line[4096];
+        while (fgets(line, sizeof(line), f)) {
+            totalLines++;
+        }
+        fclose(f);
+    }
+
+    return totalLines - lastUploadLine;
+}
+
+std::string LearningEngine::AnonymizeJournal()
+{
+    using njson = nlohmann::json;
+
+    const char* home = getenv("HOME");
+    if (!home) return "";
+
+    std::string journalPath = std::string(home) + "/Library/Application Support/illtool/interactions/journal.jsonl";
+    std::string lastUploadPath = GetLastUploadPath();
+
+    // Read last upload line count
+    int lastUploadLine = 0;
+    {
+        FILE* f = fopen(lastUploadPath.c_str(), "r");
+        if (f) {
+            fscanf(f, "%d", &lastUploadLine);
+            fclose(f);
+        }
+    }
+
+    // Read journal lines, skip already-uploaded ones
+    std::vector<std::string> lines;
+    {
+        FILE* f = fopen(journalPath.c_str(), "r");
+        if (!f) return "";
+        char line[4096];
+        int lineNum = 0;
+        while (fgets(line, sizeof(line), f)) {
+            lineNum++;
+            if (lineNum > lastUploadLine) {
+                std::string l(line);
+                while (!l.empty() && (l.back() == '\n' || l.back() == '\r')) l.pop_back();
+                if (!l.empty()) lines.push_back(l);
+            }
+        }
+        fclose(f);
+    }
+
+    // Anonymize each line: parse JSON, strip PII fields
+    // Keep: action, shape_type, surface_type, dx, dy, level, timestamp, params
+    // Strip: any field containing "/" (file paths), "name" fields
+    std::string anonymousId = GetAnonymousId();
+    std::ostringstream out;
+
+    int totalLineCount = lastUploadLine + (int)lines.size();
+
+    for (const auto& line : lines) {
+        try {
+            njson entry = njson::parse(line);
+            njson clean;
+
+            // Always include anonymous ID
+            clean["anon_id"] = anonymousId;
+
+            // Whitelist of safe fields to keep
+            const char* safeFields[] = {
+                "ts", "action", "shape_type", "surface_type",
+                "dx", "dy", "level", "params", "point_count",
+                "curvature_variance", "path_length",
+                "auto_shape", "user_shape", "simplify_level",
+                "point_count_before", "point_count_after",
+                "was_deleted", "confidence", "gradient_angle",
+                nullptr
+            };
+
+            for (int i = 0; safeFields[i]; i++) {
+                if (entry.contains(safeFields[i])) {
+                    auto& val = entry[safeFields[i]];
+                    // Extra safety: skip string values containing "/" (file paths)
+                    if (val.is_string()) {
+                        std::string sv = val.get<std::string>();
+                        if (sv.find('/') != std::string::npos) continue;
+                        if (sv.find('\\') != std::string::npos) continue;
+                    }
+                    clean[safeFields[i]] = val;
+                }
+            }
+
+            out << clean.dump() << "\n";
+        }
+        catch (...) {
+            // Skip malformed JSON lines
+            continue;
+        }
+    }
+
+    // Update last upload marker with total line count (so next upload skips these)
+    {
+        FILE* f = fopen(lastUploadPath.c_str(), "w");
+        if (f) {
+            fprintf(f, "%d\n", totalLineCount);
+            fclose(f);
+        }
+    }
+
+    return out.str();
+}
+
+void LearningEngine::UploadTelemetry()
+{
+    // Check consent
+    if (!GetTelemetryConsent()) {
+        LE_LOG("Telemetry: consent not granted, skipping upload");
+        return;
+    }
+
+    // Check if enough new entries
+    int newEntries = CountNewJournalEntries();
+    if (newEntries < 100) {
+        LE_LOG("Telemetry: only %d new entries (need 100+), skipping upload", newEntries);
+        return;
+    }
+
+    LE_LOG("Telemetry: %d new entries, starting anonymized upload...", newEntries);
+
+    // Anonymize on the calling thread (fast, file I/O only)
+    std::string payload = AnonymizeJournal();
+    if (payload.empty()) {
+        LE_LOG("Telemetry: no data after anonymization");
+        return;
+    }
+
+    // Fire-and-forget on a detached thread — non-blocking
+    std::thread([payload]() {
+        try {
+            httplib::Client cli("telemetry.illtool.dev", 80);
+            cli.set_connection_timeout(5, 0);
+            cli.set_read_timeout(10, 0);
+
+            auto res = cli.Post("/v1/upload", payload, "application/x-ndjson");
+            if (res) {
+                fprintf(stderr, "[IllTool Learning] Telemetry upload: HTTP %d (%zu bytes)\n",
+                        res->status, payload.size());
+            } else {
+                fprintf(stderr, "[IllTool Learning] Telemetry upload: endpoint unreachable (expected)\n");
+            }
+        }
+        catch (...) {
+            fprintf(stderr, "[IllTool Learning] Telemetry upload: exception (silently ignored)\n");
+        }
+    }).detach();
 }
 
 //========================================================================================

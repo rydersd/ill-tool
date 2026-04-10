@@ -31,6 +31,9 @@
 /** Update the points count label. */
 - (void)updatePointsCount:(NSInteger)count;
 
+/** Update the decompose readout label. */
+- (void)updateDecomposeReadout:(NSString *)text;
+
 @end
 
 #endif // __OBJC__

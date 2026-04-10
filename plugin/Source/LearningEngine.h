@@ -15,6 +15,7 @@
 
 #include <string>
 #include <vector>
+#include <mutex>
 
 //----------------------------------------------------------------------------------------
 //  LearningEngine — singleton that records interactions and predicts preferences
@@ -52,6 +53,13 @@ public:
         @param pathNames  Names/IDs of the paths that were grouped. */
     void RecordGrouping(const std::vector<std::string>& pathNames);
 
+    /** Record handle displacement delta (where tool placed anchor vs where user moved it).
+        @param surfaceType  Surface classification.
+        @param dx           Horizontal displacement (user - auto).
+        @param dy           Vertical displacement (user - auto).
+        @param shapeType    Shape type string (line, arc, rect, etc.). */
+    void RecordCorrection(const char* surfaceType, double dx, double dy, const char* shapeType);
+
     //------------------------------------------------------------------------------------
     //  Inference (predictions from accumulated data)
     //------------------------------------------------------------------------------------
@@ -82,6 +90,32 @@ public:
         Returns -1.0 if not enough data.
         @return Threshold path length, or -1.0 if insufficient data. */
     double GetNoiseThreshold();
+
+    //------------------------------------------------------------------------------------
+    //  Interaction Journal (JSONL log for LLM consumption)
+    //------------------------------------------------------------------------------------
+
+    /** Append a JSONL line to the interaction journal file.
+        @param action     The action type (e.g. "shape_override", "simplify", "correction").
+        @param jsonFields Additional JSON key-value pairs to include. */
+    void JournalLog(const char* action, const char* jsonFields);
+
+    //------------------------------------------------------------------------------------
+    //  Anonymous Telemetry
+    //------------------------------------------------------------------------------------
+
+    /** Set opt-in telemetry consent. Persists to disk. */
+    void SetTelemetryConsent(bool consented);
+
+    /** Get current telemetry consent status. */
+    bool GetTelemetryConsent();
+
+    /** Upload anonymized telemetry data to remote endpoint.
+        Fire-and-forget on a detached thread. Only uploads if:
+        - consent is granted
+        - there are >100 new journal entries since last upload
+        Silently fails if endpoint is unreachable. */
+    void UploadTelemetry();
 
     //------------------------------------------------------------------------------------
     //  Stats (for HTTP endpoint / diagnostics)
@@ -121,6 +155,22 @@ private:
     /** Get the database file path: ~/Library/Application Support/illtool/learning.db */
     static std::string GetDBPath();
 
+    /** Get the telemetry consent file path: ~/Library/Application Support/illtool/telemetry_consent */
+    static std::string GetConsentPath();
+
+    /** Get the last upload marker file path: ~/Library/Application Support/illtool/telemetry_last_upload */
+    static std::string GetLastUploadPath();
+
+    /** Count journal lines since the last upload timestamp. */
+    int CountNewJournalEntries();
+
+    /** Read journal entries, strip PII, return anonymized NDJSON string. */
+    std::string AnonymizeJournal();
+
+    /** Generate an anonymous machine ID (consistent hash of hardware UUID). */
+    static std::string GetAnonymousId();
+
+    mutable std::recursive_mutex mMutex;  // P0: protects all DB operations
     void* db = nullptr;  // sqlite3* — opaque to avoid exposing sqlite3.h
 };
 
