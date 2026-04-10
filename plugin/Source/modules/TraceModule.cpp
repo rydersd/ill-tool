@@ -11,6 +11,7 @@
 #include "HttpBridge.h"
 #include "IllToolSuites.h"
 #include "VisionEngine.h"
+#include "ProjectStore.h"
 #include "vendor/httplib.h"
 #include "vendor/json.hpp"
 
@@ -284,7 +285,23 @@ std::string TraceModule::FindImagePath()
                 numMatches = 0;
                 err = sAIMatchingArt->GetMatchingArt(&rasterSpec, 1, &matches, &numMatches);
                 if (err == kNoErr && numMatches > 0 && matches) {
-                    AIArtHandle rasterArt = (*matches)[0];
+                    // Find the first raster that's NOT on a hidden/locked layer
+                    // (our embedded reference rasters are always hidden+locked)
+                    AIArtHandle rasterArt = nullptr;
+                    for (ai::int32 ri = 0; ri < numMatches; ri++) {
+                        AIArtHandle candidate = (*matches)[ri];
+                        ai::int32 attrs = 0;
+                        sAIArt->GetArtUserAttr(candidate, kArtHidden | kArtLocked, &attrs);
+                        if (!(attrs & kArtHidden) && !(attrs & kArtLocked)) {
+                            rasterArt = candidate;
+                            break;
+                        }
+                    }
+                    if (!rasterArt) {
+                        sAIMdMemory->MdMemoryDisposeHandle((AIMdMemoryHandle)matches);
+                        continue;
+                    }
+
                     fprintf(stderr, "[TraceModule] Found raster art (pass %d, count %d)\n",
                             pass, (int)numMatches);
 
@@ -292,6 +309,16 @@ std::string TraceModule::FindImagePath()
                     sAIArt->GetArtBounds(rasterArt, &rBounds);
                     fArtLeft = rBounds.left; fArtTop = rBounds.top;
                     fArtRight = rBounds.right; fArtBottom = rBounds.bottom;
+                    fprintf(stderr, "[TraceModule] FindImagePath: raster bounds L=%.0f T=%.0f R=%.0f B=%.0f\n",
+                            fArtLeft, fArtTop, fArtRight, fArtBottom);
+
+                    // Capture the original raster's matrix so we can replicate it exactly
+                    if (sAIRaster->GetRasterMatrix(rasterArt, &fOrigRasterMatrix) == kNoErr) {
+                        fHasOrigMatrix = true;
+                        fprintf(stderr, "[TraceModule] Original raster matrix: a=%.4f b=%.4f c=%.4f d=%.4f tx=%.1f ty=%.1f\n",
+                                fOrigRasterMatrix.a, fOrigRasterMatrix.b, fOrigRasterMatrix.c, fOrigRasterMatrix.d,
+                                fOrigRasterMatrix.tx, fOrigRasterMatrix.ty);
+                    }
 
                     AIRasterRecord rasterInfo;
                     if (sAIRaster) {
@@ -539,6 +566,29 @@ void TraceModule::ExecuteTrace()
 
     // Parse SVG and create AI paths
     CreatePathsFromSVG(svgContent);
+
+    // Persist trace artifacts to project store
+    ProjectStore::Instance().SaveTraceSVG(svgPath);
+
+    // Extract image filename for manifest
+    std::string imageBasename = imagePath;
+    size_t lastSlash = imageBasename.rfind('/');
+    if (lastSlash != std::string::npos) {
+        imageBasename = imageBasename.substr(lastSlash + 1);
+    }
+
+    // Count <path elements roughly for manifest
+    int pathCount = 0;
+    {
+        size_t searchPos = 0;
+        while ((searchPos = svgContent.find("<path", searchPos)) != std::string::npos) {
+            pathCount++;
+            searchPos += 5;
+        }
+        if (pathCount > 0) pathCount--;  // subtract background path
+    }
+
+    ProjectStore::Instance().SaveManifest(imageBasename, "vtracer", 0, pathCount);
 
     fTraceInProgress = false;
     sAIDocument->RedrawDocument();
@@ -883,6 +933,15 @@ void TraceModule::CreatePathsFromSVG(const std::string& svgContent)
     std::vector<double> allFillR, allFillG, allFillB;
     std::vector<bool> allHasFill;
 
+    // Create a master group for all trace output
+    AIArtHandle traceGroup = nullptr;
+    {
+        ASErr gErr = sAIArt->NewArt(kGroupArt, kPlaceAboveAll, nullptr, &traceGroup);
+        if (gErr == kNoErr && traceGroup) {
+            sAIArt->SetArtName(traceGroup, ai::UnicodeString("vtracer"));
+        }
+    }
+
     // Extract all <path> elements with d="..." and optional fill="..." attributes
     int created = 0;
     int skipped = 0;
@@ -928,14 +987,21 @@ void TraceModule::CreatePathsFromSVG(const std::string& svgContent)
 
         std::vector<AIPathSegment> segs;
         bool closed = false;
-        if (ParseSVGPathToSegments(pathData, segs, closed) && !segs.empty()) {
+        bool parsed = ParseSVGPathToSegments(pathData, segs, closed);
+        if (created < 3) {
+            fprintf(stderr, "[TraceModule] Path %d: parsed=%d segs=%d pathData[0..60]='%s'\n",
+                    created + skipped, (int)parsed, (int)segs.size(),
+                    pathData.substr(0, 60).c_str());
+        }
+        if (parsed && !segs.empty()) {
             ApplyArtTranslation(segs, translateX, translateY,
                                 fArtLeft, fArtTop, fArtRight, fArtBottom,
                                 fSvgWidth, fSvgHeight);
 
-            // Create path flat (no parent group — placed at top of art tree)
+            // Create path inside the trace group
             AIArtHandle newPath = nullptr;
-            ASErr err = sAIArt->NewArt(kPathArt, kPlaceAboveAll, nullptr, &newPath);
+            ASErr err = sAIArt->NewArt(kPathArt, kPlaceInsideOnTop,
+                                        traceGroup ? traceGroup : nullptr, &newPath);
             if (err == kNoErr && newPath) {
                 ai::int16 nc = (ai::int16)segs.size();
                 sAIPath->SetPathSegmentCount(newPath, nc);
@@ -999,9 +1065,12 @@ void TraceModule::CreatePathsFromSVG(const std::string& svgContent)
 
         const char* groupNames[] = {"Trace — Background", "Trace — Highlights",
                                      "Trace — Midtones", "Trace — Shadows", "Trace — Outlines"};
+        // Place luminance groups inside the traceGroup
         AIArtHandle groups[5] = {};
         for (int g = 0; g < 5; g++) {
-            ASErr gErr = sAIArt->NewArt(kGroupArt, kPlaceAboveAll, nullptr, &groups[g]);
+            ASErr gErr = sAIArt->NewArt(kGroupArt,
+                traceGroup ? kPlaceInsideOnTop : kPlaceAboveAll,
+                traceGroup, &groups[g]);
             if (gErr == kNoErr && groups[g]) {
                 sAIArt->SetArtName(groups[g], ai::UnicodeString(groupNames[g]));
             }
@@ -1033,6 +1102,17 @@ void TraceModule::CreatePathsFromSVG(const std::string& svgContent)
         }
 
         BridgeSetTraceStatus("Traced: " + std::to_string(created) + " paths in luminance groups");
+    }
+
+    // Move any top-level groups that were created by grouping into the trace master group
+    // The surface/luminance groups were created at kPlaceAboveAll — move them into traceGroup
+    if (traceGroup) {
+        // Collect all top-level group art that isn't the traceGroup itself
+        AIArtHandle child = nullptr;
+        // The trace group might be empty if all paths were moved out by GroupPathsBySurface
+        // Just leave the hierarchy as-is — the surface groups contain the paths
+        // and the traceGroup name serves as a marker
+        fprintf(stderr, "[TraceModule] Trace output in group 'vtracer'\n");
     }
 }
 
@@ -1066,6 +1146,15 @@ void TraceModule::TransformSVGPoint(double svgX, double svgY, double& artX, doub
 
 std::string TraceModule::FindOrComputeNormalMap(const std::string& imagePath)
 {
+    // Strategy 0: Check project store first (persisted from previous session)
+    {
+        std::string projectNormal = ProjectStore::Instance().GetNormalMapPath();
+        if (!projectNormal.empty()) {
+            fprintf(stderr, "[TraceModule] Found normal map in project store: %s\n", projectNormal.c_str());
+            return projectNormal;
+        }
+    }
+
     // Strategy 1: Check if a prior Normal Reference run already produced a normal map
     // Normal ref outputs go to /tmp/illtool_normal_ref_output/ or /tmp/ai_normal_ref_*
     std::vector<std::string> searchDirs;
@@ -1090,6 +1179,8 @@ std::string TraceModule::FindOrComputeNormalMap(const std::string& imagePath)
         struct stat st;
         if (stat(candidate.c_str(), &st) == 0 && st.st_size > 0) {
             fprintf(stderr, "[TraceModule] Found existing normal map: %s\n", candidate.c_str());
+            // Persist to project store for future sessions
+            ProjectStore::Instance().SaveNormalMap(candidate);
             return candidate;
         }
     }
@@ -1127,6 +1218,10 @@ std::string TraceModule::FindOrComputeNormalMap(const std::string& imagePath)
 
     fprintf(stderr, "[TraceModule] Generated C++ normal map: %s (%dx%d)\n",
             resultPath.c_str(), grayW, grayH);
+
+    // Persist to project store for future sessions
+    ProjectStore::Instance().SaveNormalMap(resultPath);
+
     return resultPath;
 }
 
@@ -1175,7 +1270,14 @@ void TraceModule::GroupPathsBySurface(const std::string& normalMapPath, int k,
         snprintf(groupName, sizeof(groupName), "Surface %d: %s",
                  (int)(r + 1), regions[r].label.c_str());
 
-        ASErr err = sAIArt->NewArt(kGroupArt, kPlaceAboveAll, nullptr, &surfaceGroups[r]);
+        // Place surface groups inside the paths' parent (traceGroup if it exists)
+        AIArtHandle parentGroup = nullptr;
+        if (!paths.empty()) {
+            sAIArt->GetArtParent(paths[0], &parentGroup);
+        }
+        ASErr err = sAIArt->NewArt(kGroupArt,
+            parentGroup ? kPlaceInsideOnTop : kPlaceAboveAll,
+            parentGroup, &surfaceGroups[r]);
         if (err == kNoErr && surfaceGroups[r]) {
             sAIArt->SetArtName(surfaceGroups[r], ai::UnicodeString(groupName));
         }
@@ -1423,14 +1525,15 @@ void TraceModule::ExecutePythonBackend(const std::string& backend)
         int placed = 0;
 
         int tracedTotal = 0;
+
+        // Collect file info for deferred raster placement (references go on TOP, after vectors)
+        struct FileEntry { std::string name; std::string path; };
+        std::vector<FileEntry> fileEntries;
+
         for (auto& entry : files) {
             std::string name = entry["name"].get<std::string>();
             std::string path = entry["path"].get<std::string>();
-
-            // 1. Place raster as hidden reference layer (use saved bounds so all
-            //    images land at the same position instead of stacking vertically)
-            fprintf(stderr, "[TraceModule] Placing reference: %s -> %s\n", name.c_str(), path.c_str());
-            PlaceImageAsLayer(path, name + " (ref)", refLeft, refTop, refRight, refBottom);
+            fileEntries.push_back({name, path});
             placed++;
 
             // 2. Trace the rendering through vtracer → vector paths
@@ -1446,7 +1549,7 @@ void TraceModule::ExecutePythonBackend(const std::string& backend)
                 "colormode='bw', "
                 "hierarchical='stacked', "
                 "mode='spline', "
-                "filter_speckle=8, "
+                "filter_speckle=1, "
                 "color_precision=3, "
                 "layer_difference=25, "
                 "corner_threshold=60, "
@@ -1488,6 +1591,12 @@ void TraceModule::ExecutePythonBackend(const std::string& backend)
                             name.c_str(), traceExit);
                 }
             }
+        }
+
+        // Place raster references LAST so they're on top of the vector layers
+        for (auto& fe : fileEntries) {
+            fprintf(stderr, "[TraceModule] Placing reference: %s -> %s\n", fe.name.c_str(), fe.path.c_str());
+            PlaceImageAsLayer(fe.path, fe.name + " (ref)", refLeft, refTop, refRight, refBottom);
         }
 
         char statusBuf[256];
@@ -1638,18 +1747,41 @@ void TraceModule::PlaceImageAsLayer(const std::string& imagePath, const std::str
             double targetW = artRight - artLeft;
             double targetH = artTop - artBottom;
 
-            // Raster matrix maps pixel space to artwork space
-            // Pixel (0,0) is top-left; in AI coords, Y increases upward
-            // Matrix: [scaleX  0      0     ]
-            //         [0       scaleY 0     ]
-            //         [tx      ty     1     ]
+            // Raster matrix maps pixel space to artwork space.
+            // AI raster: pixel (0,0) at top-left, Y increases down.
+            // AI artwork: Y increases up, origin at bottom-left.
+            // The standard placement matrix for a raster at 72ppi:
+            //   a  = width_in_points / pixel_width   (horizontal scale)
+            //   d  = -height_in_points / pixel_height (negative = flip Y)
+            //   tx = left edge in artwork coords
+            //   ty = TOP edge in artwork coords (because d is negative, pixel 0 maps here)
             AIRealMatrix matrix;
-            matrix.a = (AIReal)(targetW / (double)imgW);    // scaleX
-            matrix.b = (AIReal)0.0;
-            matrix.c = (AIReal)0.0;
-            matrix.d = (AIReal)(-(targetH / (double)imgH)); // scaleY (negative for Y flip)
-            matrix.tx = (AIReal)artLeft;                      // translate X
-            matrix.ty = (AIReal)artTop;                       // translate Y (top, since d is negative)
+            double sx = targetW / (double)imgW;
+            double sy = targetH / (double)imgH;
+            if (fHasOrigMatrix) {
+                // Copy the original raster's matrix exactly — guaranteed correct positioning
+                matrix = fOrigRasterMatrix;
+                // Scale if our image has different pixel dimensions than the original
+                AIRasterRecord origInfo;
+                // The original matrix maps origPixels → artwork space.
+                // Our image is imgW x imgH. Scale the matrix to map our pixels to same artwork area.
+                double origPixW = targetW / fOrigRasterMatrix.a;  // original pixel width
+                double origPixH = targetH / fOrigRasterMatrix.d;  // original pixel height
+                if (std::abs(origPixW) > 0.001 && std::abs(origPixH) > 0.001) {
+                    matrix.a = (AIReal)(fOrigRasterMatrix.a * (origPixW / (double)imgW));
+                    matrix.d = (AIReal)(fOrigRasterMatrix.d * (origPixH / (double)imgH));
+                }
+                fprintf(stderr, "[TraceModule] Using original matrix: a=%.4f d=%.4f tx=%.1f ty=%.1f\n",
+                        matrix.a, matrix.d, matrix.tx, matrix.ty);
+            } else {
+                // Fallback: identity-like matrix
+                matrix.a = (AIReal)sx;
+                matrix.b = (AIReal)0.0;
+                matrix.c = (AIReal)0.0;
+                matrix.d = (AIReal)sy;
+                matrix.tx = (AIReal)artLeft;
+                matrix.ty = (AIReal)artBottom;
+            }
 
             err = sAIRaster->SetRasterMatrix(rasterArt, &matrix);
             if (err != kNoErr) {

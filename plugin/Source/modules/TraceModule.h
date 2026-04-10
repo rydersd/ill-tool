@@ -88,4 +88,9 @@ private:
     double fSvgWidth = 0, fSvgHeight = 0;      // from SVG viewBox
     double fArtLeft = 0, fArtTop = 0;           // placed image position in AI coords
     double fArtRight = 0, fArtBottom = 0;
+
+    // Original raster's placement matrix — captured by FindImagePath
+    // Used to position embedded rasters at the exact same location
+    AIRealMatrix fOrigRasterMatrix;
+    bool fHasOrigMatrix = false;
 };

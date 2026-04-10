@@ -12,6 +12,7 @@
 #include "IllToolPlugin.h"
 #include "AITool.h"
 #include "LearningEngine.h"
+#include "ProjectStore.h"
 
 // Module headers
 #include "modules/CleanupModule.h"
@@ -32,6 +33,7 @@
 #include "modules/TraceModule.cpp"
 #include "modules/SurfaceModule.cpp"
 #include "UISkinLoader.cpp"
+#include "ProjectStore.cpp"
 
 #include "vendor/json.hpp"
 
@@ -240,6 +242,9 @@ ASErr IllToolPlugin::PostStartupPlugin()
         // Open the learning engine database
         LearningEngine::Instance().Open();
 
+        // Initialize project store for current document
+        ProjectStore::Instance().InitForDocument();
+
         // Notify all modules of initial document state
         for (auto& mod : fModules) {
             mod->OnDocumentChanged();
@@ -275,6 +280,9 @@ ASErr IllToolPlugin::ShutdownPlugin(SPInterfaceMessage* message)
         // Destroy modules
         fModules.clear();
         fprintf(stderr, "[IllTool] Modules destroyed\n");
+
+        // Upload telemetry if consent granted (fire-and-forget, non-blocking)
+        LearningEngine::Instance().UploadTelemetry();
 
         // Close learning engine before other cleanup
         LearningEngine::Instance().Close();

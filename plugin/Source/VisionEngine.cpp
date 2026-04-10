@@ -2000,10 +2000,18 @@ unsigned char* VisionEngine::GenerateNormalFromHeight(const unsigned char* heigh
                 continue;
             }
 
-            // Sobel dX: right - left
-            double dX = (double)heightMap[y * w + (x + 1)] - (double)heightMap[y * w + (x - 1)];
-            // Sobel dY: bottom - top (image Y-down)
-            double dY = (double)heightMap[(y + 1) * w + x] - (double)heightMap[(y - 1) * w + x];
+            // For illustrations: dark lines = creases/valleys = low height.
+            // Invert brightness so dark = low, bright = high.
+            // Then Sobel computes slope from height differences.
+            double left  = 255.0 - (double)heightMap[y * w + (x - 1)];
+            double right = 255.0 - (double)heightMap[y * w + (x + 1)];
+            double top   = 255.0 - (double)heightMap[(y - 1) * w + x];
+            double bot   = 255.0 - (double)heightMap[(y + 1) * w + x];
+
+            // Sobel dX: right - left (height gradient in X)
+            double dX = right - left;
+            // Sobel dY: bottom - top (height gradient in Y, image Y-down)
+            double dY = bot - top;
 
             // Normal = normalize(-dX * strength, -dY * strength, 255.0)
             double nx = -dX * strength;

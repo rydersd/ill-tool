@@ -367,10 +367,10 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
     NSMutableAttributedString *attrTitle = [[NSMutableAttributedString alloc]
         initWithString:fullTitle];
     [attrTitle addAttribute:NSForegroundColorAttributeName
-                      value:ITAccentColor()
+                      value:ITTextColor()
                       range:NSMakeRange(0, attrTitle.length)];
     [attrTitle addAttribute:NSFontAttributeName
-                      value:[NSFont boldSystemFontOfSize:11]
+                      value:ITLabelFont()
                       range:NSMakeRange(0, attrTitle.length)];
     header.attributedTitle = attrTitle;
     header.alignment = NSTextAlignmentLeft;
@@ -689,10 +689,10 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
     NSMutableAttributedString *attrTitle = [[NSMutableAttributedString alloc]
         initWithString:newTitle];
     [attrTitle addAttribute:NSForegroundColorAttributeName
-                      value:ITAccentColor()
+                      value:ITTextColor()
                       range:NSMakeRange(0, attrTitle.length)];
     [attrTitle addAttribute:NSFontAttributeName
-                      value:[NSFont boldSystemFontOfSize:11]
+                      value:ITLabelFont()
                       range:NSMakeRange(0, attrTitle.length)];
     sender.attributedTitle = attrTitle;
     [attrTitle release];

@@ -101,6 +101,23 @@ public:
     void JournalLog(const char* action, const char* jsonFields);
 
     //------------------------------------------------------------------------------------
+    //  Anonymous Telemetry
+    //------------------------------------------------------------------------------------
+
+    /** Set opt-in telemetry consent. Persists to disk. */
+    void SetTelemetryConsent(bool consented);
+
+    /** Get current telemetry consent status. */
+    bool GetTelemetryConsent();
+
+    /** Upload anonymized telemetry data to remote endpoint.
+        Fire-and-forget on a detached thread. Only uploads if:
+        - consent is granted
+        - there are >100 new journal entries since last upload
+        Silently fails if endpoint is unreachable. */
+    void UploadTelemetry();
+
+    //------------------------------------------------------------------------------------
     //  Stats (for HTTP endpoint / diagnostics)
     //------------------------------------------------------------------------------------
 
@@ -137,6 +154,21 @@ private:
 
     /** Get the database file path: ~/Library/Application Support/illtool/learning.db */
     static std::string GetDBPath();
+
+    /** Get the telemetry consent file path: ~/Library/Application Support/illtool/telemetry_consent */
+    static std::string GetConsentPath();
+
+    /** Get the last upload marker file path: ~/Library/Application Support/illtool/telemetry_last_upload */
+    static std::string GetLastUploadPath();
+
+    /** Count journal lines since the last upload timestamp. */
+    int CountNewJournalEntries();
+
+    /** Read journal entries, strip PII, return anonymized NDJSON string. */
+    std::string AnonymizeJournal();
+
+    /** Generate an anonymous machine ID (consistent hash of hardware UUID). */
+    static std::string GetAnonymousId();
 
     mutable std::recursive_mutex mMutex;  // P0: protects all DB operations
     void* db = nullptr;  // sqlite3* — opaque to avoid exposing sqlite3.h

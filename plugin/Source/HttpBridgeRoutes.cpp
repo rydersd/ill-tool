@@ -1548,3 +1548,33 @@
             res.set_content("{\"error\":\"invalid JSON\"}", "application/json");
         }
     });
+
+    //------------------------------------------------------------------------------------
+    //  GET /api/telemetry/consent — read current telemetry consent status
+    //------------------------------------------------------------------------------------
+    gServer->Get("/api/telemetry/consent", [](const httplib::Request& /*req*/, httplib::Response& res) {
+        AddCorsHeaders(res);
+        json resp;
+        resp["consented"] = LearningEngine::Instance().GetTelemetryConsent();
+        res.set_content(resp.dump(), "application/json");
+    });
+
+    //------------------------------------------------------------------------------------
+    //  POST /api/telemetry/consent — set telemetry consent (body: {"consent": true/false})
+    //------------------------------------------------------------------------------------
+    gServer->Post("/api/telemetry/consent", [](const httplib::Request& req, httplib::Response& res) {
+        AddCorsHeaders(res);
+        try {
+            json body = json::parse(req.body);
+            bool consent = body.value("consent", false);
+            LearningEngine::Instance().SetTelemetryConsent(consent);
+            json resp;
+            resp["ok"] = true;
+            resp["consented"] = consent;
+            res.set_content(resp.dump(), "application/json");
+        }
+        catch (...) {
+            res.status = 400;
+            res.set_content("{\"error\":\"invalid JSON\"}", "application/json");
+        }
+    });
