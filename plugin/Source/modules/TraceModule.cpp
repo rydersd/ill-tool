@@ -10,16 +10,22 @@
 #include "TraceModule.h"
 #include "HttpBridge.h"
 #include "IllToolSuites.h"
+#include "VisionEngine.h"
 #include "vendor/httplib.h"
 #include "vendor/json.hpp"
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "vendor/stb_image_write.h"
 
+// stb_image for reading PNG pixels (STB_IMAGE_IMPLEMENTATION defined in VisionEngine.cpp)
+#include "vendor/stb_image.h"
+
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <sstream>
+#include <dirent.h>
+#include <sys/stat.h>
 
 using json = nlohmann::json;
 
@@ -459,6 +465,8 @@ void TraceModule::ExecuteTrace()
 
     int speckle = BridgeGetTraceSpeckle();
     int colorPrec = BridgeGetTraceColorPrecision();
+    int outputMode = BridgeGetTraceOutputMode();  // 0=outline, 1=fill
+    const char* colormode = (outputMode == 0) ? "bw" : "color";
 
     // Call vtracer via the project Python venv directly
     // vtracer.convert_image_to_svg_py writes SVG to disk
@@ -473,7 +481,7 @@ void TraceModule::ExecuteTrace()
         "vtracer.convert_image_to_svg_py("
         "image_path='%s', "
         "out_path='%s', "
-        "colormode='color', "
+        "colormode='%s', "
         "hierarchical='stacked', "
         "mode='spline', "
         "filter_speckle=%d, "
@@ -485,7 +493,7 @@ void TraceModule::ExecuteTrace()
         "splice_threshold=45, "
         "path_precision=3"
         ")\" 2>&1",
-        imagePath.c_str(), svgPath.c_str(), speckle, colorPrec);
+        imagePath.c_str(), svgPath.c_str(), colormode, speckle, colorPrec);
 
     fprintf(stderr, "[TraceModule] Running: %s\n", cmd);
     BridgeSetTraceStatus("Running vtracer...");
@@ -863,17 +871,17 @@ void TraceModule::CreatePathsFromSVG(const std::string& svgContent)
     fprintf(stderr, "[TraceModule] SVG dims: %.0fx%.0f, Art bounds: L=%.0f T=%.0f R=%.0f B=%.0f\n",
             fSvgWidth, fSvgHeight, fArtLeft, fArtTop, fArtRight, fArtBottom);
 
-    // Create luminance-based groups for organization
-    // Paths sorted by fill brightness: Background > Highlights > Midtones > Shadows > Outlines
-    const char* groupNames[] = {"Trace — Background", "Trace — Highlights",
-                                 "Trace — Midtones", "Trace — Shadows", "Trace — Outlines"};
-    AIArtHandle groups[5] = {};
-    for (int g = 0; g < 5; g++) {
-        ASErr gErr = sAIArt->NewArt(kGroupArt, kPlaceAboveAll, nullptr, &groups[g]);
-        if (gErr == kNoErr && groups[g]) {
-            sAIArt->SetArtName(groups[g], ai::UnicodeString(groupNames[g]));
-        }
+    // Try to find a normal map for surface-based grouping
+    std::string imagePath = FindImagePath();
+    std::string normalMapPath;
+    if (!imagePath.empty()) {
+        normalMapPath = FindOrComputeNormalMap(imagePath);
     }
+
+    // Collect all created paths flat (no groups yet) along with their fill colors
+    std::vector<AIArtHandle> allPaths;
+    std::vector<double> allFillR, allFillG, allFillB;
+    std::vector<bool> allHasFill;
 
     // Extract all <path> elements with d="..." and optional fill="..." attributes
     int created = 0;
@@ -914,18 +922,9 @@ void TraceModule::CreatePathsFromSVG(const std::string& svgContent)
             continue;
         }
 
-        // Parse fill color for grouping
+        // Parse fill color
         double fr = 0, fg = 0, fb = 0;
         bool hasFill = !fillColor.empty() && fillColor != "none" && ParseHexColor(fillColor, fr, fg, fb);
-
-        // Compute luminance (0=black, 1=white) for group assignment
-        double luminance = hasFill ? (0.299 * fr + 0.587 * fg + 0.114 * fb) : 0.0;
-        int groupIdx;
-        if (luminance > 0.85)      groupIdx = 0;  // Background (near-white)
-        else if (luminance > 0.60) groupIdx = 1;  // Highlights
-        else if (luminance > 0.35) groupIdx = 2;  // Midtones
-        else if (luminance > 0.10) groupIdx = 3;  // Shadows
-        else                       groupIdx = 4;  // Outlines (near-black)
 
         std::vector<AIPathSegment> segs;
         bool closed = false;
@@ -934,10 +933,9 @@ void TraceModule::CreatePathsFromSVG(const std::string& svgContent)
                                 fArtLeft, fArtTop, fArtRight, fArtBottom,
                                 fSvgWidth, fSvgHeight);
 
-            // Place path inside its luminance group
-            AIArtHandle parentGroup = groups[groupIdx];
+            // Create path flat (no parent group — placed at top of art tree)
             AIArtHandle newPath = nullptr;
-            ASErr err = sAIArt->NewArt(kPathArt, kPlaceInsideOnTop, parentGroup, &newPath);
+            ASErr err = sAIArt->NewArt(kPathArt, kPlaceAboveAll, nullptr, &newPath);
             if (err == kNoErr && newPath) {
                 ai::int16 nc = (ai::int16)segs.size();
                 sAIPath->SetPathSegmentCount(newPath, nc);
@@ -948,7 +946,18 @@ void TraceModule::CreatePathsFromSVG(const std::string& svgContent)
                 memset(&style, 0, sizeof(style));
                 style.stroke.miterLimit = (AIReal)4.0;
 
-                if (hasFill) {
+                int traceOutputMode = BridgeGetTraceOutputMode();  // 0=outline, 1=fill
+                if (traceOutputMode == 0) {
+                    // Outline mode: 1pt black stroke, no fill
+                    style.fillPaint = false;
+                    style.strokePaint = true;
+                    style.stroke.width = (AIReal)1.0;
+                    style.stroke.color.kind = kThreeColor;
+                    style.stroke.color.c.rgb.red   = (AIReal)0.0;
+                    style.stroke.color.c.rgb.green = (AIReal)0.0;
+                    style.stroke.color.c.rgb.blue  = (AIReal)0.0;
+                } else if (hasFill) {
+                    // Fill mode with color: fill color from SVG, no stroke
                     style.fillPaint = true;
                     style.fill.color.kind = kThreeColor;
                     style.fill.color.c.rgb.red   = (AIReal)fr;
@@ -956,6 +965,7 @@ void TraceModule::CreatePathsFromSVG(const std::string& svgContent)
                     style.fill.color.c.rgb.blue  = (AIReal)fb;
                     style.strokePaint = false;
                 } else {
+                    // Fill mode without color: default stroke
                     style.fillPaint = false;
                     style.strokePaint = true;
                     style.stroke.width = (AIReal)1.0;
@@ -963,25 +973,67 @@ void TraceModule::CreatePathsFromSVG(const std::string& svgContent)
                 }
 
                 sAIPathStyle->SetPathStyle(newPath, &style);
+
+                allPaths.push_back(newPath);
+                allFillR.push_back(fr);
+                allFillG.push_back(fg);
+                allFillB.push_back(fb);
+                allHasFill.push_back(hasFill);
                 created++;
             }
         }
     }
 
-    // Delete empty groups
-    for (int g = 0; g < 5; g++) {
-        if (groups[g]) {
-            AIArtHandle child = nullptr;
-            sAIArt->GetArtFirstChild(groups[g], &child);
-            if (!child) {
-                sAIArt->DisposeArt(groups[g]);
-                groups[g] = nullptr;
+    fprintf(stderr, "[TraceModule] Created %d flat paths (skipped %d)\n", created, skipped);
+
+    // Post-process: group paths by surface identity or fall back to luminance
+    if (!normalMapPath.empty() && !allPaths.empty()) {
+        // Surface-based grouping from DSINE normal map
+        fprintf(stderr, "[TraceModule] Grouping %d paths by surface via normal map: %s\n",
+                (int)allPaths.size(), normalMapPath.c_str());
+        GroupPathsBySurface(normalMapPath, 5, allPaths, allFillR, allFillG, allFillB, allHasFill);
+        BridgeSetTraceStatus("Traced: " + std::to_string(created) + " paths in surface groups");
+    } else {
+        // Fallback: luminance-based grouping (original behavior)
+        fprintf(stderr, "[TraceModule] No normal map — falling back to luminance grouping\n");
+
+        const char* groupNames[] = {"Trace — Background", "Trace — Highlights",
+                                     "Trace — Midtones", "Trace — Shadows", "Trace — Outlines"};
+        AIArtHandle groups[5] = {};
+        for (int g = 0; g < 5; g++) {
+            ASErr gErr = sAIArt->NewArt(kGroupArt, kPlaceAboveAll, nullptr, &groups[g]);
+            if (gErr == kNoErr && groups[g]) {
+                sAIArt->SetArtName(groups[g], ai::UnicodeString(groupNames[g]));
             }
         }
-    }
 
-    fprintf(stderr, "[TraceModule] Created %d paths in 5 groups (skipped %d)\n", created, skipped);
-    BridgeSetTraceStatus("Traced: " + std::to_string(created) + " paths in groups");
+        for (size_t i = 0; i < allPaths.size(); i++) {
+            double luminance = allHasFill[i]
+                ? (0.299 * allFillR[i] + 0.587 * allFillG[i] + 0.114 * allFillB[i])
+                : 0.0;
+            int groupIdx;
+            if (luminance > 0.85)      groupIdx = 0;  // Background (near-white)
+            else if (luminance > 0.60) groupIdx = 1;  // Highlights
+            else if (luminance > 0.35) groupIdx = 2;  // Midtones
+            else if (luminance > 0.10) groupIdx = 3;  // Shadows
+            else                       groupIdx = 4;  // Outlines (near-black)
+
+            sAIArt->ReorderArt(allPaths[i], kPlaceInsideOnTop, groups[groupIdx]);
+        }
+
+        // Delete empty groups
+        for (int g = 0; g < 5; g++) {
+            if (groups[g]) {
+                AIArtHandle child = nullptr;
+                sAIArt->GetArtFirstChild(groups[g], &child);
+                if (!child) {
+                    sAIArt->DisposeArt(groups[g]);
+                }
+            }
+        }
+
+        BridgeSetTraceStatus("Traced: " + std::to_string(created) + " paths in luminance groups");
+    }
 }
 
 //========================================================================================
@@ -1009,6 +1061,281 @@ void TraceModule::TransformSVGPoint(double svgX, double svgY, double& artX, doub
 }
 
 //========================================================================================
+//  FindOrComputeNormalMap — locate or generate DSINE normal map for the current image
+//========================================================================================
+
+std::string TraceModule::FindOrComputeNormalMap(const std::string& imagePath)
+{
+    // Strategy 1: Check if a prior Normal Reference run already produced a normal map
+    // Normal ref outputs go to /tmp/illtool_normal_ref_output/ or /tmp/ai_normal_ref_*
+    std::vector<std::string> searchDirs;
+    searchDirs.push_back("/tmp/illtool_normal_ref_output");
+
+    // Scan /tmp for ai_normal_ref_* directories
+    DIR* tmpDir = opendir("/tmp");
+    if (tmpDir) {
+        struct dirent* entry;
+        while ((entry = readdir(tmpDir)) != nullptr) {
+            std::string name = entry->d_name;
+            if (name.find("ai_normal_ref_") == 0) {
+                searchDirs.push_back("/tmp/" + name);
+            }
+        }
+        closedir(tmpDir);
+    }
+
+    // Check each directory for normal_map.png
+    for (const auto& dir : searchDirs) {
+        std::string candidate = dir + "/normal_map.png";
+        struct stat st;
+        if (stat(candidate.c_str(), &st) == 0 && st.st_size > 0) {
+            fprintf(stderr, "[TraceModule] Found existing normal map: %s\n", candidate.c_str());
+            return candidate;
+        }
+    }
+
+    // Strategy 2: Generate normal map in C++ from the image as a height map (Sobel gradient)
+    // This replaces the DSINE Python fallback — no external process needed.
+    fprintf(stderr, "[TraceModule] No existing normal map found, computing via C++ Sobel...\n");
+    BridgeSetTraceStatus("Computing normal map (C++)...");
+
+    int grayW = 0, grayH = 0, grayCh = 0;
+    unsigned char* gray = stbi_load(imagePath.c_str(), &grayW, &grayH, &grayCh, 1);
+    if (!gray || grayW < 3 || grayH < 3) {
+        fprintf(stderr, "[TraceModule] Failed to load image as grayscale for normal map: %s\n",
+                imagePath.c_str());
+        if (gray) stbi_image_free(gray);
+        return "";
+    }
+
+    unsigned char* normals = VisionEngine::GenerateNormalFromHeight(gray, grayW, grayH, 2.0);
+    stbi_image_free(gray);
+
+    if (!normals) {
+        fprintf(stderr, "[TraceModule] GenerateNormalFromHeight failed\n");
+        return "";
+    }
+
+    std::string resultPath = "/tmp/illtool_height_normal.png";
+    int wrote = stbi_write_png(resultPath.c_str(), grayW, grayH, 3, normals, grayW * 3);
+    delete[] normals;
+
+    if (!wrote) {
+        fprintf(stderr, "[TraceModule] stbi_write_png failed for normal map\n");
+        return "";
+    }
+
+    fprintf(stderr, "[TraceModule] Generated C++ normal map: %s (%dx%d)\n",
+            resultPath.c_str(), grayW, grayH);
+    return resultPath;
+}
+
+//========================================================================================
+//  GroupPathsBySurface — cluster paths by DSINE normal map surface identity
+//========================================================================================
+
+void TraceModule::GroupPathsBySurface(const std::string& normalMapPath, int k,
+                                      const std::vector<AIArtHandle>& paths,
+                                      const std::vector<double>& fillR,
+                                      const std::vector<double>& fillG,
+                                      const std::vector<double>& fillB,
+                                      const std::vector<bool>& hasFillVec)
+{
+    // 1. Load the normal map PNG (3 channels RGB)
+    int nmW = 0, nmH = 0, nmC = 0;
+    unsigned char* normalPixels = stbi_load(normalMapPath.c_str(), &nmW, &nmH, &nmC, 3);
+    if (!normalPixels || nmW <= 0 || nmH <= 0) {
+        fprintf(stderr, "[TraceModule] GroupPathsBySurface: failed to load normal map %s\n",
+                normalMapPath.c_str());
+        if (normalPixels) stbi_image_free(normalPixels);
+        return;
+    }
+
+    fprintf(stderr, "[TraceModule] GroupPathsBySurface: normal map %dx%d, %d paths, k=%d\n",
+            nmW, nmH, (int)paths.size(), k);
+
+    // 2. Cluster normal map into K surface regions
+    auto regions = VisionEngine::Instance().ClusterNormalMapRegions(normalPixels, nmW, nmH, k);
+    if (regions.empty()) {
+        fprintf(stderr, "[TraceModule] GroupPathsBySurface: clustering returned 0 regions\n");
+        stbi_image_free(normalPixels);
+        return;
+    }
+
+    // 3. Create AI groups per cluster
+    //    Each cluster: "Surface N: <label> (M paths)"
+    //    Within each: sub-groups by path area (Large >5%, Medium 1-5%, Small <1%)
+    std::vector<AIArtHandle> surfaceGroups(regions.size(), nullptr);
+    std::vector<AIArtHandle> subLarge(regions.size(), nullptr);
+    std::vector<AIArtHandle> subMedium(regions.size(), nullptr);
+    std::vector<AIArtHandle> subSmall(regions.size(), nullptr);
+
+    for (size_t r = 0; r < regions.size(); r++) {
+        char groupName[256];
+        snprintf(groupName, sizeof(groupName), "Surface %d: %s",
+                 (int)(r + 1), regions[r].label.c_str());
+
+        ASErr err = sAIArt->NewArt(kGroupArt, kPlaceAboveAll, nullptr, &surfaceGroups[r]);
+        if (err == kNoErr && surfaceGroups[r]) {
+            sAIArt->SetArtName(surfaceGroups[r], ai::UnicodeString(groupName));
+        }
+
+        // Create size sub-groups inside each surface group
+        err = sAIArt->NewArt(kGroupArt, kPlaceInsideOnTop, surfaceGroups[r], &subLarge[r]);
+        if (err == kNoErr && subLarge[r]) {
+            sAIArt->SetArtName(subLarge[r], ai::UnicodeString("Large (>5%)"));
+        }
+        err = sAIArt->NewArt(kGroupArt, kPlaceInsideOnTop, surfaceGroups[r], &subMedium[r]);
+        if (err == kNoErr && subMedium[r]) {
+            sAIArt->SetArtName(subMedium[r], ai::UnicodeString("Medium (1-5%)"));
+        }
+        err = sAIArt->NewArt(kGroupArt, kPlaceInsideOnTop, surfaceGroups[r], &subSmall[r]);
+        if (err == kNoErr && subSmall[r]) {
+            sAIArt->SetArtName(subSmall[r], ai::UnicodeString("Small (<1%)"));
+        }
+    }
+
+    // 4. Compute total artboard area for relative size classification
+    double artW = fArtRight - fArtLeft;
+    double artH = fArtTop - fArtBottom;
+    double totalArea = artW * artH;
+    if (totalArea <= 0) totalArea = 1.0;  // guard
+
+    // 5. Assign each path to its nearest surface cluster
+    int assigned = 0;
+    for (size_t i = 0; i < paths.size(); i++) {
+        AIArtHandle pathArt = paths[i];
+
+        // Compute path centroid from its bounding box (fast approximation)
+        AIRealRect bounds = {0, 0, 0, 0};
+        sAIArt->GetArtBounds(pathArt, &bounds);
+        double centroidArtX = (bounds.left + bounds.right) / 2.0;
+        double centroidArtY = (bounds.top + bounds.bottom) / 2.0;
+
+        // Reverse TransformSVGPoint: art coords → pixel coords in normal map space
+        // artX = fArtLeft + svgX * (artW / svgW) → svgX = (artX - fArtLeft) * svgW / artW
+        // artY = fArtTop  - svgY * (artH / svgH) → svgY = (fArtTop - artY) * svgH / artH
+        // Then map SVG pixel coords to normal map pixel coords (they may differ in resolution)
+        double pixX = 0, pixY = 0;
+        if (fSvgWidth > 0 && fSvgHeight > 0 && artW > 0 && artH > 0) {
+            double svgX = (centroidArtX - fArtLeft) / artW * fSvgWidth;
+            double svgY = (fArtTop - centroidArtY) / artH * fSvgHeight;
+            // SVG pixel → normal map pixel (normal map may be different resolution)
+            pixX = svgX / fSvgWidth * nmW;
+            pixY = svgY / fSvgHeight * nmH;
+        } else {
+            // Fallback: direct mapping
+            pixX = (centroidArtX - fArtLeft) / artW * nmW;
+            pixY = (fArtTop - centroidArtY) / artH * nmH;
+        }
+
+        // Clamp to valid pixel range
+        int px = std::max(0, std::min(nmW - 1, (int)pixX));
+        int py = std::max(0, std::min(nmH - 1, (int)pixY));
+
+        // Sample normal map RGB at this pixel
+        int nmIdx = (py * nmW + px) * 3;
+        double sR = normalPixels[nmIdx]     / 255.0;
+        double sG = normalPixels[nmIdx + 1] / 255.0;
+        double sB = normalPixels[nmIdx + 2] / 255.0;
+
+        // Find nearest cluster (smallest Euclidean distance in normal space)
+        int bestCluster = 0;
+        double bestDist = 1e30;
+        for (size_t c = 0; c < regions.size(); c++) {
+            double dr = sR - regions[c].nx;
+            double dg = sG - regions[c].ny;
+            double db = sB - regions[c].nz;
+            double dist = dr * dr + dg * dg + db * db;
+            if (dist < bestDist) {
+                bestDist = dist;
+                bestCluster = (int)c;
+            }
+        }
+
+        // Classify by path area relative to total artboard
+        double pathArea = std::abs((double)(bounds.right - bounds.left) *
+                                   (double)(bounds.top - bounds.bottom));
+        double areaPercent = (pathArea / totalArea) * 100.0;
+
+        AIArtHandle targetGroup;
+        if (areaPercent > 5.0)       targetGroup = subLarge[bestCluster];
+        else if (areaPercent > 1.0)  targetGroup = subMedium[bestCluster];
+        else                         targetGroup = subSmall[bestCluster];
+
+        if (targetGroup) {
+            sAIArt->ReorderArt(pathArt, kPlaceInsideOnTop, targetGroup);
+            assigned++;
+
+            // Write surface identity to path's dictionary for downstream modules
+            AIDictionaryRef dict = nullptr;
+            if (sAIArt->GetDictionary(pathArt, &dict) == kNoErr && dict) {
+                static AIDictKey surfIdKey  = sAIDictionary->Key("IllToolSurfaceId");
+                static AIDictKey normalXKey = sAIDictionary->Key("IllToolNormalX");
+                static AIDictKey normalYKey = sAIDictionary->Key("IllToolNormalY");
+                static AIDictKey normalZKey = sAIDictionary->Key("IllToolNormalZ");
+
+                sAIDictionary->SetIntegerEntry(dict, surfIdKey, (ai::int32)bestCluster);
+                sAIDictionary->SetRealEntry(dict, normalXKey, (AIReal)regions[bestCluster].nx);
+                sAIDictionary->SetRealEntry(dict, normalYKey, (AIReal)regions[bestCluster].ny);
+                sAIDictionary->SetRealEntry(dict, normalZKey, (AIReal)regions[bestCluster].nz);
+                sAIDictionary->Release(dict);
+            }
+        }
+    }
+
+    // 6. Clean up empty sub-groups and surface groups
+    for (size_t r = 0; r < regions.size(); r++) {
+        AIArtHandle* subs[] = {&subLarge[r], &subMedium[r], &subSmall[r]};
+        for (int s = 0; s < 3; s++) {
+            if (*subs[s]) {
+                AIArtHandle child = nullptr;
+                sAIArt->GetArtFirstChild(*subs[s], &child);
+                if (!child) {
+                    sAIArt->DisposeArt(*subs[s]);
+                    *subs[s] = nullptr;
+                }
+            }
+        }
+
+        // Rename surface group with path count
+        if (surfaceGroups[r]) {
+            AIArtHandle child = nullptr;
+            sAIArt->GetArtFirstChild(surfaceGroups[r], &child);
+            if (!child) {
+                sAIArt->DisposeArt(surfaceGroups[r]);
+                surfaceGroups[r] = nullptr;
+            } else {
+                // Count paths in this surface group (across sub-groups)
+                int count = 0;
+                AIArtHandle* remaining[] = {&subLarge[r], &subMedium[r], &subSmall[r]};
+                for (int s = 0; s < 3; s++) {
+                    if (*remaining[s]) {
+                        AIArtHandle c = nullptr;
+                        sAIArt->GetArtFirstChild(*remaining[s], &c);
+                        while (c) {
+                            count++;
+                            AIArtHandle next = nullptr;
+                            sAIArt->GetArtSibling(c, &next);
+                            c = next;
+                        }
+                    }
+                }
+                char finalName[256];
+                snprintf(finalName, sizeof(finalName), "Surface %d: %s (%d paths)",
+                         (int)(r + 1), regions[r].label.c_str(), count);
+                sAIArt->SetArtName(surfaceGroups[r], ai::UnicodeString(finalName));
+            }
+        }
+    }
+
+    stbi_image_free(normalPixels);
+
+    fprintf(stderr, "[TraceModule] GroupPathsBySurface: assigned %d/%d paths to %d surface groups\n",
+            assigned, (int)paths.size(), (int)regions.size());
+}
+
+//========================================================================================
 //  ExecutePythonBackend — run normal_ref or form_edge via Python, place output PNGs
 //========================================================================================
 
@@ -1029,6 +1356,9 @@ void TraceModule::ExecutePythonBackend(const std::string& backend)
         fTraceInProgress = false;
         return;
     }
+
+    // Snapshot art bounds BEFORE the backend runs — FindImagePath() just set them
+    double refLeft = fArtLeft, refTop = fArtTop, refRight = fArtRight, refBottom = fArtBottom;
 
     fprintf(stderr, "[TraceModule] Running %s backend on: %s\n", backend.c_str(), imagePath.c_str());
 
@@ -1092,16 +1422,78 @@ void TraceModule::ExecutePythonBackend(const std::string& backend)
         auto files = manifest["files"];
         int placed = 0;
 
+        int tracedTotal = 0;
         for (auto& entry : files) {
             std::string name = entry["name"].get<std::string>();
             std::string path = entry["path"].get<std::string>();
 
-            fprintf(stderr, "[TraceModule] Placing layer: %s -> %s\n", name.c_str(), path.c_str());
-            PlaceImageAsLayer(path, name);
+            // 1. Place raster as hidden reference layer (use saved bounds so all
+            //    images land at the same position instead of stacking vertically)
+            fprintf(stderr, "[TraceModule] Placing reference: %s -> %s\n", name.c_str(), path.c_str());
+            PlaceImageAsLayer(path, name + " (ref)", refLeft, refTop, refRight, refBottom);
             placed++;
+
+            // 2. Trace the rendering through vtracer → vector paths
+            std::string svgOut = "/tmp/illtool_trace_" + std::to_string(placed) + ".svg";
+            char traceCmd[4096];
+            snprintf(traceCmd, sizeof(traceCmd),
+                "cd /Users/ryders/Developer/GitHub/ill_tool && "
+                ".venv/bin/python -c \""
+                "import vtracer; "
+                "vtracer.convert_image_to_svg_py("
+                "image_path='%s', "
+                "out_path='%s', "
+                "colormode='bw', "
+                "hierarchical='stacked', "
+                "mode='spline', "
+                "filter_speckle=8, "
+                "color_precision=3, "
+                "layer_difference=25, "
+                "corner_threshold=60, "
+                "length_threshold=4.0, "
+                "max_iterations=10, "
+                "splice_threshold=45, "
+                "path_precision=3"
+                ")\" 2>&1",
+                path.c_str(), svgOut.c_str());
+
+            fprintf(stderr, "[TraceModule] Tracing %s → vectors...\n", name.c_str());
+            BridgeSetTraceStatus("Tracing " + name + "...");
+
+            FILE* tracePipe = popen(traceCmd, "r");
+            if (tracePipe) {
+                char tbuf[1024];
+                while (fgets(tbuf, sizeof(tbuf), tracePipe)) {}
+                int traceExit = pclose(tracePipe);
+
+                if (traceExit == 0) {
+                    // Read SVG and create vector paths
+                    FILE* svgFile = fopen(svgOut.c_str(), "r");
+                    if (svgFile) {
+                        fseek(svgFile, 0, SEEK_END);
+                        long svgSize = ftell(svgFile);
+                        fseek(svgFile, 0, SEEK_SET);
+                        std::string svgContent(svgSize, '\0');
+                        fread(&svgContent[0], 1, svgSize, svgFile);
+                        fclose(svgFile);
+
+                        // Use the same art bounds as the reference image
+                        // (rendering PNGs are same dimensions as input)
+                        CreatePathsFromSVG(svgContent);
+                        tracedTotal++;
+                        fprintf(stderr, "[TraceModule] Vectorized %s\n", name.c_str());
+                    }
+                } else {
+                    fprintf(stderr, "[TraceModule] vtracer failed for %s (exit %d)\n",
+                            name.c_str(), traceExit);
+                }
+            }
         }
 
-        BridgeSetTraceStatus(displayName + ": " + std::to_string(placed) + " layers placed");
+        char statusBuf[256];
+        snprintf(statusBuf, sizeof(statusBuf), "%s: %d references + %d vectorized",
+                 displayName.c_str(), placed, tracedTotal);
+        BridgeSetTraceStatus(statusBuf);
         sAIDocument->RedrawDocument();
 
     } catch (std::exception& ex) {
@@ -1114,94 +1506,173 @@ void TraceModule::ExecutePythonBackend(const std::string& backend)
 
 //========================================================================================
 //  PlaceImageAsLayer — create a new layer with a placed PNG image, locked and hidden
+//  Two-arg version: uses current member fArt* bounds (backward compat)
 //========================================================================================
 
 void TraceModule::PlaceImageAsLayer(const std::string& imagePath, const std::string& layerName)
 {
+    PlaceImageAsLayer(imagePath, layerName, fArtLeft, fArtTop, fArtRight, fArtBottom);
+}
+
+//========================================================================================
+//  PlaceImageAsLayer (explicit bounds) — avoids re-querying member vars between calls
+//========================================================================================
+
+void TraceModule::PlaceImageAsLayer(const std::string& imagePath, const std::string& layerName,
+                                     double artLeft, double artTop, double artRight, double artBottom)
+{
     try {
+        // Load PNG pixels via stb_image
+        int imgW = 0, imgH = 0, imgChannels = 0;
+        unsigned char* pixels = stbi_load(imagePath.c_str(), &imgW, &imgH, &imgChannels, 0);
+        if (!pixels || imgW <= 0 || imgH <= 0) {
+            fprintf(stderr, "[TraceModule] stbi_load failed for %s\n", imagePath.c_str());
+            if (pixels) stbi_image_free(pixels);
+            return;
+        }
+        fprintf(stderr, "[TraceModule] Loaded %dx%d (%d ch) from %s\n",
+                imgW, imgH, imgChannels, imagePath.c_str());
+
         // Create a new layer
         AILayerHandle newLayer = nullptr;
         ai::UnicodeString uLayerName(layerName.c_str());
         ASErr err = sAILayer->InsertLayer(nullptr, kPlaceAboveAll, &newLayer);
         if (err != kNoErr || !newLayer) {
             fprintf(stderr, "[TraceModule] Failed to create layer: %d\n", (int)err);
+            stbi_image_free(pixels);
             return;
         }
-
-        // Name the layer
         sAILayer->SetLayerTitle(newLayer, uLayerName);
-
-        // Make the new layer the current layer so placed art goes into it
         sAILayer->SetCurrentLayer(newLayer);
 
-        // Place the PNG file — create placed art directly and set file path
-        ai::FilePath aiFilePath;
-        aiFilePath.Set(ai::UnicodeString(imagePath.c_str()));
+        // Determine AI color space from channel count
+        // stbi returns 1=gray, 2=gray+alpha, 3=RGB, 4=RGBA
+        int aiColorSpace = kRGBColorSpace;
+        int aiChannels = imgChannels;
+        if (imgChannels == 1) {
+            aiColorSpace = kGrayColorSpace;
+        } else if (imgChannels == 2) {
+            aiColorSpace = kAlphaGrayColorSpace;
+        } else if (imgChannels == 3) {
+            aiColorSpace = kRGBColorSpace;
+        } else if (imgChannels >= 4) {
+            aiColorSpace = kAlphaRGBColorSpace;
+            aiChannels = 4;
+        }
 
-        AIArtHandle placedArt = nullptr;
-        err = sAIArt->NewArt(kPlacedArt, kPlaceAboveAll, nullptr, &placedArt);
-        if (err != kNoErr || !placedArt) {
-            fprintf(stderr, "[TraceModule] Failed to create placed art: %d\n", (int)err);
+        // Set up raster info
+        AIRasterRecord rasterInfo;
+        memset(&rasterInfo, 0, sizeof(rasterInfo));
+        rasterInfo.colorSpace = aiColorSpace;
+        rasterInfo.bitsPerPixel = (ai::int16)(aiChannels * 8);
+        rasterInfo.bounds.left = 0;
+        rasterInfo.bounds.top = 0;
+        rasterInfo.bounds.right = imgW;
+        rasterInfo.bounds.bottom = imgH;
+        rasterInfo.byteWidth = imgW * aiChannels;
+        rasterInfo.flags = 0;
+
+        // Create raster art
+        AIArtHandle rasterArt = nullptr;
+        err = sAIArt->NewArt(kRasterArt, kPlaceAboveAll, nullptr, &rasterArt);
+        if (err != kNoErr || !rasterArt) {
+            fprintf(stderr, "[TraceModule] Failed to create raster art: %d\n", (int)err);
+            stbi_image_free(pixels);
             return;
         }
 
-        err = sAIPlaced->SetPlacedFileSpecification(placedArt, aiFilePath);
+        // Set raster info (dimensions, color space)
+        err = sAIRaster->SetRasterInfo(rasterArt, &rasterInfo);
         if (err != kNoErr) {
-            fprintf(stderr, "[TraceModule] Failed to set placed file: %d\n", (int)err);
+            fprintf(stderr, "[TraceModule] SetRasterInfo failed: %d\n", (int)err);
+            sAIArt->DisposeArt(rasterArt);
+            stbi_image_free(pixels);
             return;
         }
 
-        // Scale the placed image to match the art bounds of the reference image
-        // by computing a placement matrix: scale + translate
-        if (fArtRight > fArtLeft && fArtTop > fArtBottom) {
-            AIRealRect placedBounds = {0, 0, 0, 0};
-            sAIArt->GetArtBounds(placedArt, &placedBounds);
+        // Copy pixel data via SetRasterTile
+        AITile tile;
+        memset(&tile, 0, sizeof(tile));
+        tile.bounds.left = 0;
+        tile.bounds.top = 0;
+        tile.bounds.right = imgW;
+        tile.bounds.bottom = imgH;
+        tile.bounds.front = 0;
+        tile.bounds.back = aiChannels;
+        tile.data = pixels;
+        tile.rowBytes = imgW * aiChannels;
+        tile.colBytes = aiChannels;
+        tile.planeBytes = 0;
+        for (int i = 0; i < aiChannels && i < kMaxChannels; ++i) {
+            tile.channelInterleave[i] = static_cast<ai::int16>(i);
+        }
 
-            double placedW = placedBounds.right - placedBounds.left;
-            double placedH = placedBounds.top - placedBounds.bottom;
-            double targetW = fArtRight - fArtLeft;
-            double targetH = fArtTop - fArtBottom;
+        AISlice artSlice;
+        memset(&artSlice, 0, sizeof(artSlice));
+        artSlice.left = 0;
+        artSlice.top = 0;
+        artSlice.right = imgW;
+        artSlice.bottom = imgH;
+        artSlice.front = 0;
+        artSlice.back = aiChannels;
 
-            if (placedW > 0 && placedH > 0) {
-                // Get the current placed matrix and modify it
-                AIRealMatrix matrix;
-                err = sAIPlaced->GetPlacedMatrix(placedArt, &matrix);
-                if (err != kNoErr) {
-                    // Start with identity if we can't read the current matrix
-                    matrix.a = (AIReal)1.0;  matrix.b = (AIReal)0.0;
-                    matrix.c = (AIReal)0.0;  matrix.d = (AIReal)1.0;
-                    matrix.tx = (AIReal)0.0; matrix.ty = (AIReal)0.0;
-                }
+        AISlice workSlice;
+        memset(&workSlice, 0, sizeof(workSlice));
+        workSlice.left = 0;
+        workSlice.top = 0;
+        workSlice.right = imgW;
+        workSlice.bottom = imgH;
+        workSlice.front = 0;
+        workSlice.back = aiChannels;
 
-                double scaleX = targetW / placedW;
-                double scaleY = targetH / placedH;
+        err = sAIRaster->SetRasterTile(rasterArt, &artSlice, &tile, &workSlice);
+        stbi_image_free(pixels);  // Done with pixel data
+        if (err != kNoErr) {
+            fprintf(stderr, "[TraceModule] SetRasterTile failed: %d\n", (int)err);
+            sAIArt->DisposeArt(rasterArt);
+            return;
+        }
 
-                // Build placement matrix: scale then translate to reference position
-                matrix.a = (AIReal)(matrix.a * scaleX);
-                matrix.d = (AIReal)(matrix.d * scaleY);
-                matrix.tx = (AIReal)fArtLeft;
-                matrix.ty = (AIReal)fArtBottom;
+        // Position the raster to match the reference art bounds
+        if (artRight > artLeft && artTop > artBottom) {
+            double targetW = artRight - artLeft;
+            double targetH = artTop - artBottom;
 
-                sAIPlaced->SetPlacedMatrix(placedArt, &matrix);
+            // Raster matrix maps pixel space to artwork space
+            // Pixel (0,0) is top-left; in AI coords, Y increases upward
+            // Matrix: [scaleX  0      0     ]
+            //         [0       scaleY 0     ]
+            //         [tx      ty     1     ]
+            AIRealMatrix matrix;
+            matrix.a = (AIReal)(targetW / (double)imgW);    // scaleX
+            matrix.b = (AIReal)0.0;
+            matrix.c = (AIReal)0.0;
+            matrix.d = (AIReal)(-(targetH / (double)imgH)); // scaleY (negative for Y flip)
+            matrix.tx = (AIReal)artLeft;                      // translate X
+            matrix.ty = (AIReal)artTop;                       // translate Y (top, since d is negative)
 
-                fprintf(stderr, "[TraceModule] Scaled placed art: %.0fx%.0f -> %.0fx%.0f, pos=(%.0f,%.0f)\n",
-                        placedW, placedH, targetW, targetH, fArtLeft, fArtBottom);
+            err = sAIRaster->SetRasterMatrix(rasterArt, &matrix);
+            if (err != kNoErr) {
+                fprintf(stderr, "[TraceModule] SetRasterMatrix failed: %d\n", (int)err);
+            } else {
+                fprintf(stderr, "[TraceModule] Raster positioned: %dx%d -> %.0fx%.0f at (%.0f,%.0f)\n",
+                        imgW, imgH, targetW, targetH, artLeft, artTop);
             }
         }
 
-        // Lock and hide the layer (opacity is set per-art-item, not per-layer in this SDK)
+        // Lock and hide the layer
         sAILayer->SetLayerVisible(newLayer, false);
-        sAILayer->SetLayerEditable(newLayer, false);  // lock
+        sAILayer->SetLayerEditable(newLayer, false);
 
-        fprintf(stderr, "[TraceModule] Placed layer '%s' from %s\n",
-                layerName.c_str(), imagePath.c_str());
+        fprintf(stderr, "[TraceModule] Embedded raster layer '%s' from %s (%dx%d)\n",
+                layerName.c_str(), imagePath.c_str(), imgW, imgH);
 
     } catch (ai::Error& ex) {
-        fprintf(stderr, "[TraceModule] AI Error placing layer: %d\n", (int)ex);
+        fprintf(stderr, "[TraceModule] AI Error placing raster: %d\n", (int)ex);
     } catch (std::exception& ex) {
-        fprintf(stderr, "[TraceModule] Exception placing layer: %s\n", ex.what());
+        fprintf(stderr, "[TraceModule] Exception placing raster: %s\n", ex.what());
     } catch (...) {
-        fprintf(stderr, "[TraceModule] Unknown error placing layer\n");
+        fprintf(stderr, "[TraceModule] Unknown error placing raster\n");
     }
 }
 
@@ -1258,4 +1729,40 @@ void TraceModule::OnDocumentChanged()
     fTraceInProgress = false;
     fStatusMessage.clear();
     BridgeSetTraceStatus("");
+}
+
+//========================================================================================
+//  ReadSurfaceIdentity — read per-path surface metadata from AIDictionary
+//========================================================================================
+
+SurfaceIdentity ReadSurfaceIdentity(AIArtHandle art)
+{
+    SurfaceIdentity result;
+    if (!art) return result;
+
+    AIDictionaryRef dict = nullptr;
+    if (sAIArt->GetDictionary(art, &dict) != kNoErr || !dict) return result;
+
+    static AIDictKey surfIdKey  = sAIDictionary->Key("IllToolSurfaceId");
+    static AIDictKey normalXKey = sAIDictionary->Key("IllToolNormalX");
+    static AIDictKey normalYKey = sAIDictionary->Key("IllToolNormalY");
+    static AIDictKey normalZKey = sAIDictionary->Key("IllToolNormalZ");
+
+    ai::int32 surfId = -1;
+    AIReal nx = 0, ny = 0, nz = 0;
+
+    ASErr err = sAIDictionary->GetIntegerEntry(dict, surfIdKey, &surfId);
+    if (err == kNoErr) {
+        result.surfaceId = (int)surfId;
+        sAIDictionary->GetRealEntry(dict, normalXKey, &nx);
+        sAIDictionary->GetRealEntry(dict, normalYKey, &ny);
+        sAIDictionary->GetRealEntry(dict, normalZKey, &nz);
+        result.nx = (double)nx;
+        result.ny = (double)ny;
+        result.nz = (double)nz;
+        result.valid = true;
+    }
+
+    sAIDictionary->Release(dict);
+    return result;
 }

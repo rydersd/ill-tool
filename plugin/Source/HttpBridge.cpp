@@ -581,6 +581,11 @@ std::string BridgeGetTraceStatus() {
     return gTraceStatus;
 }
 
+static std::atomic<int> gTraceOutputMode{1};  // 0=outline, 1=fill (default: fill)
+
+void BridgeSetTraceOutputMode(int mode)  { gTraceOutputMode.store(mode); }
+int  BridgeGetTraceOutputMode()          { return gTraceOutputMode.load(); }
+
 //----------------------------------------------------------------------------------------
 //  Surface extraction state (Stage 17)
 //----------------------------------------------------------------------------------------

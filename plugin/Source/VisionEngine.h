@@ -183,6 +183,17 @@ public:
     static std::vector<std::pair<double,double>> DouglasPeucker(
         const std::vector<std::pair<double,double>>& points, double epsilon);
 
+    /** Generate normal map from grayscale height map via Sobel gradient.
+        Bright = high, dark = low.  Returns RGB buffer (caller must delete[]).
+        Returns nullptr on failure.
+        @param heightMap  Grayscale pixel buffer (1 byte per pixel).
+        @param w          Image width in pixels.
+        @param h          Image height in pixels.
+        @param strength   Controls the steepness of perceived depth (default 2.0).
+        @return RGB buffer of size w*h*3, or nullptr on failure. */
+    static unsigned char* GenerateNormalFromHeight(const unsigned char* heightMap,
+                                                    int w, int h, double strength = 2.0);
+
     //------------------------------------------------------------------------------------
     //  Learning-integrated operations
     //------------------------------------------------------------------------------------
@@ -271,6 +282,24 @@ public:
         @param h  Height of the region in pixels.
         @return SurfaceHint with type, confidence, and dominant gradient angle. */
     SurfaceHint InferSurfaceType(int x, int y, int w, int h);
+
+    /** Result of k-means clustering on a DSINE normal map (RGB pixel data). */
+    struct NormalRegion {
+        double nx, ny, nz;           // cluster centroid normal direction (from RGB)
+        int pixelCount;              // number of sampled pixels in this cluster
+        double centerX, centerY;     // average pixel position of cluster members
+        std::string label;           // auto-generated spatial label: "Top-Left", "Center", etc.
+    };
+
+    /** Cluster an RGB normal map into K surface regions via k-means on (R,G,B) vectors.
+        Samples every Nth pixel (stride=4) for speed, treats RGB as normal direction.
+        @param normalMapRGB  Raw RGB pixel data (3 bytes per pixel, row-major).
+        @param width         Image width in pixels.
+        @param height        Image height in pixels.
+        @param k             Number of clusters.
+        @return Vector of NormalRegion sorted by pixel count (largest first). */
+    std::vector<NormalRegion> ClusterNormalMapRegions(
+        const unsigned char* normalMapRGB, int width, int height, int k);
 
     /** Result of normal direction clustering — a dominant surface plane. */
     struct PlaneCluster {

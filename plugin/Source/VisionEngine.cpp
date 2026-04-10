@@ -1693,6 +1693,157 @@ VisionEngine::SurfaceHint VisionEngine::InferSurfaceType(int x, int y, int w, in
 }
 
 //========================================================================================
+//  ClusterNormalMapRegions — k-means on RGB normal vectors from a DSINE normal map
+//========================================================================================
+
+std::vector<VisionEngine::NormalRegion> VisionEngine::ClusterNormalMapRegions(
+    const unsigned char* normalMapRGB, int width, int height, int k)
+{
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
+    std::vector<NormalRegion> result;
+
+    if (!normalMapRGB || width < 1 || height < 1 || k < 1) return result;
+
+    // 1. Sample every Nth pixel (stride=4 for speed on large images)
+    const int stride = 4;
+    struct Sample { double r, g, b; double px, py; };
+    std::vector<Sample> samples;
+    samples.reserve((width / stride + 1) * (height / stride + 1));
+
+    for (int y = 0; y < height; y += stride) {
+        for (int x = 0; x < width; x += stride) {
+            int idx = (y * width + x) * 3;
+            double r = normalMapRGB[idx]     / 255.0;
+            double g = normalMapRGB[idx + 1] / 255.0;
+            double b = normalMapRGB[idx + 2] / 255.0;
+            samples.push_back({r, g, b, (double)x, (double)y});
+        }
+    }
+
+    if (samples.empty()) return result;
+
+    VE_LOG("ClusterNormalMapRegions: %d samples from %dx%d image, k=%d",
+           (int)samples.size(), width, height, k);
+
+    // 2. Initialize centroids from evenly-spaced samples
+    int actualK = std::min(k, (int)samples.size());
+    struct Centroid { double r, g, b; };
+    std::vector<Centroid> centroids(actualK);
+    for (int i = 0; i < actualK; i++) {
+        int idx = (int)((double)i / actualK * samples.size());
+        centroids[i] = {samples[idx].r, samples[idx].g, samples[idx].b};
+    }
+
+    // 3. K-means: 20 iterations of Lloyd's algorithm
+    std::vector<int> assignment(samples.size(), 0);
+    const int maxIter = 20;
+
+    for (int iter = 0; iter < maxIter; iter++) {
+        // Assign each sample to nearest centroid (by Euclidean distance in RGB)
+        for (size_t s = 0; s < samples.size(); s++) {
+            double bestDist = 1e30;
+            int bestC = 0;
+            for (int c = 0; c < actualK; c++) {
+                double dr = samples[s].r - centroids[c].r;
+                double dg = samples[s].g - centroids[c].g;
+                double db = samples[s].b - centroids[c].b;
+                double dist = dr * dr + dg * dg + db * db;
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    bestC = c;
+                }
+            }
+            assignment[s] = bestC;
+        }
+
+        // Update centroids
+        std::vector<double> sumR(actualK, 0), sumG(actualK, 0), sumB(actualK, 0);
+        std::vector<int> counts(actualK, 0);
+        for (size_t s = 0; s < samples.size(); s++) {
+            int c = assignment[s];
+            sumR[c] += samples[s].r;
+            sumG[c] += samples[s].g;
+            sumB[c] += samples[s].b;
+            counts[c]++;
+        }
+        for (int c = 0; c < actualK; c++) {
+            if (counts[c] > 0) {
+                centroids[c].r = sumR[c] / counts[c];
+                centroids[c].g = sumG[c] / counts[c];
+                centroids[c].b = sumB[c] / counts[c];
+            }
+        }
+    }
+
+    // 4. Build results: centroid normal, pixel count, spatial center
+    for (int c = 0; c < actualK; c++) {
+        NormalRegion region;
+        region.nx = centroids[c].r;
+        region.ny = centroids[c].g;
+        region.nz = centroids[c].b;
+        region.pixelCount = 0;
+        region.centerX = 0;
+        region.centerY = 0;
+
+        for (size_t s = 0; s < samples.size(); s++) {
+            if (assignment[s] == c) {
+                region.pixelCount++;
+                region.centerX += samples[s].px;
+                region.centerY += samples[s].py;
+            }
+        }
+
+        if (region.pixelCount > 0) {
+            region.centerX /= region.pixelCount;
+            region.centerY /= region.pixelCount;
+        }
+
+        // Scale pixel count back to full image (account for stride sampling)
+        region.pixelCount *= (stride * stride);
+
+        result.push_back(region);
+    }
+
+    // 5. Sort by pixel count (largest first)
+    std::sort(result.begin(), result.end(),
+              [](const NormalRegion& a, const NormalRegion& b) {
+                  return a.pixelCount > b.pixelCount;
+              });
+
+    // 6. Label by spatial position (quadrant of cluster center)
+    for (size_t i = 0; i < result.size(); i++) {
+        double relX = result[i].centerX / width;   // 0=left, 1=right
+        double relY = result[i].centerY / height;  // 0=top, 1=bottom
+
+        std::string vLabel, hLabel;
+        if (relY < 0.33)      vLabel = "Top";
+        else if (relY > 0.66) vLabel = "Bottom";
+        else                   vLabel = "";
+
+        if (relX < 0.33)      hLabel = "Left";
+        else if (relX > 0.66) hLabel = "Right";
+        else                   hLabel = "";
+
+        if (vLabel.empty() && hLabel.empty()) {
+            result[i].label = "Center";
+        } else if (vLabel.empty()) {
+            result[i].label = hLabel;
+        } else if (hLabel.empty()) {
+            result[i].label = vLabel;
+        } else {
+            result[i].label = vLabel + "-" + hLabel;
+        }
+
+        VE_LOG("ClusterNormalMapRegions: region %d label='%s' n=(%.2f,%.2f,%.2f) px=%d center=(%.0f,%.0f)",
+               (int)i, result[i].label.c_str(),
+               result[i].nx, result[i].ny, result[i].nz,
+               result[i].pixelCount, result[i].centerX, result[i].centerY);
+    }
+
+    return result;
+}
+
+//========================================================================================
 //  ClusterNormalDirections — k-means on gradient direction histogram
 //========================================================================================
 
@@ -1823,4 +1974,63 @@ std::vector<VisionEngine::VanishingPointEstimate> VisionEngine::EstimateVPsFromN
     }
 
     return result;
+}
+
+//========================================================================================
+//  GenerateNormalFromHeight — Sobel-based normal map from a grayscale height map
+//========================================================================================
+
+unsigned char* VisionEngine::GenerateNormalFromHeight(const unsigned char* heightMap,
+                                                       int w, int h, double strength)
+{
+    if (!heightMap || w < 3 || h < 3) return nullptr;
+
+    unsigned char* normals = new (std::nothrow) unsigned char[w * h * 3];
+    if (!normals) return nullptr;
+
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            int outIdx = (y * w + x) * 3;
+
+            // Border pixels: default flat normal (pointing straight out)
+            if (x == 0 || x == w - 1 || y == 0 || y == h - 1) {
+                normals[outIdx]     = 128;  // R = nx
+                normals[outIdx + 1] = 128;  // G = ny
+                normals[outIdx + 2] = 255;  // B = nz
+                continue;
+            }
+
+            // Sobel dX: right - left
+            double dX = (double)heightMap[y * w + (x + 1)] - (double)heightMap[y * w + (x - 1)];
+            // Sobel dY: bottom - top (image Y-down)
+            double dY = (double)heightMap[(y + 1) * w + x] - (double)heightMap[(y - 1) * w + x];
+
+            // Normal = normalize(-dX * strength, -dY * strength, 255.0)
+            double nx = -dX * strength;
+            double ny = -dY * strength;
+            double nz = 255.0;
+            double len = std::sqrt(nx * nx + ny * ny + nz * nz);
+            if (len < 1e-10) len = 1.0;
+            nx /= len;
+            ny /= len;
+            nz /= len;
+
+            // Map from [-1,1] to [0,255]
+            int r = (int)((nx + 1.0) * 127.5);
+            int g = (int)((ny + 1.0) * 127.5);
+            int b = (int)((nz + 1.0) * 127.5);
+
+            // Clamp
+            if (r < 0) r = 0; if (r > 255) r = 255;
+            if (g < 0) g = 0; if (g > 255) g = 255;
+            if (b < 0) b = 0; if (b > 255) b = 255;
+
+            normals[outIdx]     = (unsigned char)r;
+            normals[outIdx + 1] = (unsigned char)g;
+            normals[outIdx + 2] = (unsigned char)b;
+        }
+    }
+
+    VE_LOG("GenerateNormalFromHeight: %dx%d strength=%.1f", w, h, strength);
+    return normals;
 }

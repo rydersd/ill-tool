@@ -3,9 +3,11 @@
 //  IllTool — Ill Trace Panel Controller (Objective-C++)
 //
 //  Programmatic Cocoa layout for tracing raster images via multiple MCP backends.
-//  Organized into collapsible accordion sections by category.
+//  Each backend is its own accordion section with disclosure triangle, Run button,
+//  and per-model parameter sliders.
 //  Scrollable — content can exceed panel height.
 //  No XIB — all NSViews built in code.
+//  NO animation — instant show/hide + relayout.
 //
 //========================================================================================
 
@@ -17,6 +19,8 @@
 // Theme constants and helpers inherited from TransformPanelController.mm
 // (compiled in same translation unit via IllToolPanels.mm includes)
 static const CGFloat kSliderH     = 18.0;
+static const CGFloat kParamRowH   = 20.0;   // height for a param label row
+static const CGFloat kParamGap    = 4.0;    // gap between param rows
 
 //========================================================================================
 //  FlippedView
@@ -30,40 +34,19 @@ static const CGFloat kSliderH     = 18.0;
 @end
 
 //========================================================================================
-//  Backend checkbox helper
+//  TraceModelSection — one per backend model
 //========================================================================================
 
-static NSButton* MakeTraceCheckbox(NSString *title, id target, SEL action, BOOL checked)
-{
-    NSButton *cb = [NSButton checkboxWithTitle:title target:target action:action];
-    cb.font = ITLabelFont();
-    // Dark theme text
-    NSMutableAttributedString *attrTitle = [[NSMutableAttributedString alloc]
-        initWithString:title];
-    [attrTitle addAttribute:NSForegroundColorAttributeName
-                      value:ITTextColor()
-                      range:NSMakeRange(0, attrTitle.length)];
-    [attrTitle addAttribute:NSFontAttributeName
-                      value:ITLabelFont()
-                      range:NSMakeRange(0, attrTitle.length)];
-    cb.attributedTitle = attrTitle;
-    [attrTitle release];
-    cb.state = checked ? NSControlStateValueOn : NSControlStateValueOff;
-    return cb;
-}
-
-//========================================================================================
-//  Accordion section: disclosure button + container view holding checkboxes
-//========================================================================================
-
-@interface TraceAccordionSection : NSObject
-@property (nonatomic, strong) NSButton   *disclosureButton;
-@property (nonatomic, strong) NSView     *container;
+@interface TraceModelSection : NSObject
+@property (nonatomic, strong) NSButton   *disclosureButton;  // triangle + title (always visible)
+@property (nonatomic, strong) NSButton   *runButton;         // [Run] button (always visible)
+@property (nonatomic, strong) NSView     *paramContainer;    // holds sliders (visible when expanded)
 @property (nonatomic, assign) BOOL        expanded;
-@property (nonatomic, assign) CGFloat     containerHeight;
+@property (nonatomic, assign) CGFloat     paramHeight;       // computed height of param container
+@property (nonatomic, copy)   NSString   *backendName;       // e.g. "vtracer", "opencv"
 @end
 
-@implementation TraceAccordionSection
+@implementation TraceModelSection
 @end
 
 //========================================================================================
@@ -75,38 +58,89 @@ static NSButton* MakeTraceCheckbox(NSString *title, id target, SEL action, BOOL 
 @property (nonatomic, strong) NSScrollView *scrollView;
 @property (nonatomic, strong) TraceFlippedView *contentView;
 
-// Accordion sections (4 groups)
-@property (nonatomic, strong) NSMutableArray<TraceAccordionSection*> *sections;
+// 12 model sections
+@property (nonatomic, strong) NSMutableArray<TraceModelSection*> *sections;
 
-// Backend checkboxes (12 backends — no image_trace)
-@property (nonatomic, strong) NSButton *cbVtracer;
-@property (nonatomic, strong) NSButton *cbOpenCV;
-@property (nonatomic, strong) NSButton *cbStarVector;
-@property (nonatomic, strong) NSButton *cbDiffVG;
-@property (nonatomic, strong) NSButton *cbCartoonSeg;
-@property (nonatomic, strong) NSButton *cbNormalRef;
-@property (nonatomic, strong) NSButton *cbFormEdge;
-@property (nonatomic, strong) NSButton *cbAnalyzeRef;
-@property (nonatomic, strong) NSButton *cbContourScan;
-@property (nonatomic, strong) NSButton *cbContourPath;
-@property (nonatomic, strong) NSButton *cbContourLabel;
-@property (nonatomic, strong) NSButton *cbContourNest;
-
-// Parameter controls
-@property (nonatomic, strong) NSSlider *speckleSlider;
-@property (nonatomic, strong) NSTextField *speckleLabel;
-@property (nonatomic, strong) NSSlider *colorPrecSlider;
-@property (nonatomic, strong) NSTextField *colorPrecLabel;
+// Status label at the bottom
 @property (nonatomic, strong) NSTextField *statusLabel;
-@property (nonatomic, strong) NSButton *traceButton;
 @property (nonatomic, strong) NSTimer *statusTimer;
 
-// Views that come after the accordion (need repositioning on toggle)
-@property (nonatomic, strong) NSBox *paramSeparator;
-@property (nonatomic, strong) NSTextField *paramTitle;
-@property (nonatomic, strong) NSTextField *speckleTitleLabel;
-@property (nonatomic, strong) NSTextField *colorPrecTitleLabel;
-@property (nonatomic, strong) NSBox *buttonSeparator;
+// --- Per-model parameter storage (member properties) ---
+// vtracer (uses bridge vars for speckle + colorPrec; member for corner + mode)
+@property (nonatomic, assign) int vtracerCornerThreshold;
+@property (nonatomic, assign) int vtracerMode; // 0=spline, 1=polygon
+
+// OpenCV Contours
+@property (nonatomic, assign) int opencvThreshold;
+@property (nonatomic, assign) int opencvMinArea;
+
+// DiffVG Correction
+@property (nonatomic, assign) int diffvgIterations;
+@property (nonatomic, assign) double diffvgLearningRate;
+
+// CartoonSeg
+@property (nonatomic, assign) double cartoonsegConfidence;
+
+// Normal Reference
+@property (nonatomic, assign) int normalrefKPlanes;
+
+// Form Edge Extract
+@property (nonatomic, assign) int formedgeNumThresholds;
+@property (nonatomic, assign) double formedgeBlurSigma;
+
+// Contour Scanner
+@property (nonatomic, assign) int contourscanStepSize;
+@property (nonatomic, assign) int contourscanColorThreshold;
+
+// Contour to Path
+@property (nonatomic, assign) double contourpathTolerance;
+
+// Contour Nesting
+@property (nonatomic, assign) int contournestDepth;
+
+// --- Slider + value label references for live updating ---
+@property (nonatomic, strong) NSSlider *vtracerSpeckleSlider;
+@property (nonatomic, strong) NSTextField *vtracerSpeckleValueLabel;
+@property (nonatomic, strong) NSSlider *vtracerColorPrecSlider;
+@property (nonatomic, strong) NSTextField *vtracerColorPrecValueLabel;
+@property (nonatomic, strong) NSSlider *vtracerCornerSlider;
+@property (nonatomic, strong) NSTextField *vtracerCornerValueLabel;
+@property (nonatomic, strong) NSPopUpButton *vtracerModePopup;
+
+@property (nonatomic, strong) NSSlider *opencvThresholdSlider;
+@property (nonatomic, strong) NSTextField *opencvThresholdValueLabel;
+@property (nonatomic, strong) NSSlider *opencvMinAreaSlider;
+@property (nonatomic, strong) NSTextField *opencvMinAreaValueLabel;
+
+@property (nonatomic, strong) NSSlider *diffvgIterationsSlider;
+@property (nonatomic, strong) NSTextField *diffvgIterationsValueLabel;
+@property (nonatomic, strong) NSSlider *diffvgLRSlider;
+@property (nonatomic, strong) NSTextField *diffvgLRValueLabel;
+
+@property (nonatomic, strong) NSSlider *cartoonsegConfSlider;
+@property (nonatomic, strong) NSTextField *cartoonsegConfValueLabel;
+
+@property (nonatomic, strong) NSSlider *normalrefKPlanesSlider;
+@property (nonatomic, strong) NSTextField *normalrefKPlanesValueLabel;
+
+@property (nonatomic, strong) NSSlider *formedgeNumThreshSlider;
+@property (nonatomic, strong) NSTextField *formedgeNumThreshValueLabel;
+@property (nonatomic, strong) NSSlider *formedgeBlurSlider;
+@property (nonatomic, strong) NSTextField *formedgeBlurValueLabel;
+
+@property (nonatomic, strong) NSSlider *contourscanStepSlider;
+@property (nonatomic, strong) NSTextField *contourscanStepValueLabel;
+@property (nonatomic, strong) NSSlider *contourscanColorSlider;
+@property (nonatomic, strong) NSTextField *contourscanColorValueLabel;
+
+@property (nonatomic, strong) NSSlider *contourpathToleranceSlider;
+@property (nonatomic, strong) NSTextField *contourpathToleranceValueLabel;
+
+@property (nonatomic, strong) NSSlider *contournestDepthSlider;
+@property (nonatomic, strong) NSTextField *contournestDepthValueLabel;
+
+// Output mode segmented control (Outline | Fill)
+@property (nonatomic, strong) NSSegmentedControl *outputModeControl;
 
 @end
 
@@ -119,6 +153,22 @@ static NSButton* MakeTraceCheckbox(NSString *title, id target, SEL action, BOOL 
 
     self.sections = [NSMutableArray array];
 
+    // Set defaults for member properties
+    self.vtracerCornerThreshold = 60;
+    self.vtracerMode = 0;
+    self.opencvThreshold = 128;
+    self.opencvMinArea = 50;
+    self.diffvgIterations = 100;
+    self.diffvgLearningRate = 0.01;
+    self.cartoonsegConfidence = 0.5;
+    self.normalrefKPlanes = 6;
+    self.formedgeNumThresholds = 10;
+    self.formedgeBlurSigma = 1.0;
+    self.contourscanStepSize = 5;
+    self.contourscanColorThreshold = 30;
+    self.contourpathTolerance = 1.0;
+    self.contournestDepth = 3;
+
     // Create the scroll view wrapper
     self.scrollView = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, kPanelWidth, 660)];
     self.scrollView.hasVerticalScroller = YES;
@@ -129,222 +179,107 @@ static NSButton* MakeTraceCheckbox(NSString *title, id target, SEL action, BOOL 
     self.scrollView.borderType = NSNoBorder;
 
     // Content view inside the scroll view
-    self.contentView = [[TraceFlippedView alloc] initWithFrame:NSMakeRect(0, 0, kPanelWidth, 800)];
+    self.contentView = [[TraceFlippedView alloc] initWithFrame:NSMakeRect(0, 0, kPanelWidth, 1200)];
     self.contentView.wantsLayer = YES;
     self.contentView.layer.backgroundColor = ITBGColor().CGColor;
     self.scrollView.documentView = self.contentView;
 
     CGFloat contentW = kPanelWidth - 2*kPadding;
 
-    // Build controls into contentView — initial positions will be set by relayout
-    CGFloat y = kPadding;
-
     // --- Panel title ---
     NSTextField *title = MakeLabel(@"Ill Trace", ITLabelFont(), ITAccentColor());
-    title.frame = NSMakeRect(kPadding, y, contentW, kRowHeight);
+    title.frame = NSMakeRect(kPadding, kPadding, contentW, kRowHeight);
     title.font = [NSFont boldSystemFontOfSize:12];
     [self.contentView addSubview:title];
-    y += kRowHeight + 6;
+
+    // --- Output mode segmented control (Outline | Fill) ---
+    self.outputModeControl = [NSSegmentedControl segmentedControlWithLabels:@[@"Outline", @"Fill"]
+                                                              trackingMode:NSSegmentSwitchTrackingSelectOne
+                                                                    target:self
+                                                                    action:@selector(outputModeChanged:)];
+    self.outputModeControl.selectedSegment = 1;  // default: Fill
+    self.outputModeControl.frame = NSMakeRect(kPadding, kPadding + kRowHeight + 4, contentW, 22);
+    self.outputModeControl.font = [NSFont systemFontOfSize:10];
+    [self.contentView addSubview:self.outputModeControl];
 
     // ==========================================
-    //  Section 1: Vector Tracing
-    // ==========================================
-    {
-        TraceAccordionSection *sec = [[TraceAccordionSection alloc] init];
-        sec.expanded = YES;
-
-        sec.disclosureButton = [self makeDisclosureButton:@"Vector Tracing" tag:0];
-        [self.contentView addSubview:sec.disclosureButton];
-
-        sec.container = [[TraceFlippedView alloc] initWithFrame:NSZeroRect];
-        [self.contentView addSubview:sec.container];
-
-        CGFloat cy = 0;
-        self.cbVtracer = MakeTraceCheckbox(@"vtracer (clean SVG)", self, @selector(backendToggled:), YES);
-        self.cbVtracer.tag = 0;
-        self.cbVtracer.frame = NSMakeRect(8, cy, contentW - 16, 18);
-        [sec.container addSubview:self.cbVtracer];
-        cy += 20;
-
-        self.cbOpenCV = MakeTraceCheckbox(@"OpenCV Contours", self, @selector(backendToggled:), NO);
-        self.cbOpenCV.tag = 1;
-        self.cbOpenCV.frame = NSMakeRect(8, cy, contentW - 16, 18);
-        [sec.container addSubview:self.cbOpenCV];
-        cy += 20;
-
-        self.cbStarVector = MakeTraceCheckbox(@"StarVector (ML)", self, @selector(backendToggled:), NO);
-        self.cbStarVector.tag = 2;
-        self.cbStarVector.frame = NSMakeRect(8, cy, contentW - 16, 18);
-        [sec.container addSubview:self.cbStarVector];
-        cy += 20;
-
-        self.cbDiffVG = MakeTraceCheckbox(@"DiffVG Correction", self, @selector(backendToggled:), NO);
-        self.cbDiffVG.tag = 3;
-        self.cbDiffVG.frame = NSMakeRect(8, cy, contentW - 16, 18);
-        [sec.container addSubview:self.cbDiffVG];
-        cy += 20;
-
-        sec.containerHeight = cy;
-        [self.sections addObject:sec];
-    }
-
-    // ==========================================
-    //  Section 2: Segmentation
-    // ==========================================
-    {
-        TraceAccordionSection *sec = [[TraceAccordionSection alloc] init];
-        sec.expanded = NO;
-
-        sec.disclosureButton = [self makeDisclosureButton:@"Segmentation" tag:1];
-        [self.contentView addSubview:sec.disclosureButton];
-
-        sec.container = [[TraceFlippedView alloc] initWithFrame:NSZeroRect];
-        [self.contentView addSubview:sec.container];
-
-        CGFloat cy = 0;
-        self.cbCartoonSeg = MakeTraceCheckbox(@"CartoonSeg (parts)", self, @selector(backendToggled:), NO);
-        self.cbCartoonSeg.tag = 4;
-        self.cbCartoonSeg.frame = NSMakeRect(8, cy, contentW - 16, 18);
-        [sec.container addSubview:self.cbCartoonSeg];
-        cy += 20;
-
-        sec.containerHeight = cy;
-        [self.sections addObject:sec];
-    }
-
-    // ==========================================
-    //  Section 3: Normal Analysis
-    // ==========================================
-    {
-        TraceAccordionSection *sec = [[TraceAccordionSection alloc] init];
-        sec.expanded = NO;
-
-        sec.disclosureButton = [self makeDisclosureButton:@"Normal Analysis" tag:2];
-        [self.contentView addSubview:sec.disclosureButton];
-
-        sec.container = [[TraceFlippedView alloc] initWithFrame:NSZeroRect];
-        [self.contentView addSubview:sec.container];
-
-        CGFloat cy = 0;
-        self.cbNormalRef = MakeTraceCheckbox(@"Normal Reference", self, @selector(backendToggled:), NO);
-        self.cbNormalRef.tag = 5;
-        self.cbNormalRef.frame = NSMakeRect(8, cy, contentW - 16, 18);
-        [sec.container addSubview:self.cbNormalRef];
-        cy += 20;
-
-        self.cbFormEdge = MakeTraceCheckbox(@"Form Edge Extract", self, @selector(backendToggled:), NO);
-        self.cbFormEdge.tag = 6;
-        self.cbFormEdge.frame = NSMakeRect(8, cy, contentW - 16, 18);
-        [sec.container addSubview:self.cbFormEdge];
-        cy += 20;
-
-        self.cbAnalyzeRef = MakeTraceCheckbox(@"Analyze Reference", self, @selector(backendToggled:), NO);
-        self.cbAnalyzeRef.tag = 7;
-        self.cbAnalyzeRef.frame = NSMakeRect(8, cy, contentW - 16, 18);
-        [sec.container addSubview:self.cbAnalyzeRef];
-        cy += 20;
-
-        sec.containerHeight = cy;
-        [self.sections addObject:sec];
-    }
-
-    // ==========================================
-    //  Section 4: Contour Tools
-    // ==========================================
-    {
-        TraceAccordionSection *sec = [[TraceAccordionSection alloc] init];
-        sec.expanded = NO;
-
-        sec.disclosureButton = [self makeDisclosureButton:@"Contour Tools" tag:3];
-        [self.contentView addSubview:sec.disclosureButton];
-
-        sec.container = [[TraceFlippedView alloc] initWithFrame:NSZeroRect];
-        [self.contentView addSubview:sec.container];
-
-        CGFloat cy = 0;
-        self.cbContourScan = MakeTraceCheckbox(@"Contour Scanner", self, @selector(backendToggled:), NO);
-        self.cbContourScan.tag = 8;
-        self.cbContourScan.frame = NSMakeRect(8, cy, contentW - 16, 18);
-        [sec.container addSubview:self.cbContourScan];
-        cy += 20;
-
-        self.cbContourPath = MakeTraceCheckbox(@"Contour to Path", self, @selector(backendToggled:), NO);
-        self.cbContourPath.tag = 9;
-        self.cbContourPath.frame = NSMakeRect(8, cy, contentW - 16, 18);
-        [sec.container addSubview:self.cbContourPath];
-        cy += 20;
-
-        self.cbContourLabel = MakeTraceCheckbox(@"Contour Labeler", self, @selector(backendToggled:), NO);
-        self.cbContourLabel.tag = 10;
-        self.cbContourLabel.frame = NSMakeRect(8, cy, contentW - 16, 18);
-        [sec.container addSubview:self.cbContourLabel];
-        cy += 20;
-
-        self.cbContourNest = MakeTraceCheckbox(@"Contour Nesting", self, @selector(backendToggled:), NO);
-        self.cbContourNest.tag = 11;
-        self.cbContourNest.frame = NSMakeRect(8, cy, contentW - 16, 18);
-        [sec.container addSubview:self.cbContourNest];
-        cy += 20;
-
-        sec.containerHeight = cy;
-        [self.sections addObject:sec];
-    }
-
-    // ==========================================
-    //  Parameters section (below accordion)
+    //  Build 12 model sections
     // ==========================================
 
-    self.paramSeparator = [[NSBox alloc] initWithFrame:NSMakeRect(kPadding, 0, contentW, 1)];
-    self.paramSeparator.boxType = NSBoxSeparator;
-    [self.contentView addSubview:self.paramSeparator];
+    // 0: vtracer
+    [self addModelSection:@"vtracer (clean SVG)" backend:@"vtracer" tag:0
+           paramBuilder:^(NSView *container, CGFloat cw, TracePanelController *ctrl) {
+        return [ctrl buildVtracerParams:container width:cw];
+    }];
 
-    self.paramTitle = MakeLabel(@"Parameters:", ITLabelFont(), ITDimColor());
-    [self.contentView addSubview:self.paramTitle];
+    // 1: OpenCV Contours
+    [self addModelSection:@"OpenCV Contours" backend:@"opencv" tag:1
+           paramBuilder:^(NSView *container, CGFloat cw, TracePanelController *ctrl) {
+        return [ctrl buildOpenCVParams:container width:cw];
+    }];
 
-    // Speckle filter
-    self.speckleTitleLabel = MakeLabel(@"Speckle Filter:", ITLabelFont(), ITTextColor());
-    [self.contentView addSubview:self.speckleTitleLabel];
+    // 2: StarVector (ML) — no params
+    [self addModelSection:@"StarVector (ML)" backend:@"starvector" tag:2
+           paramBuilder:^(NSView *container, CGFloat cw, TracePanelController *ctrl) {
+        return (CGFloat)0.0;
+    }];
 
-    self.speckleLabel = MakeLabel(@"4", ITLabelFont(), ITDimColor());
-    self.speckleLabel.alignment = NSTextAlignmentRight;
-    [self.contentView addSubview:self.speckleLabel];
+    // 3: DiffVG Correction
+    [self addModelSection:@"DiffVG Correction" backend:@"diffvg" tag:3
+           paramBuilder:^(NSView *container, CGFloat cw, TracePanelController *ctrl) {
+        return [ctrl buildDiffVGParams:container width:cw];
+    }];
 
-    self.speckleSlider = [[NSSlider alloc] initWithFrame:NSZeroRect];
-    self.speckleSlider.minValue = 1;
-    self.speckleSlider.maxValue = 100;
-    self.speckleSlider.intValue = 4;
-    self.speckleSlider.target = self;
-    self.speckleSlider.action = @selector(speckleChanged:);
-    [self.contentView addSubview:self.speckleSlider];
+    // 4: CartoonSeg
+    [self addModelSection:@"CartoonSeg" backend:@"cartoonseg" tag:4
+           paramBuilder:^(NSView *container, CGFloat cw, TracePanelController *ctrl) {
+        return [ctrl buildCartoonSegParams:container width:cw];
+    }];
 
-    // Color precision
-    self.colorPrecTitleLabel = MakeLabel(@"Color Precision:", ITLabelFont(), ITTextColor());
-    [self.contentView addSubview:self.colorPrecTitleLabel];
+    // 5: Normal Reference
+    [self addModelSection:@"Normal Reference" backend:@"normal_ref" tag:5
+           paramBuilder:^(NSView *container, CGFloat cw, TracePanelController *ctrl) {
+        return [ctrl buildNormalRefParams:container width:cw];
+    }];
 
-    self.colorPrecLabel = MakeLabel(@"6", ITLabelFont(), ITDimColor());
-    self.colorPrecLabel.alignment = NSTextAlignmentRight;
-    [self.contentView addSubview:self.colorPrecLabel];
+    // 6: Form Edge Extract
+    [self addModelSection:@"Form Edge Extract" backend:@"form_edge" tag:6
+           paramBuilder:^(NSView *container, CGFloat cw, TracePanelController *ctrl) {
+        return [ctrl buildFormEdgeParams:container width:cw];
+    }];
 
-    self.colorPrecSlider = [[NSSlider alloc] initWithFrame:NSZeroRect];
-    self.colorPrecSlider.minValue = 1;
-    self.colorPrecSlider.maxValue = 10;
-    self.colorPrecSlider.intValue = 6;
-    self.colorPrecSlider.target = self;
-    self.colorPrecSlider.action = @selector(colorPrecChanged:);
-    [self.contentView addSubview:self.colorPrecSlider];
+    // 7: Analyze Reference — no params
+    [self addModelSection:@"Analyze Reference" backend:@"analyze_ref" tag:7
+           paramBuilder:^(NSView *container, CGFloat cw, TracePanelController *ctrl) {
+        return (CGFloat)0.0;
+    }];
 
-    // ==========================================
-    //  Run button + status
-    // ==========================================
+    // 8: Contour Scanner
+    [self addModelSection:@"Contour Scanner" backend:@"contour_scan" tag:8
+           paramBuilder:^(NSView *container, CGFloat cw, TracePanelController *ctrl) {
+        return [ctrl buildContourScanParams:container width:cw];
+    }];
 
-    self.buttonSeparator = [[NSBox alloc] initWithFrame:NSMakeRect(kPadding, 0, contentW, 1)];
-    self.buttonSeparator.boxType = NSBoxSeparator;
-    [self.contentView addSubview:self.buttonSeparator];
+    // 9: Contour to Path
+    [self addModelSection:@"Contour to Path" backend:@"contour_path" tag:9
+           paramBuilder:^(NSView *container, CGFloat cw, TracePanelController *ctrl) {
+        return [ctrl buildContourPathParams:container width:cw];
+    }];
 
-    self.traceButton = MakeButton(@"Run Selected", self, @selector(traceClicked:));
-    [self.contentView addSubview:self.traceButton];
+    // 10: Contour Labeler — no params
+    [self addModelSection:@"Contour Labeler" backend:@"contour_label" tag:10
+           paramBuilder:^(NSView *container, CGFloat cw, TracePanelController *ctrl) {
+        return (CGFloat)0.0;
+    }];
 
-    self.statusLabel = MakeLabel(@"Select backends, place an image, click Run", ITLabelFont(), ITDimColor());
+    // 11: Contour Nesting
+    [self addModelSection:@"Contour Nesting" backend:@"contour_nest" tag:11
+           paramBuilder:^(NSView *container, CGFloat cw, TracePanelController *ctrl) {
+        return [ctrl buildContourNestParams:container width:cw];
+    }];
+
+    // --- Status label at the bottom ---
+    self.statusLabel = MakeLabel(@"Expand a model, adjust params, click Run", ITLabelFont(), ITDimColor());
     self.statusLabel.maximumNumberOfLines = 3;
     [self.contentView addSubview:self.statusLabel];
 
@@ -374,22 +309,60 @@ static NSButton* MakeTraceCheckbox(NSString *title, id target, SEL action, BOOL 
 }
 
 //----------------------------------------------------------------------------------------
+//  addModelSection — creates disclosure + run button + param container for one backend
+//----------------------------------------------------------------------------------------
+
+- (void)addModelSection:(NSString *)displayTitle
+                backend:(NSString *)backendName
+                    tag:(NSInteger)tag
+           paramBuilder:(CGFloat(^)(NSView *container, CGFloat contentW, TracePanelController *ctrl))builder
+{
+    CGFloat contentW = kPanelWidth - 2*kPadding;
+
+    TraceModelSection *sec = [[TraceModelSection alloc] init];
+    sec.backendName = backendName;
+    sec.expanded = (tag == 0); // first section expanded by default
+
+    // Disclosure button (triangle + title)
+    sec.disclosureButton = [self makeDisclosureButton:displayTitle tag:tag expanded:sec.expanded];
+    [self.contentView addSubview:sec.disclosureButton];
+
+    // Run button
+    sec.runButton = [NSButton buttonWithTitle:@"Run" target:self action:@selector(runModelClicked:)];
+    sec.runButton.font = [NSFont systemFontOfSize:10];
+    sec.runButton.bezelStyle = NSBezelStyleSmallSquare;
+    sec.runButton.tag = tag;
+    [self.contentView addSubview:sec.runButton];
+
+    // Parameter container
+    sec.paramContainer = [[TraceFlippedView alloc] initWithFrame:NSZeroRect];
+    [self.contentView addSubview:sec.paramContainer];
+
+    // Build parameters inside the container
+    CGFloat paramH = builder(sec.paramContainer, contentW - 16, self); // 16 = indent
+    sec.paramHeight = paramH;
+
+    if (!sec.expanded) {
+        sec.paramContainer.hidden = YES;
+    }
+
+    [self.sections addObject:sec];
+}
+
+//----------------------------------------------------------------------------------------
 //  Disclosure button factory
 //----------------------------------------------------------------------------------------
 
-- (NSButton *)makeDisclosureButton:(NSString *)title tag:(NSInteger)tag
+- (NSButton *)makeDisclosureButton:(NSString *)title tag:(NSInteger)tag expanded:(BOOL)expanded
 {
-    // Borderless push-on/push-off button with triangle prefix as section header
     NSButton *header = [[NSButton alloc] initWithFrame:NSZeroRect];
     header.bordered = NO;
-    header.buttonType = NSButtonTypeOnOff;
-    header.state = (tag == 0) ? NSControlStateValueOn : NSControlStateValueOff;
+    header.buttonType = NSButtonTypeMomentaryLight;
     header.target = self;
     header.action = @selector(sectionToggled:);
     header.tag = tag;
 
-    // Build attributed title with triangle prefix (down=expanded, right=collapsed)
-    NSString *prefix = (tag == 0) ? @"\u25BC " : @"\u25B6 ";
+    NSString *prefix = expanded ? @"\u25BC " : @"\u25B6 ";
     NSString *fullTitle = [NSString stringWithFormat:@"%@%@", prefix, title];
     NSMutableAttributedString *attrTitle = [[NSMutableAttributedString alloc]
         initWithString:fullTitle];
@@ -407,7 +380,8 @@ static NSButton* MakeTraceCheckbox(NSString *title, id target, SEL action, BOOL 
 }
 
 //----------------------------------------------------------------------------------------
-//  Relayout — recalculates y-positions for all sections and trailing controls
+//  Relayout — recalculates y-positions for all sections and the status label
+//  NO animation. Pure position recalculation.
 //----------------------------------------------------------------------------------------
 
 - (void)relayoutContent
@@ -415,55 +389,33 @@ static NSButton* MakeTraceCheckbox(NSString *title, id target, SEL action, BOOL 
     CGFloat contentW = kPanelWidth - 2*kPadding;
     CGFloat y = kPadding + kRowHeight + 6;  // skip past title
 
-    for (TraceAccordionSection *sec in self.sections) {
-        // Disclosure button
-        sec.disclosureButton.frame = NSMakeRect(kPadding, y, contentW, 20);
+    // Position segmented control below title
+    self.outputModeControl.frame = NSMakeRect(kPadding, y, contentW, 22);
+    y += 26;  // segmented control height + spacing
+
+    CGFloat runBtnW = 40.0;
+    CGFloat disclosureW = contentW - runBtnW - 4;
+
+    for (TraceModelSection *sec in self.sections) {
+        // Disclosure button (left side)
+        sec.disclosureButton.frame = NSMakeRect(kPadding, y, disclosureW, 20);
+        // Run button (right side, same row)
+        sec.runButton.frame = NSMakeRect(kPadding + disclosureW + 4, y, runBtnW, 20);
         y += 22;
 
-        // Container
-        if (sec.expanded) {
-            sec.container.frame = NSMakeRect(kPadding, y, contentW, sec.containerHeight);
-            sec.container.hidden = NO;
-            y += sec.containerHeight + 2;
+        // Parameter container (indented)
+        if (sec.expanded && sec.paramHeight > 0) {
+            sec.paramContainer.frame = NSMakeRect(kPadding + 8, y, contentW - 8, sec.paramHeight);
+            sec.paramContainer.hidden = NO;
+            y += sec.paramHeight + 2;
         } else {
-            sec.container.hidden = YES;
+            sec.paramContainer.hidden = YES;
         }
 
-        y += 2;  // spacing between sections
+        y += 4;  // spacing between sections
     }
 
     y += 4;
-
-    // --- Parameter separator ---
-    self.paramSeparator.frame = NSMakeRect(kPadding, y, contentW, 1);
-    y += 8;
-
-    self.paramTitle.frame = NSMakeRect(kPadding, y, contentW, kRowHeight);
-    y += kRowHeight + 2;
-
-    // Speckle filter
-    self.speckleTitleLabel.frame = NSMakeRect(kPadding, y, 100, kRowHeight);
-    self.speckleLabel.frame = NSMakeRect(kPanelWidth - kPadding - 30, y, 30, kRowHeight);
-    y += kRowHeight;
-
-    self.speckleSlider.frame = NSMakeRect(kPadding, y, contentW, kSliderH);
-    y += kSliderH + 6;
-
-    // Color precision
-    self.colorPrecTitleLabel.frame = NSMakeRect(kPadding, y, 110, kRowHeight);
-    self.colorPrecLabel.frame = NSMakeRect(kPanelWidth - kPadding - 30, y, 30, kRowHeight);
-    y += kRowHeight;
-
-    self.colorPrecSlider.frame = NSMakeRect(kPadding, y, contentW, kSliderH);
-    y += kSliderH + 12;
-
-    // --- Button separator ---
-    self.buttonSeparator.frame = NSMakeRect(kPadding, y, contentW, 1);
-    y += 8;
-
-    // Run button
-    self.traceButton.frame = NSMakeRect(kPadding, y, contentW, 28);
-    y += 28 + 8;
 
     // Status label
     self.statusLabel.frame = NSMakeRect(kPadding, y, contentW, kRowHeight * 3);
@@ -473,22 +425,264 @@ static NSButton* MakeTraceCheckbox(NSString *title, id target, SEL action, BOOL 
     self.contentView.frame = NSMakeRect(0, 0, kPanelWidth, y);
 }
 
-//----------------------------------------------------------------------------------------
-//  Actions
-//----------------------------------------------------------------------------------------
+//========================================================================================
+//  Parameter builders — each returns the total height used
+//========================================================================================
+
+//--- Helper: add a slider row (label + slider + value display) ---
+
+- (CGFloat)addSliderRow:(NSView *)container
+                  atY:(CGFloat)y
+                width:(CGFloat)w
+                label:(NSString *)labelText
+             minValue:(double)minVal
+             maxValue:(double)maxVal
+         defaultValue:(double)defVal
+          isFloatDisp:(BOOL)isFloat
+           outSlider:(NSSlider **)outSlider
+        outValueLabel:(NSTextField **)outValueLabel
+               action:(SEL)action
+{
+    CGFloat valueW = 40.0;
+    CGFloat labelW = w - valueW - 4;
+
+    NSTextField *lbl = MakeLabel(labelText, ITLabelFont(), ITTextColor());
+    lbl.frame = NSMakeRect(0, y, labelW, kParamRowH);
+    [container addSubview:lbl];
+
+    NSTextField *valLabel = MakeLabel(
+        isFloat ? [NSString stringWithFormat:@"%.2f", defVal]
+                : [NSString stringWithFormat:@"%d", (int)defVal],
+        ITLabelFont(), ITDimColor());
+    valLabel.alignment = NSTextAlignmentRight;
+    valLabel.frame = NSMakeRect(w - valueW, y, valueW, kParamRowH);
+    [container addSubview:valLabel];
+
+    y += kParamRowH;
+
+    NSSlider *slider = [[NSSlider alloc] initWithFrame:NSMakeRect(0, y, w, kSliderH)];
+    slider.minValue = minVal;
+    slider.maxValue = maxVal;
+    slider.doubleValue = defVal;
+    slider.target = self;
+    slider.action = action;
+    [container addSubview:slider];
+
+    if (outSlider) *outSlider = slider;
+    if (outValueLabel) *outValueLabel = valLabel;
+
+    y += kSliderH + kParamGap;
+    return y;
+}
+
+//--- Helper: add a popup row (label + popup button) ---
+
+- (CGFloat)addPopupRow:(NSView *)container
+                 atY:(CGFloat)y
+               width:(CGFloat)w
+               label:(NSString *)labelText
+               items:(NSArray<NSString*> *)items
+        defaultIndex:(NSInteger)defIdx
+           outPopup:(NSPopUpButton **)outPopup
+              action:(SEL)action
+{
+    CGFloat popupW = 100.0;
+    CGFloat labelW = w - popupW - 4;
+
+    NSTextField *lbl = MakeLabel(labelText, ITLabelFont(), ITTextColor());
+    lbl.frame = NSMakeRect(0, y, labelW, kParamRowH);
+    [container addSubview:lbl];
+
+    NSPopUpButton *popup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(w - popupW, y, popupW, kParamRowH) pullsDown:NO];
+    popup.font = [NSFont systemFontOfSize:10];
+    [popup addItemsWithTitles:items];
+    [popup selectItemAtIndex:defIdx];
+    popup.target = self;
+    popup.action = action;
+    [container addSubview:popup];
+
+    if (outPopup) *outPopup = popup;
+
+    y += kParamRowH + kParamGap;
+    return y;
+}
+
+//--- vtracer: Speckle, Color Precision, Corner Threshold, Mode ---
+
+- (CGFloat)buildVtracerParams:(NSView *)container width:(CGFloat)w
+{
+    CGFloat y = 2;
+
+    y = [self addSliderRow:container atY:y width:w label:@"Speckle Filter:"
+                  minValue:1 maxValue:100 defaultValue:4 isFloatDisp:NO
+                 outSlider:&_vtracerSpeckleSlider outValueLabel:&_vtracerSpeckleValueLabel
+                    action:@selector(vtracerSpeckleChanged:)];
+
+    y = [self addSliderRow:container atY:y width:w label:@"Color Precision:"
+                  minValue:1 maxValue:10 defaultValue:6 isFloatDisp:NO
+                 outSlider:&_vtracerColorPrecSlider outValueLabel:&_vtracerColorPrecValueLabel
+                    action:@selector(vtracerColorPrecChanged:)];
+
+    y = [self addSliderRow:container atY:y width:w label:@"Corner Threshold:"
+                  minValue:0 maxValue:180 defaultValue:60 isFloatDisp:NO
+                 outSlider:&_vtracerCornerSlider outValueLabel:&_vtracerCornerValueLabel
+                    action:@selector(vtracerCornerChanged:)];
+
+    y = [self addPopupRow:container atY:y width:w label:@"Mode:"
+                    items:@[@"spline", @"polygon"] defaultIndex:0
+                 outPopup:&_vtracerModePopup action:@selector(vtracerModeChanged:)];
+
+    return y;
+}
+
+//--- OpenCV Contours: Threshold, Min Area ---
+
+- (CGFloat)buildOpenCVParams:(NSView *)container width:(CGFloat)w
+{
+    CGFloat y = 2;
+
+    y = [self addSliderRow:container atY:y width:w label:@"Threshold:"
+                  minValue:0 maxValue:255 defaultValue:128 isFloatDisp:NO
+                 outSlider:&_opencvThresholdSlider outValueLabel:&_opencvThresholdValueLabel
+                    action:@selector(opencvThresholdChanged:)];
+
+    y = [self addSliderRow:container atY:y width:w label:@"Min Area:"
+                  minValue:1 maxValue:1000 defaultValue:50 isFloatDisp:NO
+                 outSlider:&_opencvMinAreaSlider outValueLabel:&_opencvMinAreaValueLabel
+                    action:@selector(opencvMinAreaChanged:)];
+
+    return y;
+}
+
+//--- DiffVG Correction: Iterations, Learning Rate ---
+
+- (CGFloat)buildDiffVGParams:(NSView *)container width:(CGFloat)w
+{
+    CGFloat y = 2;
+
+    y = [self addSliderRow:container atY:y width:w label:@"Iterations:"
+                  minValue:10 maxValue:500 defaultValue:100 isFloatDisp:NO
+                 outSlider:&_diffvgIterationsSlider outValueLabel:&_diffvgIterationsValueLabel
+                    action:@selector(diffvgIterationsChanged:)];
+
+    y = [self addSliderRow:container atY:y width:w label:@"Learning Rate:"
+                  minValue:0.01 maxValue:1.0 defaultValue:0.01 isFloatDisp:YES
+                 outSlider:&_diffvgLRSlider outValueLabel:&_diffvgLRValueLabel
+                    action:@selector(diffvgLRChanged:)];
+
+    return y;
+}
+
+//--- CartoonSeg: Confidence ---
+
+- (CGFloat)buildCartoonSegParams:(NSView *)container width:(CGFloat)w
+{
+    CGFloat y = 2;
+
+    y = [self addSliderRow:container atY:y width:w label:@"Confidence:"
+                  minValue:0.1 maxValue:1.0 defaultValue:0.5 isFloatDisp:YES
+                 outSlider:&_cartoonsegConfSlider outValueLabel:&_cartoonsegConfValueLabel
+                    action:@selector(cartoonsegConfChanged:)];
+
+    return y;
+}
+
+//--- Normal Reference: K Planes ---
+
+- (CGFloat)buildNormalRefParams:(NSView *)container width:(CGFloat)w
+{
+    CGFloat y = 2;
+
+    y = [self addSliderRow:container atY:y width:w label:@"K Planes:"
+                  minValue:2 maxValue:16 defaultValue:6 isFloatDisp:NO
+                 outSlider:&_normalrefKPlanesSlider outValueLabel:&_normalrefKPlanesValueLabel
+                    action:@selector(normalrefKPlanesChanged:)];
+
+    return y;
+}
+
+//--- Form Edge Extract: Num Thresholds, Blur Sigma ---
+
+- (CGFloat)buildFormEdgeParams:(NSView *)container width:(CGFloat)w
+{
+    CGFloat y = 2;
+
+    y = [self addSliderRow:container atY:y width:w label:@"Num Thresholds:"
+                  minValue:3 maxValue:20 defaultValue:10 isFloatDisp:NO
+                 outSlider:&_formedgeNumThreshSlider outValueLabel:&_formedgeNumThreshValueLabel
+                    action:@selector(formedgeNumThreshChanged:)];
+
+    y = [self addSliderRow:container atY:y width:w label:@"Blur Sigma:"
+                  minValue:0.5 maxValue:5.0 defaultValue:1.0 isFloatDisp:YES
+                 outSlider:&_formedgeBlurSlider outValueLabel:&_formedgeBlurValueLabel
+                    action:@selector(formedgeBlurChanged:)];
+
+    return y;
+}
+
+//--- Contour Scanner: Step Size, Color Threshold ---
+
+- (CGFloat)buildContourScanParams:(NSView *)container width:(CGFloat)w
+{
+    CGFloat y = 2;
+
+    y = [self addSliderRow:container atY:y width:w label:@"Step Size:"
+                  minValue:1 maxValue:20 defaultValue:5 isFloatDisp:NO
+                 outSlider:&_contourscanStepSlider outValueLabel:&_contourscanStepValueLabel
+                    action:@selector(contourscanStepChanged:)];
+
+    y = [self addSliderRow:container atY:y width:w label:@"Color Threshold:"
+                  minValue:0 maxValue:100 defaultValue:30 isFloatDisp:NO
+                 outSlider:&_contourscanColorSlider outValueLabel:&_contourscanColorValueLabel
+                    action:@selector(contourscanColorChanged:)];
+
+    return y;
+}
+
+//--- Contour to Path: Tolerance ---
+
+- (CGFloat)buildContourPathParams:(NSView *)container width:(CGFloat)w
+{
+    CGFloat y = 2;
+
+    y = [self addSliderRow:container atY:y width:w label:@"Tolerance:"
+                  minValue:0.1 maxValue:10.0 defaultValue:1.0 isFloatDisp:YES
+                 outSlider:&_contourpathToleranceSlider outValueLabel:&_contourpathToleranceValueLabel
+                    action:@selector(contourpathToleranceChanged:)];
+
+    return y;
+}
+
+//--- Contour Nesting: Depth ---
+
+- (CGFloat)buildContourNestParams:(NSView *)container width:(CGFloat)w
+{
+    CGFloat y = 2;
+
+    y = [self addSliderRow:container atY:y width:w label:@"Depth:"
+                  minValue:1 maxValue:10 defaultValue:3 isFloatDisp:NO
+                 outSlider:&_contournestDepthSlider outValueLabel:&_contournestDepthValueLabel
+                    action:@selector(contournestDepthChanged:)];
+
+    return y;
+}
+
+//========================================================================================
+//  Actions — section toggle
+//========================================================================================
 
 - (void)sectionToggled:(NSButton *)sender
 {
     NSInteger idx = sender.tag;
     if (idx < 0 || idx >= (NSInteger)self.sections.count) return;
 
-    TraceAccordionSection *sec = self.sections[idx];
+    TraceModelSection *sec = self.sections[idx];
     sec.expanded = !sec.expanded;
 
-    // Update the disclosure triangle character in the button title
+    // Update the disclosure triangle in the button title
     NSString *currentTitle = sender.title;
     // Strip the first 2 characters (triangle + space) to get the section name
-    NSString *sectionName = [currentTitle substringFromIndex:2];
+    NSString *sectionName = (currentTitle.length > 2) ? [currentTitle substringFromIndex:2] : currentTitle;
     NSString *prefix = sec.expanded ? @"\u25BC " : @"\u25B6 ";
     NSString *newTitle = [NSString stringWithFormat:@"%@%@", prefix, sectionName];
 
@@ -503,78 +697,188 @@ static NSButton* MakeTraceCheckbox(NSString *title, id target, SEL action, BOOL 
     sender.attributedTitle = attrTitle;
     [attrTitle release];
 
-    // Animate the relayout
-    [NSAnimationContext runAnimationGroup:^(NSAnimationContext *ctx) {
-        ctx.duration = 0.15;
-        ctx.allowsImplicitAnimation = YES;
-        [self relayoutContent];
-    }];
+    // Instant show/hide + reposition. NO animation.
+    sec.paramContainer.hidden = !sec.expanded;
+    [self relayoutContent];
 
-    fprintf(stderr, "[TracePanel] Section %d %s\n",
-            (int)idx, sec.expanded ? "expanded" : "collapsed");
+    fprintf(stderr, "[TracePanel] Section %d (%s) %s\n",
+            (int)idx, [sec.backendName UTF8String],
+            sec.expanded ? "expanded" : "collapsed");
 }
 
-- (void)backendToggled:(NSButton *)sender
+//========================================================================================
+//  Actions — Run button per model
+//========================================================================================
+
+- (void)runModelClicked:(NSButton *)sender
 {
-    fprintf(stderr, "[TracePanel] Backend %d toggled to %s\n",
-            (int)sender.tag, sender.state == NSControlStateValueOn ? "ON" : "OFF");
+    NSInteger idx = sender.tag;
+    if (idx < 0 || idx >= (NSInteger)self.sections.count) return;
+
+    TraceModelSection *sec = self.sections[idx];
+    std::string backendStr = [sec.backendName UTF8String];
+
+    BridgeRequestTrace(backendStr);
+
+    self.statusLabel.stringValue = [NSString stringWithFormat:@"Running %@...", sec.backendName];
+    fprintf(stderr, "[TracePanel] Run clicked: backend=%s\n", backendStr.c_str());
 }
 
-- (void)traceClicked:(id)sender
+//========================================================================================
+//  Slider actions — vtracer
+//========================================================================================
+
+- (void)vtracerSpeckleChanged:(id)sender
 {
-    // Collect all checked backends — ordered by tag
-    // Tags: 0=vtracer, 1=opencv, 2=starvector, 3=diffvg,
-    //        4=cartoonseg, 5=normal_ref, 6=form_edge, 7=analyze_ref,
-    //        8=contour_scan, 9=contour_path, 10=contour_label, 11=contour_nest
-    NSArray<NSButton*> *checkboxes = @[
-        self.cbVtracer, self.cbOpenCV, self.cbStarVector, self.cbDiffVG,
-        self.cbCartoonSeg,
-        self.cbNormalRef, self.cbFormEdge, self.cbAnalyzeRef,
-        self.cbContourScan, self.cbContourPath, self.cbContourLabel, self.cbContourNest
-    ];
-    NSArray<NSString*> *backendNames = @[
-        @"vtracer", @"opencv", @"starvector", @"diffvg",
-        @"cartoonseg",
-        @"normal_ref", @"form_edge", @"analyze_ref",
-        @"contour_scan", @"contour_path", @"contour_label", @"contour_nest"
-    ];
-
-    NSMutableArray<NSString*> *selected = [NSMutableArray array];
-    for (NSUInteger i = 0; i < checkboxes.count; i++) {
-        if (checkboxes[i].state == NSControlStateValueOn) {
-            [selected addObject:backendNames[i]];
-        }
-    }
-
-    if (selected.count == 0) {
-        self.statusLabel.stringValue = @"No backends selected";
-        return;
-    }
-
-    // Enqueue a trace request for each selected backend
-    for (NSString *backend in selected) {
-        std::string backendStr = [backend UTF8String];
-        BridgeRequestTrace(backendStr);
-        fprintf(stderr, "[TracePanel] Trace requested: backend=%s\n", backendStr.c_str());
-    }
-
-    self.statusLabel.stringValue = [NSString stringWithFormat:@"Running %lu backend%s...",
-                                    (unsigned long)selected.count,
-                                    selected.count > 1 ? "s" : ""];
-}
-
-- (void)speckleChanged:(id)sender
-{
-    int val = (int)self.speckleSlider.intValue;
+    int val = (int)self.vtracerSpeckleSlider.intValue;
     BridgeSetTraceSpeckle(val);
-    self.speckleLabel.stringValue = [NSString stringWithFormat:@"%d", val];
+    self.vtracerSpeckleValueLabel.stringValue = [NSString stringWithFormat:@"%d", val];
 }
 
-- (void)colorPrecChanged:(id)sender
+- (void)vtracerColorPrecChanged:(id)sender
 {
-    int val = (int)self.colorPrecSlider.intValue;
+    int val = (int)self.vtracerColorPrecSlider.intValue;
     BridgeSetTraceColorPrecision(val);
-    self.colorPrecLabel.stringValue = [NSString stringWithFormat:@"%d", val];
+    self.vtracerColorPrecValueLabel.stringValue = [NSString stringWithFormat:@"%d", val];
+}
+
+- (void)vtracerCornerChanged:(id)sender
+{
+    int val = (int)self.vtracerCornerSlider.intValue;
+    self.vtracerCornerThreshold = val;
+    self.vtracerCornerValueLabel.stringValue = [NSString stringWithFormat:@"%d", val];
+}
+
+- (void)vtracerModeChanged:(id)sender
+{
+    self.vtracerMode = (int)self.vtracerModePopup.indexOfSelectedItem;
+}
+
+//========================================================================================
+//  Slider actions — OpenCV
+//========================================================================================
+
+- (void)opencvThresholdChanged:(id)sender
+{
+    int val = (int)self.opencvThresholdSlider.intValue;
+    self.opencvThreshold = val;
+    self.opencvThresholdValueLabel.stringValue = [NSString stringWithFormat:@"%d", val];
+}
+
+- (void)opencvMinAreaChanged:(id)sender
+{
+    int val = (int)self.opencvMinAreaSlider.intValue;
+    self.opencvMinArea = val;
+    self.opencvMinAreaValueLabel.stringValue = [NSString stringWithFormat:@"%d", val];
+}
+
+//========================================================================================
+//  Slider actions — DiffVG
+//========================================================================================
+
+- (void)diffvgIterationsChanged:(id)sender
+{
+    int val = (int)self.diffvgIterationsSlider.intValue;
+    self.diffvgIterations = val;
+    self.diffvgIterationsValueLabel.stringValue = [NSString stringWithFormat:@"%d", val];
+}
+
+- (void)diffvgLRChanged:(id)sender
+{
+    double val = self.diffvgLRSlider.doubleValue;
+    self.diffvgLearningRate = val;
+    self.diffvgLRValueLabel.stringValue = [NSString stringWithFormat:@"%.2f", val];
+}
+
+//========================================================================================
+//  Slider actions — CartoonSeg
+//========================================================================================
+
+- (void)cartoonsegConfChanged:(id)sender
+{
+    double val = self.cartoonsegConfSlider.doubleValue;
+    self.cartoonsegConfidence = val;
+    self.cartoonsegConfValueLabel.stringValue = [NSString stringWithFormat:@"%.2f", val];
+}
+
+//========================================================================================
+//  Slider actions — Normal Reference
+//========================================================================================
+
+- (void)normalrefKPlanesChanged:(id)sender
+{
+    int val = (int)self.normalrefKPlanesSlider.intValue;
+    self.normalrefKPlanes = val;
+    self.normalrefKPlanesValueLabel.stringValue = [NSString stringWithFormat:@"%d", val];
+}
+
+//========================================================================================
+//  Slider actions — Form Edge Extract
+//========================================================================================
+
+- (void)formedgeNumThreshChanged:(id)sender
+{
+    int val = (int)self.formedgeNumThreshSlider.intValue;
+    self.formedgeNumThresholds = val;
+    self.formedgeNumThreshValueLabel.stringValue = [NSString stringWithFormat:@"%d", val];
+}
+
+- (void)formedgeBlurChanged:(id)sender
+{
+    double val = self.formedgeBlurSlider.doubleValue;
+    self.formedgeBlurSigma = val;
+    self.formedgeBlurValueLabel.stringValue = [NSString stringWithFormat:@"%.1f", val];
+}
+
+//========================================================================================
+//  Slider actions — Contour Scanner
+//========================================================================================
+
+- (void)contourscanStepChanged:(id)sender
+{
+    int val = (int)self.contourscanStepSlider.intValue;
+    self.contourscanStepSize = val;
+    self.contourscanStepValueLabel.stringValue = [NSString stringWithFormat:@"%d", val];
+}
+
+- (void)contourscanColorChanged:(id)sender
+{
+    int val = (int)self.contourscanColorSlider.intValue;
+    self.contourscanColorThreshold = val;
+    self.contourscanColorValueLabel.stringValue = [NSString stringWithFormat:@"%d", val];
+}
+
+//========================================================================================
+//  Slider actions — Contour to Path
+//========================================================================================
+
+- (void)contourpathToleranceChanged:(id)sender
+{
+    double val = self.contourpathToleranceSlider.doubleValue;
+    self.contourpathTolerance = val;
+    self.contourpathToleranceValueLabel.stringValue = [NSString stringWithFormat:@"%.1f", val];
+}
+
+//========================================================================================
+//  Slider actions — Contour Nesting
+//========================================================================================
+
+- (void)contournestDepthChanged:(id)sender
+{
+    int val = (int)self.contournestDepthSlider.intValue;
+    self.contournestDepth = val;
+    self.contournestDepthValueLabel.stringValue = [NSString stringWithFormat:@"%d", val];
+}
+
+//========================================================================================
+//  Output mode segmented control action
+//========================================================================================
+
+- (void)outputModeChanged:(id)sender
+{
+    NSInteger selected = self.outputModeControl.selectedSegment;
+    BridgeSetTraceOutputMode((int)selected);  // 0=outline, 1=fill
+    fprintf(stderr, "[TracePanel] Output mode: %s\n", selected == 0 ? "outline" : "fill");
 }
 
 //----------------------------------------------------------------------------------------

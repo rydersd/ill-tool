@@ -4,6 +4,21 @@
 #include <string>
 
 //========================================================================================
+//  SurfaceIdentity — per-path metadata written to AIDictionary by GroupPathsBySurface.
+//  Downstream modules (shading, blend) read this to know which surface a path belongs to.
+//========================================================================================
+
+struct SurfaceIdentity {
+    int surfaceId = -1;
+    double nx = 0, ny = 0, nz = 0;
+    bool valid = false;
+};
+
+/** Read surface identity from a path's AIDictionary.
+    Returns SurfaceIdentity with valid=false if no metadata is present. */
+SurfaceIdentity ReadSurfaceIdentity(AIArtHandle art);
+
+//========================================================================================
 //  TraceModule — Bridge to MCP Python tracing backends (vtracer, OpenCV, StarVector)
 //  HTTP POST to localhost MCP server, parse SVG path response, create AI paths.
 //========================================================================================
@@ -33,8 +48,25 @@ private:
     // Create AI paths from parsed SVG response, mapped to artboard position
     void CreatePathsFromSVG(const std::string& svgContent);
 
+    // Group created paths by surface identity using a DSINE normal map
+    // Reads the normal map, clusters normals, assigns each path to a cluster group
+    void GroupPathsBySurface(const std::string& normalMapPath, int k,
+                             const std::vector<AIArtHandle>& paths,
+                             const std::vector<double>& fillR,
+                             const std::vector<double>& fillG,
+                             const std::vector<double>& fillB,
+                             const std::vector<bool>& hasFillVec);
+
+    // Find or compute the normal map PNG for the current image
+    // Returns path to normal_map.png or empty string on failure
+    std::string FindOrComputeNormalMap(const std::string& imagePath);
+
     // Place output PNG images as locked reference layers in the document
     void PlaceImageAsLayer(const std::string& imagePath, const std::string& layerName);
+
+    // Overload: place image using explicit art bounds (avoids re-querying member vars)
+    void PlaceImageAsLayer(const std::string& imagePath, const std::string& layerName,
+                           double artLeft, double artTop, double artRight, double artBottom);
 
     // Transform SVG pixel coordinates to artboard coordinates
     // SVG: (0,0) top-left, Y down, pixel units

@@ -533,6 +533,10 @@ int  BridgeGetTraceColorPrecision();
 void BridgeSetTraceStatus(const std::string& status);
 std::string BridgeGetTraceStatus();
 
+/** Set/get trace output mode (0=outline, 1=fill). Thread-safe. */
+void BridgeSetTraceOutputMode(int mode);
+int  BridgeGetTraceOutputMode();
+
 //----------------------------------------------------------------------------------------
 //  Surface extraction state (Stage 17) — click-to-extract mode
 //----------------------------------------------------------------------------------------
