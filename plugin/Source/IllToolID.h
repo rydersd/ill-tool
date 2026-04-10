@@ -14,6 +14,7 @@
 #define kIllToolIconResourceID          16051
 #define kIllToolTool                    "IllTool Handle"
 #define kIllToolPerspectiveTool         "IllTool Perspective"
+#define kIllToolPenTool                 "IllTool Pen"
 
 #define kIllToolCursorID                16060
 #define kIllToolPerspectiveCursorID     16061

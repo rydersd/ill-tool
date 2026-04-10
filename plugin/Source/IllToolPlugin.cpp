@@ -77,7 +77,7 @@ ASErr IllToolPlugin::SetGlobal(Plugin* plugin)
 //========================================================================================
 
 IllToolPlugin::IllToolPlugin(SPPluginRef pluginRef) :
-    Plugin(pluginRef), fToolHandle(NULL), fPerspectiveToolHandle(NULL), fAboutPluginMenu(NULL),
+    Plugin(pluginRef), fToolHandle(NULL), fPerspectiveToolHandle(NULL), fPenToolHandle(NULL), fAboutPluginMenu(NULL),
     fAnnotatorHandle(NULL), fNotifySelectionChanged(NULL),
     fAnnotator(NULL),
     fResourceManagerHandle(NULL),
@@ -330,8 +330,23 @@ ASErr IllToolPlugin::Message(char* caller, char* selector, void* message)
             else if (strcmp(caller, kCallerAITool) == 0) {
                 AIToolMessage* toolMsg = (AIToolMessage*)message;
 
+                // Pen tool: drag and up handled by PenModule
+                if (toolMsg->tool == fPenToolHandle) {
+                    auto* pen = GetModule<PenModule>();
+                    if (pen) {
+                        if (strcmp(selector, kSelectorAIToolMouseDrag) == 0) {
+                            pen->HandleMouseDrag(toolMsg);
+                            result = kNoErr;
+                        }
+                        else if (strcmp(selector, kSelectorAIToolMouseUp) == 0) {
+                            pen->HandleMouseUp(toolMsg);
+                            fDragInProgress = false;
+                            result = kNoErr;
+                        }
+                    }
+                }
                 // Perspective tool: drag and up handled by PerspectiveModule
-                if (toolMsg->tool == fPerspectiveToolHandle) {
+                else if (toolMsg->tool == fPerspectiveToolHandle) {
                     auto* persp = GetModule<PerspectiveModule>();
                     if (persp) {
                         if (strcmp(selector, kSelectorAIToolMouseDrag) == 0) {
@@ -522,7 +537,7 @@ ASErr IllToolPlugin::UpdateMenuItem(AIMenuMessage* message)
         bool ourToolActive = false;
         if (sAITool) {
             sAITool->GetSelectedTool(&currentTool);
-            ourToolActive = (currentTool == fToolHandle || currentTool == fPerspectiveToolHandle);
+            ourToolActive = (currentTool == fToolHandle || currentTool == fPerspectiveToolHandle || currentTool == fPenToolHandle);
         }
         BridgeToolMode currentMode = BridgeGetToolMode();
 
@@ -673,6 +688,16 @@ ASErr IllToolPlugin::ToolMouseDown(AIToolMessage* message)
         if (message->tool == fPerspectiveToolHandle) {
             auto* persp = GetModule<PerspectiveModule>();
             if (persp) persp->HandleMouseDown(message);
+            return kNoErr;
+        }
+
+        // Pen tool: dispatch to PenModule
+        if (message->tool == fPenToolHandle) {
+            auto* pen = GetModule<PenModule>();
+            if (pen) {
+                BridgeSetPenMode(true);  // auto-enable pen mode when tool selected
+                pen->HandleMouseDown(message);
+            }
             return kNoErr;
         }
 
@@ -1786,6 +1811,26 @@ ASErr IllToolPlugin::AddTool(SPInterfaceMessage *message)
         aisdk::check_ai_error(result);
 
         fprintf(stderr, "[IllTool] Tool registered: %s\n", kIllToolPerspectiveTool);
+
+        // Register the Pen tool in the same toolbox group
+        AIAddToolData penData;
+        penData.title = ai::UnicodeString::FromRoman("IllTool Pen");
+        penData.tooltip = ai::UnicodeString::FromRoman("IllTool Pen -- smart drawing with auto-simplify and chamfer");
+
+        penData.sameGroupAs = mainToolNum;
+        penData.sameToolsetAs = mainToolNum;
+
+        penData.normalIconResID = kIllToolIconResourceID;
+        penData.darkIconResID = kIllToolIconResourceID;
+        penData.iconType = ai::IconType::kSVG;
+
+        ai::int32 penOptions = kToolWantsToTrackCursorOption;
+
+        result = sAITool->AddTool(message->d.self, kIllToolPenTool, penData,
+                                   penOptions, &fPenToolHandle);
+        aisdk::check_ai_error(result);
+
+        fprintf(stderr, "[IllTool] Tool registered: %s\n", kIllToolPenTool);
     }
     catch (ai::Error& ex) {
         fprintf(stderr, "[IllTool] AddTool error: %d\n", (int)ex);

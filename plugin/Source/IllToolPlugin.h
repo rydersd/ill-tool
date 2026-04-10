@@ -80,6 +80,9 @@ private:
     /** Handle for the IllTool Perspective tool (separate tool in the same toolbox group). */
     AIToolHandle            fPerspectiveToolHandle;
 
+    /** Handle for the IllTool Pen tool (drawing tool). */
+    AIToolHandle            fPenToolHandle;
+
     /** Handle for the About SDK Plug-ins menu item. */
     AIMenuItemHandle        fAboutPluginMenu;
 
