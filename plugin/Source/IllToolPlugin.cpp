@@ -26,12 +26,14 @@
 #include "modules/TransformModule.h"
 #include "modules/TraceModule.h"
 #include "modules/SurfaceModule.h"
+#include "modules/PenModule.h"
 #include "UISkinLoader.h"
 
 // New modules not in Xcode pbxproj — compile them here
 #include "modules/TransformModule.cpp"
 #include "modules/TraceModule.cpp"
 #include "modules/SurfaceModule.cpp"
+#include "modules/PenModule.cpp"
 #include "UISkinLoader.cpp"
 #include "ProjectStore.cpp"
 
@@ -85,11 +87,11 @@ IllToolPlugin::IllToolPlugin(SPPluginRef pluginRef) :
     fSelectionPanel(NULL), fCleanupPanel(NULL),
     fGroupingPanel(NULL), fMergePanel(NULL),
     fShadingPanel(NULL), fBlendPanel(NULL), fPerspectivePanel(NULL),
-    fTransformPanel(NULL), fTracePanel(NULL), fSurfacePanel(NULL),
+    fTransformPanel(NULL), fTracePanel(NULL), fSurfacePanel(NULL), fPenPanel(NULL),
     fSelectionMenuHandle(NULL), fCleanupMenuHandle(NULL),
     fGroupingMenuHandle(NULL), fMergeMenuHandle(NULL),
     fShadingMenuHandle(NULL), fBlendMenuHandle(NULL), fPerspectiveMenuHandle(NULL),
-    fTransformMenuHandle(NULL), fTraceMenuHandle(NULL), fSurfaceMenuHandle(NULL),
+    fTransformMenuHandle(NULL), fTraceMenuHandle(NULL), fSurfaceMenuHandle(NULL), fPenMenuHandle(NULL),
     fAppMenuRootHandle(NULL),
     fMenuLassoHandle(NULL), fMenuSmartHandle(NULL),
     fMenuCleanupHandle(NULL), fMenuGroupingHandle(NULL),
@@ -97,7 +99,7 @@ IllToolPlugin::IllToolPlugin(SPPluginRef pluginRef) :
     fSelectionController(NULL), fCleanupController(NULL),
     fGroupingController(NULL), fMergeController(NULL),
     fShadingController(NULL), fBlendController(NULL), fPerspectiveController(NULL),
-    fTransformController(NULL), fTraceController(NULL), fSurfaceController(NULL)
+    fTransformController(NULL), fTraceController(NULL), fSurfaceController(NULL), fPenController(NULL)
 {
     strncpy(fPluginName, kIllToolPluginName, kMaxStringLength);
     fprintf(stderr, "[IllTool] Plugin constructed: %s\n", kIllToolPluginName);
@@ -182,6 +184,7 @@ ASErr IllToolPlugin::StartupPlugin(SPInterfaceMessage* message)
             addModule(std::make_unique<TransformModule>());
             addModule(std::make_unique<TraceModule>());
             addModule(std::make_unique<SurfaceModule>());
+            addModule(std::make_unique<PenModule>());
         }
         fprintf(stderr, "[IllTool] %zu modules created\n", fModules.size());
 
@@ -484,6 +487,7 @@ ASErr IllToolPlugin::GoMenuItem(AIMenuMessage* message)
                 { fTransformMenuHandle, fTransformPanel,  "Transform (menu)" },
                 { fTraceMenuHandle,     fTracePanel,      "Trace (menu)" },
                 { fSurfaceMenuHandle,   fSurfacePanel,    "Surface (menu)" },
+                { fPenMenuHandle,       fPenPanel,        "Pen" },
             };
             for (auto& p : panels) {
                 if (message->menuItem == p.menu && p.panel) {
@@ -680,7 +684,15 @@ ASErr IllToolPlugin::ToolMouseDown(AIToolMessage* message)
             }
         }
 
-        // Priority 2: Blend pick mode — must run BEFORE lasso (which consumes all clicks)
+        // Priority 2: Pen mode — intercept clicks for point placement
+        {
+            if (BridgeGetPenMode()) {
+                auto* pen = GetModule<PenModule>();
+                if (pen && pen->HandleMouseDown(message)) return kNoErr;
+            }
+        }
+
+        // Priority 3: Blend pick mode — must run BEFORE lasso (which consumes all clicks)
         {
             int blendPick = BridgeGetBlendPickMode();
             if (blendPick > 0) {
@@ -711,12 +723,13 @@ ASErr IllToolPlugin::ToolMouseDown(AIToolMessage* message)
             if (persp && persp->HandleMouseDown(message)) return kNoErr;
         }
 
-        // Priority 6: remaining modules (lasso, selection, etc.)
+        // Priority 7: remaining modules (lasso, selection, etc.)
         for (auto& mod : fModules) {
             if (dynamic_cast<PerspectiveModule*>(mod.get())) continue;  // already tried
             if (dynamic_cast<BlendModule*>(mod.get())) continue;        // already tried
             if (dynamic_cast<SurfaceModule*>(mod.get())) continue;      // already tried
             if (dynamic_cast<ShadingModule*>(mod.get())) continue;      // already tried
+            if (dynamic_cast<PenModule*>(mod.get())) continue;          // already tried
             if (mod->HandleMouseDown(message)) return kNoErr;
         }
     }
@@ -780,6 +793,7 @@ void IllToolPlugin::ProcessOperationQueue()
                 case OpType::TransformApply:     undoName = "Undo Transform"; break;
                 case OpType::Decompose:          undoName = "Undo Decompose"; break;
                 case OpType::SurfaceExtract:     undoName = "Undo Extract"; break;
+                case OpType::PenFinalize:        undoName = "Undo Pen Path"; break;
                 default: break;
             }
             sAIUndo->SetUndoTextUS(ai::UnicodeString(undoName),

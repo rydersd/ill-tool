@@ -116,6 +116,7 @@ private:
     AIPanelRef              fTransformPanel;
     AIPanelRef              fTracePanel;
     AIPanelRef              fSurfacePanel;
+    AIPanelRef              fPenPanel;
 
     /** Menu item handles for panel show/hide in Window menu. */
     AIMenuItemHandle        fSelectionMenuHandle;
@@ -128,6 +129,7 @@ private:
     AIMenuItemHandle        fTransformMenuHandle;
     AIMenuItemHandle        fTraceMenuHandle;
     AIMenuItemHandle        fSurfaceMenuHandle;
+    AIMenuItemHandle        fPenMenuHandle;
 
     //------------------------------------------------------------------------------------
     //  Application menu (Window > IllTool submenu)
@@ -163,6 +165,7 @@ private:
     void*                   fTransformController;
     void*                   fTraceController;
     void*                   fSurfaceController;
+    void*                   fPenController;
 
     //------------------------------------------------------------------------------------
     //  Module system

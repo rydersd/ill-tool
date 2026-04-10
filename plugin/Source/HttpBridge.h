@@ -104,7 +104,13 @@ enum class OpType : int {
     McpCreateShape,          // strParam = JSON body (shape type, position, size, colors)
     McpLayers,               // strParam = JSON body (action: list/create/rename)
     McpSelect,               // strParam = JSON body (action: all/none/by_name/by_type)
-    McpModify                // strParam = JSON body (action: move/scale/rotate/set_stroke/set_fill/set_name/delete)
+    McpModify,               // strParam = JSON body (action: move/scale/rotate/set_stroke/set_fill/set_name/delete)
+    // Stage 18: Ill Pen Tool
+    PenPlacePoint,           // param1 = x, param2 = y (artwork coords)
+    PenFinalize,             // create path from accumulated points
+    PenCancel,               // discard current drawing
+    PenSetChamfer,           // param1 = radius
+    PenUndo                  // remove last point
 };
 
 /** A queued operation with parameters. Pushed by panels/HTTP, popped by timer. */
@@ -558,6 +564,30 @@ std::string BridgeGetExtractionStatus();
 /** Set/get surface extraction mode active. Thread-safe. */
 void BridgeSetSurfaceExtractMode(bool active);
 bool BridgeGetSurfaceExtractMode();
+
+//----------------------------------------------------------------------------------------
+//  Pen tool state (Stage 18) — continuous state for Ill Pen drawing tool
+//----------------------------------------------------------------------------------------
+
+/** Set/get pen mode active. Thread-safe. */
+void BridgeSetPenMode(bool active);
+bool BridgeGetPenMode();
+
+/** Set/get pen chamfer radius (0-20). Thread-safe. */
+void BridgeSetPenChamferRadius(double radius);
+double BridgeGetPenChamferRadius();
+
+/** Set/get uniform edges flag (all anchors get same radius). Thread-safe. */
+void BridgeSetPenUniformEdges(bool uniform);
+bool BridgeGetPenUniformEdges();
+
+/** Set/get path name for next created path. Thread-safe. */
+void BridgeSetPenPathName(const std::string& name);
+std::string BridgeGetPenPathName();
+
+/** Set/get target group name for path placement. Thread-safe. */
+void BridgeSetPenTargetGroup(const std::string& groupName);
+std::string BridgeGetPenTargetGroup();
 
 //----------------------------------------------------------------------------------------
 //  MCP Synchronous Request/Response — HTTP thread enqueues op, waits on condvar,

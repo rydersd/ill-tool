@@ -625,6 +625,47 @@ void BridgeSetSurfaceExtractMode(bool active) { gSurfaceExtractMode.store(active
 bool BridgeGetSurfaceExtractMode()            { return gSurfaceExtractMode.load(); }
 
 //----------------------------------------------------------------------------------------
+//  Pen tool state (Stage 18) — continuous state for Ill Pen drawing tool
+//----------------------------------------------------------------------------------------
+
+static std::atomic<bool>   gPenModeActive{false};
+static std::atomic<double> gPenChamferRadius{0.0};
+static std::atomic<bool>   gPenUniformEdges{true};
+
+static std::mutex          gPenNameMutex;
+static std::string         gPenPathName;
+
+static std::mutex          gPenGroupMutex;
+static std::string         gPenTargetGroup;
+
+void BridgeSetPenMode(bool active)       { gPenModeActive.store(active); }
+bool BridgeGetPenMode()                  { return gPenModeActive.load(); }
+
+void BridgeSetPenChamferRadius(double r) { gPenChamferRadius.store(r); }
+double BridgeGetPenChamferRadius()       { return gPenChamferRadius.load(); }
+
+void BridgeSetPenUniformEdges(bool u)    { gPenUniformEdges.store(u); }
+bool BridgeGetPenUniformEdges()          { return gPenUniformEdges.load(); }
+
+void BridgeSetPenPathName(const std::string& name) {
+    std::lock_guard<std::mutex> lock(gPenNameMutex);
+    gPenPathName = name;
+}
+std::string BridgeGetPenPathName() {
+    std::lock_guard<std::mutex> lock(gPenNameMutex);
+    return gPenPathName;
+}
+
+void BridgeSetPenTargetGroup(const std::string& groupName) {
+    std::lock_guard<std::mutex> lock(gPenGroupMutex);
+    gPenTargetGroup = groupName;
+}
+std::string BridgeGetPenTargetGroup() {
+    std::lock_guard<std::mutex> lock(gPenGroupMutex);
+    return gPenTargetGroup;
+}
+
+//----------------------------------------------------------------------------------------
 //  MCP Synchronous Request/Response mechanism
 //  HTTP handler thread posts a request + waits on condvar.
 //  Timer callback (SDK context) processes it, posts result, signals condvar.
