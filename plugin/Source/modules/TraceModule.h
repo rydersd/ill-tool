@@ -2,6 +2,8 @@
 
 #include "IllToolModule.h"
 #include <string>
+#include <vector>
+#include <utility>
 
 //========================================================================================
 //  SurfaceIdentity — per-path metadata written to AIDictionary by GroupPathsBySurface.
@@ -33,12 +35,45 @@ public:
     void OnDocumentChanged() override;
     void OnSelectionChanged() override;
 
+    // Cutout click-to-add/subtract: Shift+click to add, Option+click to subtract
+    // Plain click toggles instance under cursor
+    bool HandleCutoutClick(AIRealPoint artPt, bool shiftHeld, bool optionHeld);
+
 private:
     // Execute trace via vtracer (SVG path output)
     void ExecuteTrace();
 
     // Execute Python-based backends (normal_ref, form_edge) that produce PNG images
     void ExecutePythonBackend(const std::string& backend);
+
+    // Subject Cutout — Vision framework foreground segmentation (macOS 14+)
+    // PreviewCutout: detect instances, save per-instance masks, composite, trace, overlay
+    void PreviewCutout();
+    // CommitCutout: create actual AI paths from stored preview data on "Cut Lines" layer
+    void CommitCutout();
+    // RecompositeCutout: re-composite selected instance masks, re-trace, update overlay
+    void RecompositeCutout();
+    // CompositeCutoutMasks: OR selected instance mask PNGs into a single composite PNG
+    // Returns path to composite mask or empty string if no instances selected
+    std::string CompositeCutoutMasks();
+    // TraceMaskAndStorePreview: trace a mask PNG with vtracer, parse SVG, store preview paths
+    // Returns number of paths stored, or -1 on failure
+    int TraceMaskAndStorePreview(const std::string& maskPath);
+
+    // Apple Contours — Vision framework contour detection (macOS 11+)
+    // Uses VNDetectContoursRequest via VisionIntelligence abstraction layer
+    void ExecuteAppleContours();
+
+    // Masked Contour Tracing — apply active instance/depth mask before contour detection
+    // If cutout mask is active, masks the image first so contours are only within the subject
+    std::string ApplyActiveMaskToImage(const std::string& imagePath);
+
+    // Pose Detection — Vision framework body/face/hand keypoints (macOS 11+)
+    void ExecuteDetectPose();
+    void DrawPoseOverlay(AIAnnotatorMessage* msg);
+
+    // Depth Decomposition — ONNX Depth Anything V2 depth-based layer separation
+    void ExecuteDepthDecompose();
 
     // Parse SVG path data string into AI path segments
     bool ParseSVGPathToSegments(const std::string& svgPath,
@@ -93,4 +128,15 @@ private:
     // Used to position embedded rasters at the exact same location
     AIRealMatrix fOrigRasterMatrix;
     bool fHasOrigMatrix = false;
+
+    // Pose detection state — cached results for overlay rendering
+    // Each joint: {name, {normalizedX, normalizedY, confidence}}
+    struct PoseJoint {
+        std::string name;
+        float x, y, confidence;
+    };
+    std::vector<PoseJoint> fPoseJoints;
+    std::vector<std::pair<float,float>> fFacePoints;  // (x,y) normalized
+    std::vector<PoseJoint> fHandJoints;
+    bool fPosePreviewActive = false;
 };

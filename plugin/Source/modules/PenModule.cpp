@@ -10,6 +10,7 @@
 #include "IllToolPlugin.h"
 #include "IllToolSuites.h"
 #include "HttpBridge.h"
+#include "IllToolTokens.h"
 
 #include <cstdio>
 #include <cmath>
@@ -86,6 +87,7 @@ bool PenModule::HandleMouseDown(AIToolMessage* msg)
             fChamferRadii.pop_back();
         }
         Finalize();
+        fPreviewDirty = true;
         InvalidateFullView();
         fLastClickTime = {};
         return true;
@@ -118,7 +120,7 @@ bool PenModule::HandleMouseDrag(AIToolMessage* msg)
     fHandles[lastIdx].h = fDragCurrent.h;
     fHandles[lastIdx].v = fDragCurrent.v;
 
-    UpdatePreview();
+    fPreviewDirty = true;
     InvalidateFullView();
 
     return true;
@@ -142,7 +144,7 @@ bool PenModule::HandleMouseUp(AIToolMessage* msg)
         }
     }
 
-    UpdatePreview();
+    fPreviewDirty = true;
     InvalidateFullView();
     return true;
 }
@@ -169,7 +171,7 @@ void PenModule::PlacePoint(double x, double y)
         fprintf(stderr, "[PenModule] Drawing started\n");
     }
 
-    UpdatePreview();
+    fPreviewDirty = true;
 }
 
 void PenModule::UndoLastPoint()
@@ -185,7 +187,7 @@ void PenModule::UndoLastPoint()
         return;
     }
 
-    UpdatePreview();
+    fPreviewDirty = true;
 }
 
 void PenModule::SetChamfer(double radius)
@@ -455,6 +457,13 @@ void PenModule::UpdatePreview()
     }
 }
 
+void PenModule::TickUpdatePreview()
+{
+    if (!fPreviewDirty) return;
+    fPreviewDirty = false;
+    UpdatePreview();
+}
+
 void PenModule::DeletePreview()
 {
     if (fPreviewPath) {
@@ -500,12 +509,47 @@ AIArtHandle PenModule::CreateFinalPath(const std::vector<AIPathSegment>& segs, b
             }
         }
 
-        // Create path: inside group if found, otherwise at top
+        // Create path: inside target group, or in target layer, or in current layer
         if (groupArt) {
             ASErr err = sAIArt->NewArt(kPathArt, kPlaceInsideOnTop, groupArt, &finalPath);
             if (err != kNoErr) finalPath = nullptr;
         }
 
+        // If no group target, try the Ill Layers target layer
+        if (!finalPath) {
+            std::string layerTarget = BridgeGetLayerTarget();
+            if (!layerTarget.empty() && sAILayer) {
+                AILayerHandle targetLayer = nullptr;
+                ai::UnicodeString uTarget(layerTarget);
+                sAILayer->GetLayerByTitle(&targetLayer, uTarget);
+                if (targetLayer) {
+                    AIArtHandle layerArt = nullptr;
+                    sAIArt->GetFirstArtOfLayer(targetLayer, &layerArt);
+                    if (layerArt) {
+                        ASErr err = sAIArt->NewArt(kPathArt, kPlaceInsideOnTop, layerArt, &finalPath);
+                        if (err != kNoErr) finalPath = nullptr;
+                        else fprintf(stderr, "[PenModule] Path placed in target layer: %s\n", layerTarget.c_str());
+                    }
+                }
+            }
+        }
+
+        // Fallback: create in the current layer (not at document top)
+        if (!finalPath && sAILayer) {
+            AILayerHandle currentLayer = nullptr;
+            sAILayer->GetCurrentLayer(&currentLayer);
+            if (currentLayer) {
+                AIArtHandle layerArt = nullptr;
+                sAIArt->GetFirstArtOfLayer(currentLayer, &layerArt);
+                if (layerArt) {
+                    ASErr err = sAIArt->NewArt(kPathArt, kPlaceInsideOnTop, layerArt, &finalPath);
+                    if (err != kNoErr) finalPath = nullptr;
+                    else fprintf(stderr, "[PenModule] Path placed in current layer\n");
+                }
+            }
+        }
+
+        // Last resort: top of document
         if (!finalPath) {
             ASErr err = sAIArt->NewArt(kPathArt, kPlaceAboveAll, nullptr, &finalPath);
             if (err != kNoErr) return nullptr;
@@ -561,14 +605,22 @@ void PenModule::DrawPathLines(AIAnnotatorMessage* msg)
 
     AIAnnotatorDrawer* drawer = msg->drawer;
 
-    // Draw connecting lines between placed points (blue)
-    AIRGBColor blue;
-    blue.red   = 0;
-    blue.green = (ai::uint16)(0.4 * 65535);
-    blue.blue  = 65535;
+    // First pass: shadow outline for contrast against any background
+    sAIAnnotatorDrawer->SetColor(drawer, ITK_COLOR_PRIMARY_SHADOW());
+    sAIAnnotatorDrawer->SetLineWidth(drawer, ITK_WIDTH_SHADOW);
 
-    sAIAnnotatorDrawer->SetColor(drawer, blue);
-    sAIAnnotatorDrawer->SetLineWidth(drawer, 1.5);
+    for (size_t i = 0; i + 1 < fPoints.size(); i++) {
+        AIPoint viewA, viewB;
+        ASErr err1 = sAIDocumentView->ArtworkPointToViewPoint(NULL, &fPoints[i], &viewA);
+        ASErr err2 = sAIDocumentView->ArtworkPointToViewPoint(NULL, &fPoints[i + 1], &viewB);
+        if (err1 == kNoErr && err2 == kNoErr) {
+            sAIAnnotatorDrawer->DrawLine(drawer, viewA, viewB);
+        }
+    }
+
+    // Second pass: primary highlight on top
+    sAIAnnotatorDrawer->SetColor(drawer, ITK_COLOR_PRIMARY());
+    sAIAnnotatorDrawer->SetLineWidth(drawer, ITK_WIDTH_PRIMARY);
 
     for (size_t i = 0; i + 1 < fPoints.size(); i++) {
         AIPoint viewA, viewB;
@@ -581,13 +633,8 @@ void PenModule::DrawPathLines(AIAnnotatorMessage* msg)
 
     // Draw line from last point to current drag position (rubber band)
     if (fDragging && fPoints.size() >= 1) {
-        AIRGBColor dimBlue;
-        dimBlue.red   = 0;
-        dimBlue.green = (ai::uint16)(0.3 * 65535);
-        dimBlue.blue  = (ai::uint16)(0.7 * 65535);
-
-        sAIAnnotatorDrawer->SetColor(drawer, dimBlue);
-        sAIAnnotatorDrawer->SetLineWidth(drawer, 1.0);
+        sAIAnnotatorDrawer->SetColor(drawer, ITK_COLOR_SECONDARY());
+        sAIAnnotatorDrawer->SetLineWidth(drawer, ITK_WIDTH_SECONDARY);
 
         AIPoint viewLast, viewCur;
         ASErr err1 = sAIDocumentView->ArtworkPointToViewPoint(NULL, &fPoints.back(), &viewLast);
@@ -603,11 +650,8 @@ void PenModule::DrawAnchorHandles(AIAnnotatorMessage* msg)
     AIAnnotatorDrawer* drawer = msg->drawer;
 
     // Draw square handles at each anchor point
-    AIRGBColor white;
-    white.red = 65535; white.green = 65535; white.blue = 65535;
-
-    AIRGBColor blue;
-    blue.red = 0; blue.green = (ai::uint16)(0.4 * 65535); blue.blue = 65535;
+    AIRGBColor white = ITK_COLOR_HANDLE_FILL();
+    AIRGBColor blue = ITK_COLOR_HANDLE_STROKE();
 
     for (size_t i = 0; i < fPoints.size(); i++) {
         AIPoint viewPt;
@@ -635,10 +679,7 @@ void PenModule::DrawBezierHandles(AIAnnotatorMessage* msg)
     AIAnnotatorDrawer* drawer = msg->drawer;
 
     // Draw direction handles for smooth points
-    AIRGBColor handleColor;
-    handleColor.red   = (ai::uint16)(0.5 * 65535);
-    handleColor.green = (ai::uint16)(0.7 * 65535);
-    handleColor.blue  = 65535;
+    AIRGBColor handleColor = ITK_COLOR_BEZIER_HANDLE();
 
     for (size_t i = 0; i < fPoints.size(); i++) {
         double dx = fHandles[i].h - fPoints[i].h;

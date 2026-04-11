@@ -13,6 +13,7 @@
 #include "AITool.h"
 #include "LearningEngine.h"
 #include "ProjectStore.h"
+#include "VisionIntelligence.h"
 
 // Module headers
 #include "modules/CleanupModule.h"
@@ -27,6 +28,7 @@
 #include "modules/TraceModule.h"
 #include "modules/SurfaceModule.h"
 #include "modules/PenModule.h"
+#include "modules/LayerModule.h"
 #include "UISkinLoader.h"
 
 // New modules not in Xcode pbxproj — compile them here
@@ -34,6 +36,7 @@
 #include "modules/TraceModule.cpp"
 #include "modules/SurfaceModule.cpp"
 #include "modules/PenModule.cpp"
+#include "modules/LayerModule.cpp"
 #include "UISkinLoader.cpp"
 #include "ProjectStore.cpp"
 
@@ -87,11 +90,11 @@ IllToolPlugin::IllToolPlugin(SPPluginRef pluginRef) :
     fSelectionPanel(NULL), fCleanupPanel(NULL),
     fGroupingPanel(NULL), fMergePanel(NULL),
     fShadingPanel(NULL), fBlendPanel(NULL), fPerspectivePanel(NULL),
-    fTransformPanel(NULL), fTracePanel(NULL), fSurfacePanel(NULL), fPenPanel(NULL),
+    fTransformPanel(NULL), fTracePanel(NULL), fSurfacePanel(NULL), fPenPanel(NULL), fLayerPanel(NULL),
     fSelectionMenuHandle(NULL), fCleanupMenuHandle(NULL),
     fGroupingMenuHandle(NULL), fMergeMenuHandle(NULL),
     fShadingMenuHandle(NULL), fBlendMenuHandle(NULL), fPerspectiveMenuHandle(NULL),
-    fTransformMenuHandle(NULL), fTraceMenuHandle(NULL), fSurfaceMenuHandle(NULL), fPenMenuHandle(NULL),
+    fTransformMenuHandle(NULL), fTraceMenuHandle(NULL), fSurfaceMenuHandle(NULL), fPenMenuHandle(NULL), fLayerMenuHandle(NULL),
     fAppMenuRootHandle(NULL),
     fMenuLassoHandle(NULL), fMenuSmartHandle(NULL),
     fMenuCleanupHandle(NULL), fMenuGroupingHandle(NULL),
@@ -99,7 +102,7 @@ IllToolPlugin::IllToolPlugin(SPPluginRef pluginRef) :
     fSelectionController(NULL), fCleanupController(NULL),
     fGroupingController(NULL), fMergeController(NULL),
     fShadingController(NULL), fBlendController(NULL), fPerspectiveController(NULL),
-    fTransformController(NULL), fTraceController(NULL), fSurfaceController(NULL), fPenController(NULL)
+    fTransformController(NULL), fTraceController(NULL), fSurfaceController(NULL), fPenController(NULL), fLayerController(NULL)
 {
     strncpy(fPluginName, kIllToolPluginName, kMaxStringLength);
     fprintf(stderr, "[IllTool] Plugin constructed: %s\n", kIllToolPluginName);
@@ -185,6 +188,7 @@ ASErr IllToolPlugin::StartupPlugin(SPInterfaceMessage* message)
             addModule(std::make_unique<TraceModule>());
             addModule(std::make_unique<SurfaceModule>());
             addModule(std::make_unique<PenModule>());
+            addModule(std::make_unique<LayerModule>());
         }
         fprintf(stderr, "[IllTool] %zu modules created\n", fModules.size());
 
@@ -245,6 +249,26 @@ ASErr IllToolPlugin::PostStartupPlugin()
         // Open the learning engine database
         LearningEngine::Instance().Open();
 
+        // Initialize VisionIntelligence (ML vision backend)
+        if (VIInitialize()) {
+            // Publish hardware capabilities to bridge for panel UI gating
+            BridgeSetHasNeuralEngine(VIHasNeuralEngine());
+            BridgeSetHasContourDetection(VIHasContourDetection());
+            BridgeSetHasInstanceSegmentation(VIHasInstanceSegmentation());
+            BridgeSetHasPoseDetection(VIHasPoseDetection());
+            BridgeSetHasDepthEstimation(VIHasDepthEstimation());
+
+            fprintf(stderr, "[IllTool] Vision Intelligence: backend=%d neural=%s contours=%s instances=%s pose=%s depth=%s\n",
+                    (int)VIGetActiveBackend(),
+                    VIHasNeuralEngine() ? "yes" : "no",
+                    VIHasContourDetection() ? "yes" : "no",
+                    VIHasInstanceSegmentation() ? "yes" : "no",
+                    VIHasPoseDetection() ? "yes" : "no",
+                    VIHasDepthEstimation() ? "yes" : "no");
+        } else {
+            fprintf(stderr, "[IllTool] VisionIntelligence: no backend available\n");
+        }
+
         // Initialize project store for current document
         ProjectStore::Instance().InitForDocument();
 
@@ -289,6 +313,9 @@ ASErr IllToolPlugin::ShutdownPlugin(SPInterfaceMessage* message)
 
         // Close learning engine before other cleanup
         LearningEngine::Instance().Close();
+
+        // Shutdown VisionIntelligence
+        VIShutdown();
 
         // Stop HTTP bridge before cleanup
         StopHttpBridge();
@@ -375,9 +402,18 @@ ASErr IllToolPlugin::Message(char* caller, char* selector, void* message)
                         }
                     }
                     else {
+                        // Cutout isolation: consume drag/up when cutout preview is active
+                        // Prevents lasso drawing while in cutout add/subtract mode
+                        if (BridgeGetCutoutPreviewActive()) {
+                            if (strcmp(selector, kSelectorAIToolMouseDrag) == 0 ||
+                                strcmp(selector, kSelectorAIToolMouseUp) == 0) {
+                                fDragInProgress = false;
+                                result = kNoErr;
+                            }
+                        }
                         // Main tool: delegate drag/up to modules
                         // Priority: cleanup → perspective → others
-                        if (strcmp(selector, kSelectorAIToolMouseDrag) == 0) {
+                        else if (strcmp(selector, kSelectorAIToolMouseDrag) == 0) {
                             bool handled = false;
                             auto* cleanup = GetModule<CleanupModule>();
                             if (cleanup && cleanup->IsInWorkingMode()) {
@@ -503,6 +539,7 @@ ASErr IllToolPlugin::GoMenuItem(AIMenuMessage* message)
                 { fTraceMenuHandle,     fTracePanel,      "Trace (menu)" },
                 { fSurfaceMenuHandle,   fSurfacePanel,    "Surface (menu)" },
                 { fPenMenuHandle,       fPenPanel,        "Pen" },
+                { fLayerMenuHandle,     fLayerPanel,      "Layers" },
             };
             for (auto& p : panels) {
                 if (message->menuItem == p.menu && p.panel) {
@@ -633,6 +670,10 @@ ASErr IllToolPlugin::Notify(AINotifierMessage* message)
             for (auto& mod : fModules) {
                 mod->OnSelectionChanged();
             }
+
+            // Layer tree: mark dirty for throttled rescan
+            auto* layers = GetModule<LayerModule>();
+            if (layers) layers->MarkTreeDirty();
         }
         if (message->notifier == fShutdownApplicationNotifier) {
             fprintf(stderr, "[IllTool] Application shutdown notifier received\n");
@@ -726,7 +767,22 @@ ASErr IllToolPlugin::ToolMouseDown(AIToolMessage* message)
             }
         }
 
-        // Priority 3: Surface extract mode — click-to-extract
+        // Priority 3: Cutout add/subtract — Shift+click=add, Option+click=subtract
+        {
+            if (BridgeGetCutoutPreviewActive()) {
+                // Read modifier keys from NSEvent
+                NSUInteger mods = [NSEvent modifierFlags];
+                bool shiftHeld  = (mods & NSEventModifierFlagShift) != 0;
+                bool optionHeld = (mods & NSEventModifierFlagOption) != 0;
+
+                auto* trace = GetModule<TraceModule>();
+                if (trace && (shiftHeld || optionHeld) &&
+                    trace->HandleCutoutClick(message->cursor, shiftHeld, optionHeld))
+                    return kNoErr;
+            }
+        }
+
+        // Priority 4: Surface extract mode — click-to-extract
         {
             if (BridgeGetSurfaceExtractMode()) {
                 auto* surface = GetModule<SurfaceModule>();
@@ -780,6 +836,26 @@ void IllToolPlugin::ProcessOperationQueue()
         InvalidateFullView();
     }
 
+    // Auto-activate IllTool Handle when requested (e.g., cutout preview needs click routing)
+    if (BridgeConsumeToolActivationRequest()) {
+        if (sAITool && fToolHandle) {
+            sAITool->SetSelectedTool(fToolHandle);
+            fprintf(stderr, "[IllTool] Auto-activated IllTool Handle for click routing\n");
+        }
+    }
+
+    // Pen preview: deferred art creation from mouse handlers
+    {
+        auto* pen = GetModule<PenModule>();
+        if (pen) pen->TickUpdatePreview();
+    }
+
+    // Layer tree: throttled refresh
+    {
+        auto* layers = GetModule<LayerModule>();
+        if (layers) layers->TickRefresh();
+    }
+
     //------------------------------------------------------------------------
     //  MCP Synchronous Request/Response — handle pending sync requests first
     //  These are posted by HTTP handler threads and need a condvar signal back.
@@ -805,24 +881,33 @@ void IllToolPlugin::ProcessOperationQueue()
         }
         // Set undo context for all mutating operations so Cmd+Z works globally.
         // Read-only ops (Classify) don't need this, but it's harmless to set it.
+        // Both undo and redo text must be set correctly for the undo menu to work.
         if (sAIUndo) {
             const char* undoName = "Undo IllTool";
+            const char* redoName = "Redo IllTool";
             switch (op.type) {
-                case OpType::Trace:              undoName = "Undo Trace"; break;
-                case OpType::AverageSelection:   undoName = "Undo Shape Cleanup"; break;
-                case OpType::WorkingApply:       undoName = "Undo Apply"; break;
-                case OpType::BlendExecute:       undoName = "Undo Blend"; break;
-                case OpType::MergeEndpoints:     undoName = "Undo Merge"; break;
+                case OpType::Trace:              undoName = "Undo Trace";          redoName = "Redo Trace"; break;
+                case OpType::AverageSelection:   undoName = "Undo Shape Cleanup";  redoName = "Redo Shape Cleanup"; break;
+                case OpType::WorkingApply:       undoName = "Undo Apply";          redoName = "Redo Apply"; break;
+                case OpType::BlendExecute:       undoName = "Undo Blend";          redoName = "Redo Blend"; break;
+                case OpType::MergeEndpoints:     undoName = "Undo Merge";          redoName = "Redo Merge"; break;
                 case OpType::ShadingApplyBlend:
-                case OpType::ShadingApplyMesh:   undoName = "Undo Shading"; break;
-                case OpType::TransformApply:     undoName = "Undo Transform"; break;
-                case OpType::Decompose:          undoName = "Undo Decompose"; break;
-                case OpType::SurfaceExtract:     undoName = "Undo Extract"; break;
-                case OpType::PenFinalize:        undoName = "Undo Pen Path"; break;
+                case OpType::ShadingApplyMesh:   undoName = "Undo Shading";        redoName = "Redo Shading"; break;
+                case OpType::TransformApply:     undoName = "Undo Transform";      redoName = "Redo Transform"; break;
+                case OpType::Decompose:          undoName = "Undo Decompose";      redoName = "Redo Decompose"; break;
+                case OpType::SurfaceExtract:     undoName = "Undo Extract";        redoName = "Redo Extract"; break;
+                case OpType::PenFinalize:        undoName = "Undo Pen Path";       redoName = "Redo Pen Path"; break;
+                case OpType::LayerReorder:
+                case OpType::LayerRename:
+                case OpType::LayerDelete:
+                case OpType::LayerCreate:
+                case OpType::LayerMoveArt:
+                case OpType::LayerAutoOrganize:
+                case OpType::LayerGroupSelected: undoName = "Undo Layer Change";   redoName = "Redo Layer Change"; break;
                 default: break;
             }
             sAIUndo->SetUndoTextUS(ai::UnicodeString(undoName),
-                                    ai::UnicodeString(undoName));  // redo text same
+                                    ai::UnicodeString(redoName));
         }
 
         bool handled = false;
@@ -1676,6 +1761,11 @@ ASErr IllToolPlugin::TrackToolCursor(AIToolMessage* message)
                 }
             }
 
+            // Cutout preview mode — crosshair cursor (magic wand style)
+            if (cursorID < 0 && BridgeGetCutoutPreviewActive()) {
+                cursorID = kAICrossCursorID;
+            }
+
             // Surface extract mode — crosshair cursor
             if (cursorID < 0 && BridgeGetSurfaceExtractMode()) {
                 cursorID = kAICrossCursorID;
@@ -2055,6 +2145,18 @@ ASErr IllToolPlugin::AddAppMenu(SPInterfaceMessage* message)
         result = sAIMenu->AddMenuItem(message->d.self, "IllTool Menu Surface",
                                        &itemData, kMenuItemWantsUpdateOption,
                                        &fSurfaceMenuHandle);
+
+        // Ill Pen
+        itemData.itemText = ai::UnicodeString("Ill Pen");
+        result = sAIMenu->AddMenuItem(message->d.self, "IllTool Menu Pen",
+                                       &itemData, kMenuItemWantsUpdateOption,
+                                       &fPenMenuHandle);
+
+        // Ill Layers
+        itemData.itemText = ai::UnicodeString("Ill Layers");
+        result = sAIMenu->AddMenuItem(message->d.self, "IllTool Menu Layers",
+                                       &itemData, kMenuItemWantsUpdateOption,
+                                       &fLayerMenuHandle);
 
         // Step 5: Assign default keyboard shortcuts
         // All shortcuts use Cmd+Shift+key (kMenuItemCmdShiftModifier = Cmd is implied).

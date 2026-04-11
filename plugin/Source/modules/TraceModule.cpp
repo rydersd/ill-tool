@@ -10,7 +10,10 @@
 #include "TraceModule.h"
 #include "HttpBridge.h"
 #include "IllToolSuites.h"
+#include "IllToolTokens.h"
 #include "VisionEngine.h"
+#include "VisionCutout.h"
+#include "VisionIntelligence.h"
 #include "ProjectStore.h"
 #include "vendor/httplib.h"
 #include "vendor/json.hpp"
@@ -21,6 +24,7 @@
 // stb_image for reading PNG pixels (STB_IMAGE_IMPLEMENTATION defined in VisionEngine.cpp)
 #include "vendor/stb_image.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
@@ -201,7 +205,19 @@ bool TraceModule::HandleOp(const PluginOp& op)
             }
             // Dispatch based on backend name in strParam
             std::string backend = op.strParam;
-            if (backend == "normal_ref" || backend == "form_edge") {
+            if (backend == "cutout") {
+                PreviewCutout();
+            } else if (backend == "cutout_commit") {
+                CommitCutout();
+            } else if (backend == "cutout_recomposite") {
+                RecompositeCutout();
+            } else if (backend == "apple_contours") {
+                ExecuteAppleContours();
+            } else if (backend == "detect_pose") {
+                ExecuteDetectPose();
+            } else if (backend == "depth_decompose") {
+                ExecuteDepthDecompose();
+            } else if (backend == "normal_ref" || backend == "form_edge") {
                 ExecutePythonBackend(backend);
             } else {
                 ExecuteTrace();  // vtracer and other SVG-output backends
@@ -516,9 +532,11 @@ void TraceModule::ExecuteTrace()
         }
 
         // Step 1: Canny edge detection — finds actual drawn lines, not shaded regions
-        // Use the VisionEngine's built-in Canny
+        // Thresholds are user-configurable via Centerline Settings sliders
+        double cannyLow = BridgeGetTraceCannyLow();
+        double cannyHigh = BridgeGetTraceCannyHigh();
         ve.LoadImage(imagePath.c_str());
-        auto edges = ve.CannyEdges(30.0, 100.0);  // low/high thresholds
+        auto edges = ve.CannyEdges(cannyLow, cannyHigh);
 
         if (edges.empty() || (int)edges.size() != imgW * imgH) {
             fprintf(stderr, "[TraceModule] Canny failed (got %d pixels, expected %d)\n",
@@ -529,30 +547,54 @@ void TraceModule::ExecuteTrace()
             return;
         }
 
-        // Step 2: Dilate edges slightly (3x3 kernel) so skeleton has material to work with
+        // Step 2: Dilate edges so skeleton has material to work with
+        // Kernel size = 2*dilRad+1; user-configurable via Edge Dilation slider
+        int dilRad = BridgeGetTraceDilationRadius();
         std::vector<unsigned char> dilated(imgW * imgH, 0);
-        for (int y = 1; y < imgH - 1; y++) {
-            for (int x = 1; x < imgW - 1; x++) {
-                // If any pixel in 3x3 neighborhood is an edge, set this pixel
-                bool hasEdge = false;
-                for (int dy = -1; dy <= 1 && !hasEdge; dy++) {
-                    for (int dx = -1; dx <= 1 && !hasEdge; dx++) {
-                        if (edges[(y+dy) * imgW + (x+dx)] > 0) hasEdge = true;
+        if (dilRad <= 0) {
+            // No dilation — copy edges directly
+            for (int i = 0; i < imgW * imgH; i++)
+                dilated[i] = edges[i];
+        } else {
+            for (int y = dilRad; y < imgH - dilRad; y++) {
+                for (int x = dilRad; x < imgW - dilRad; x++) {
+                    bool hasEdge = false;
+                    for (int dy = -dilRad; dy <= dilRad && !hasEdge; dy++) {
+                        for (int dx = -dilRad; dx <= dilRad && !hasEdge; dx++) {
+                            if (edges[(y+dy) * imgW + (x+dx)] > 0) hasEdge = true;
+                        }
                     }
+                    dilated[y * imgW + x] = hasEdge ? 255 : 0;
                 }
-                dilated[y * imgW + x] = hasEdge ? 255 : 0;
             }
         }
 
-        // Step 3: Skeletonize the dilated edge image
+        // Morphological close: erode the dilated result to clean up spread
+        // Keeps connected lines while removing dilation overshoot
+        std::vector<unsigned char> closed(imgW * imgH, 0);
+        for (int y = 1; y < imgH - 1; y++) {
+            for (int x = 1; x < imgW - 1; x++) {
+                // Keep pixel only if ALL 4-connected neighbors are set
+                if (dilated[y * imgW + x] > 0 &&
+                    dilated[(y-1) * imgW + x] > 0 &&
+                    dilated[(y+1) * imgW + x] > 0 &&
+                    dilated[y * imgW + (x-1)] > 0 &&
+                    dilated[y * imgW + (x+1)] > 0) {
+                    closed[y * imgW + x] = 255;
+                }
+            }
+        }
+
+        // Step 3: Skeletonize the closed edge image
         // Invert for Skeletonize (it expects dark=foreground): edges are white, need to flip
         std::vector<unsigned char> inverted(imgW * imgH);
         for (int i = 0; i < imgW * imgH; i++) {
-            inverted[i] = (dilated[i] > 0) ? 0 : 255;  // edge pixels become dark (foreground)
+            inverted[i] = (closed[i] > 0) ? 0 : 255;  // edge pixels become dark (foreground)
         }
 
         BridgeSetTraceStatus("Skeletonizing edges...");
-        unsigned char* skeleton = VisionEngine::Skeletonize(inverted.data(), imgW, imgH, 128);
+        int skelThresh = BridgeGetTraceSkeletonThresh();
+        unsigned char* skeleton = VisionEngine::Skeletonize(inverted.data(), imgW, imgH, skelThresh);
         stbi_image_free(gray);
 
         if (!skeleton) {
@@ -565,13 +607,25 @@ void TraceModule::ExecuteTrace()
         stbi_write_png(skelPath, imgW, imgH, 1, skeleton, imgW);
         delete[] skeleton;
         traceInputPath = skelPath;
-        fprintf(stderr, "[TraceModule] Centerline: Canny→dilate→skeleton saved to %s (%dx%d)\n",
+        fprintf(stderr, "[TraceModule] Centerline params: canny=[%.0f,%.0f] dilRad=%d skelThresh=%d\n",
+                cannyLow, cannyHigh, dilRad, skelThresh);
+        fprintf(stderr, "[TraceModule] Centerline: skeleton saved to %s (%dx%d)\n",
                 skelPath, imgW, imgH);
     }
 
+    // Read new vtracer parameters from bridge
+    int spliceThresh = BridgeGetTraceSpliceThresh();
+    int maxIter = BridgeGetTraceMaxIter();
+    int layerDiff = BridgeGetTraceLayerDiff();
+    double lengthThresh = BridgeGetTraceLengthThresh();
+
     const char* colormode = (outputMode == 2) ? "bw" : (outputMode == 0) ? "bw" : "color";
-    // Centerline uses speckle=1 since skeleton is already clean
-    int effectiveSpeckle = (outputMode == 2) ? 1 : speckle;
+    // Centerline uses higher speckle to filter remaining noise fragments
+    int effectiveSpeckle = (outputMode == 2) ? 8 : speckle;
+    // Centerline uses higher length threshold to drop tiny stray paths
+    double effectiveLengthThresh = (outputMode == 2) ? std::max(lengthThresh, 12.0) : lengthThresh;
+    // Centerline uses higher corner threshold for smoother curves
+    int effectiveCornerThresh = (outputMode == 2) ? 90 : 60;
 
     // Call vtracer via the project Python venv directly
     // vtracer.convert_image_to_svg_py writes SVG to disk
@@ -591,14 +645,15 @@ void TraceModule::ExecuteTrace()
         "mode='spline', "
         "filter_speckle=%d, "
         "color_precision=%d, "
-        "layer_difference=25, "
-        "corner_threshold=60, "
-        "length_threshold=4.0, "
-        "max_iterations=10, "
-        "splice_threshold=45, "
+        "layer_difference=%d, "
+        "corner_threshold=%d, "
+        "length_threshold=%.1f, "
+        "max_iterations=%d, "
+        "splice_threshold=%d, "
         "path_precision=3"
         ")\" 2>&1",
-        traceInputPath.c_str(), svgPath.c_str(), colormode, effectiveSpeckle, colorPrec);
+        traceInputPath.c_str(), svgPath.c_str(), colormode, effectiveSpeckle, colorPrec,
+        layerDiff, effectiveCornerThresh, effectiveLengthThresh, maxIter, spliceThresh);
 
     fprintf(stderr, "[TraceModule] Running: %s\n", cmd);
     BridgeSetTraceStatus("Running vtracer...");
@@ -1135,7 +1190,8 @@ void TraceModule::CreatePathsFromSVG(const std::string& svgContent)
         // Surface-based grouping from DSINE normal map
         fprintf(stderr, "[TraceModule] Grouping %d paths by surface via normal map: %s\n",
                 (int)allPaths.size(), normalMapPath.c_str());
-        GroupPathsBySurface(normalMapPath, 5, allPaths, allFillR, allFillG, allFillB, allHasFill);
+        int kPlanes = BridgeGetTraceKPlanes();
+        GroupPathsBySurface(normalMapPath, kPlanes, allPaths, allFillR, allFillG, allFillB, allHasFill);
         BridgeSetTraceStatus("Traced: " + std::to_string(created) + " paths in surface groups");
     } else {
         // Fallback: luminance-based grouping (original behavior)
@@ -1277,7 +1333,40 @@ std::string TraceModule::FindOrComputeNormalMap(const std::string& imagePath)
         return "";
     }
 
-    unsigned char* normals = VisionEngine::GenerateNormalFromHeight(gray, grayW, grayH, 2.0);
+    // Pre-blur the height map to smooth noise before Sobel gradient
+    double normalBlur = BridgeGetTraceNormalBlur();
+    if (normalBlur > 0.1) {
+        int radius = (int)(normalBlur * 2);  // sigma to radius approximation
+        if (radius < 1) radius = 1;
+        if (radius > 10) radius = 10;
+
+        // Two-pass box blur for approximate Gaussian smoothing
+        std::vector<unsigned char> temp(grayW * grayH);
+        for (int pass = 0; pass < 2; pass++) {
+            unsigned char* src = (pass == 0) ? gray : temp.data();
+            unsigned char* dst = (pass == 0) ? temp.data() : gray;
+            for (int y = 0; y < grayH; y++) {
+                for (int x = 0; x < grayW; x++) {
+                    int sum = 0, count = 0;
+                    for (int dy = -radius; dy <= radius; dy++) {
+                        for (int dx = -radius; dx <= radius; dx++) {
+                            int ny = y + dy, nx = x + dx;
+                            if (ny >= 0 && ny < grayH && nx >= 0 && nx < grayW) {
+                                sum += src[ny * grayW + nx];
+                                count++;
+                            }
+                        }
+                    }
+                    dst[y * grayW + x] = (unsigned char)(sum / count);
+                }
+            }
+        }
+        fprintf(stderr, "[TraceModule] Normal pre-blur: sigma=%.1f radius=%d\n", normalBlur, radius);
+    }
+
+    double normalStrength = BridgeGetTraceNormalStrength();
+    fprintf(stderr, "[TraceModule] Normal strength: %.1f\n", normalStrength);
+    unsigned char* normals = VisionEngine::GenerateNormalFromHeight(gray, grayW, grayH, normalStrength);
     stbi_image_free(gray);
 
     if (!normals) {
@@ -1328,7 +1417,10 @@ void TraceModule::GroupPathsBySurface(const std::string& normalMapPath, int k,
             nmW, nmH, (int)paths.size(), k);
 
     // 2. Cluster normal map into K surface regions
-    auto regions = VisionEngine::Instance().ClusterNormalMapRegions(normalPixels, nmW, nmH, k);
+    int kmeansStride = BridgeGetTraceKMeansStride();
+    int kmeansIter   = BridgeGetTraceKMeansIter();
+    auto regions = VisionEngine::Instance().ClusterNormalMapRegions(normalPixels, nmW, nmH, k,
+                                                                    kmeansStride, kmeansIter);
     if (regions.empty()) {
         fprintf(stderr, "[TraceModule] GroupPathsBySurface: clustering returned 0 regions\n");
         stbi_image_free(normalPixels);
@@ -1629,14 +1721,16 @@ void TraceModule::ExecutePythonBackend(const std::string& backend)
                 "mode='spline', "
                 "filter_speckle=1, "
                 "color_precision=3, "
-                "layer_difference=25, "
+                "layer_difference=%d, "
                 "corner_threshold=60, "
-                "length_threshold=4.0, "
-                "max_iterations=10, "
-                "splice_threshold=45, "
+                "length_threshold=%.1f, "
+                "max_iterations=%d, "
+                "splice_threshold=%d, "
                 "path_precision=3"
                 ")\" 2>&1",
-                path.c_str(), svgOut.c_str());
+                path.c_str(), svgOut.c_str(),
+                BridgeGetTraceLayerDiff(), BridgeGetTraceLengthThresh(),
+                BridgeGetTraceMaxIter(), BridgeGetTraceSpliceThresh());
 
             fprintf(stderr, "[TraceModule] Tracing %s → vectors...\n", name.c_str());
             BridgeSetTraceStatus("Tracing " + name + "...");
@@ -1887,12 +1981,680 @@ void TraceModule::PlaceImageAsLayer(const std::string& imagePath, const std::str
 }
 
 //========================================================================================
-//  DrawOverlay — no annotator overlay needed for trace
+//  DrawOverlay — draw cutout preview silhouette as an annotator overlay
 //========================================================================================
 
-void TraceModule::DrawOverlay(AIAnnotatorMessage* /*message*/)
+void TraceModule::DrawOverlay(AIAnnotatorMessage* message)
 {
-    // Trace module doesn't draw overlays
+    if (!message || !message->drawer || !sAIDocumentView) return;
+
+    // Draw pose overlay (body skeleton, face landmarks, hand joints)
+    DrawPoseOverlay(message);
+
+    // Draw cutout preview silhouette
+    if (!BridgeGetCutoutPreviewActive()) return;
+
+    std::string pathsJSON = BridgeGetCutoutPreviewPaths();
+    if (pathsJSON.empty()) return;
+
+    AIAnnotatorDrawer* drawer = message->drawer;
+
+    // Parse the preview paths JSON: array of {points: [{x,y,inX,inY,outX,outY}, ...], closed: bool}
+    try {
+        json previewData = json::parse(pathsJSON);
+        if (!previewData.is_array()) return;
+
+        // Magenta overlay for the cutout silhouette
+        sAIAnnotatorDrawer->SetColor(drawer, ITK_COLOR_MASK());
+        sAIAnnotatorDrawer->SetLineWidth(drawer, ITK_WIDTH_MASK);
+        sAIAnnotatorDrawer->SetOpacity(drawer, 0.85);
+
+        for (const auto& pathObj : previewData) {
+            if (!pathObj.contains("points")) continue;
+            const auto& points = pathObj["points"];
+            if (!points.is_array() || points.size() < 2) continue;
+            bool closed = pathObj.value("closed", false);
+
+            // Draw line segments between consecutive anchor points
+            // For bezier curves, sample intermediate points for smooth drawing
+            for (size_t i = 0; i + 1 < points.size(); i++) {
+                const auto& p0 = points[i];
+                const auto& p1 = points[i + 1];
+
+                double x0 = p0.value("x", 0.0);
+                double y0 = p0.value("y", 0.0);
+                double ox0 = p0.value("outX", x0);
+                double oy0 = p0.value("outY", y0);
+                double ix1 = p1.value("inX", p1.value("x", 0.0));
+                double iy1 = p1.value("inY", p1.value("y", 0.0));
+                double x1 = p1.value("x", 0.0);
+                double y1 = p1.value("y", 0.0);
+
+                // Check if this is a straight line or a bezier curve
+                bool isCurve = (std::abs(ox0 - x0) > 0.1 || std::abs(oy0 - y0) > 0.1 ||
+                                std::abs(ix1 - x1) > 0.1 || std::abs(iy1 - y1) > 0.1);
+
+                if (isCurve) {
+                    // Sample cubic bezier curve at fixed intervals for smooth display
+                    const int steps = 12;
+                    AIPoint prevView;
+                    bool havePrev = false;
+                    for (int s = 0; s <= steps; s++) {
+                        double t = (double)s / steps;
+                        double u = 1.0 - t;
+                        // Cubic bezier: B(t) = (1-t)^3*P0 + 3(1-t)^2*t*CP0 + 3(1-t)*t^2*CP1 + t^3*P1
+                        double bx = u*u*u*x0 + 3*u*u*t*ox0 + 3*u*t*t*ix1 + t*t*t*x1;
+                        double by = u*u*u*y0 + 3*u*u*t*oy0 + 3*u*t*t*iy1 + t*t*t*y1;
+
+                        AIRealPoint artPt;
+                        artPt.h = (AIReal)bx;
+                        artPt.v = (AIReal)by;
+                        AIPoint viewPt;
+                        if (sAIDocumentView->ArtworkPointToViewPoint(NULL, &artPt, &viewPt) != kNoErr)
+                            continue;
+
+                        if (havePrev) {
+                            sAIAnnotatorDrawer->DrawLine(drawer, prevView, viewPt);
+                        }
+                        prevView = viewPt;
+                        havePrev = true;
+                    }
+                } else {
+                    // Straight line segment
+                    AIRealPoint artA, artB;
+                    artA.h = (AIReal)x0; artA.v = (AIReal)y0;
+                    artB.h = (AIReal)x1; artB.v = (AIReal)y1;
+
+                    AIPoint viewA, viewB;
+                    if (sAIDocumentView->ArtworkPointToViewPoint(NULL, &artA, &viewA) == kNoErr &&
+                        sAIDocumentView->ArtworkPointToViewPoint(NULL, &artB, &viewB) == kNoErr) {
+                        sAIAnnotatorDrawer->DrawLine(drawer, viewA, viewB);
+                    }
+                }
+            }
+
+            // Close the path: draw from last point back to first
+            if (closed && points.size() >= 3) {
+                const auto& pLast = points.back();
+                const auto& pFirst = points[0];
+
+                double x0 = pLast.value("x", 0.0);
+                double y0 = pLast.value("y", 0.0);
+                double ox0 = pLast.value("outX", x0);
+                double oy0 = pLast.value("outY", y0);
+                double ix1 = pFirst.value("inX", pFirst.value("x", 0.0));
+                double iy1 = pFirst.value("inY", pFirst.value("y", 0.0));
+                double x1 = pFirst.value("x", 0.0);
+                double y1 = pFirst.value("y", 0.0);
+
+                bool isCurve = (std::abs(ox0 - x0) > 0.1 || std::abs(oy0 - y0) > 0.1 ||
+                                std::abs(ix1 - x1) > 0.1 || std::abs(iy1 - y1) > 0.1);
+
+                if (isCurve) {
+                    const int steps = 12;
+                    AIPoint prevView;
+                    bool havePrev = false;
+                    for (int s = 0; s <= steps; s++) {
+                        double t = (double)s / steps;
+                        double u = 1.0 - t;
+                        double bx = u*u*u*x0 + 3*u*u*t*ox0 + 3*u*t*t*ix1 + t*t*t*x1;
+                        double by = u*u*u*y0 + 3*u*u*t*oy0 + 3*u*t*t*iy1 + t*t*t*y1;
+
+                        AIRealPoint artPt;
+                        artPt.h = (AIReal)bx;
+                        artPt.v = (AIReal)by;
+                        AIPoint viewPt;
+                        if (sAIDocumentView->ArtworkPointToViewPoint(NULL, &artPt, &viewPt) != kNoErr)
+                            continue;
+
+                        if (havePrev) {
+                            sAIAnnotatorDrawer->DrawLine(drawer, prevView, viewPt);
+                        }
+                        prevView = viewPt;
+                        havePrev = true;
+                    }
+                } else {
+                    AIRealPoint artA, artB;
+                    artA.h = (AIReal)x0; artA.v = (AIReal)y0;
+                    artB.h = (AIReal)x1; artB.v = (AIReal)y1;
+
+                    AIPoint viewA, viewB;
+                    if (sAIDocumentView->ArtworkPointToViewPoint(NULL, &artA, &viewA) == kNoErr &&
+                        sAIDocumentView->ArtworkPointToViewPoint(NULL, &artB, &viewB) == kNoErr) {
+                        sAIAnnotatorDrawer->DrawLine(drawer, viewA, viewB);
+                    }
+                }
+            }
+        }
+    } catch (std::exception& ex) {
+        fprintf(stderr, "[TraceModule] DrawOverlay cutout parse error: %s\n", ex.what());
+    }
+}
+
+//========================================================================================
+//  CompositeCutoutMasks — OR selected per-instance mask PNGs into a single composite
+//  Returns path to composite mask or empty string if none selected.
+//========================================================================================
+
+std::string TraceModule::CompositeCutoutMasks()
+{
+    int count = BridgeGetCutoutInstanceCount();
+    if (count == 0) return "";
+
+    int firstW = 0, firstH = 0;
+    unsigned char* composite = nullptr;
+
+    for (int i = 0; i < count; i++) {
+        if (!BridgeGetCutoutInstanceSelected(i)) continue;
+
+        std::string maskPath = BridgeGetCutoutInstanceMaskPath(i);
+        int w = 0, h = 0, c = 0;
+        unsigned char* mask = stbi_load(maskPath.c_str(), &w, &h, &c, 1);
+        if (!mask) {
+            fprintf(stderr, "[TraceModule] CompositeMasks: failed to load instance %d mask: %s\n",
+                    i, maskPath.c_str());
+            continue;
+        }
+
+        if (!composite) {
+            firstW = w;
+            firstH = h;
+            composite = (unsigned char*)calloc(w * h, 1);
+        }
+
+        // OR the mask into composite (only if dimensions match)
+        if (w == firstW && h == firstH) {
+            for (int p = 0; p < w * h; p++) {
+                if (mask[p] > 128) composite[p] = 255;
+            }
+        } else {
+            fprintf(stderr, "[TraceModule] CompositeMasks: instance %d size %dx%d != %dx%d, skipping\n",
+                    i, w, h, firstW, firstH);
+        }
+        stbi_image_free(mask);
+    }
+
+    if (!composite) return "";
+
+    std::string compositePath = "/tmp/illtool_cutout_composite.png";
+    int wrote = stbi_write_png(compositePath.c_str(), firstW, firstH, 1, composite, firstW);
+    free(composite);
+
+    if (!wrote) {
+        fprintf(stderr, "[TraceModule] CompositeMasks: stbi_write_png failed\n");
+        return "";
+    }
+
+    fprintf(stderr, "[TraceModule] CompositeMasks: %dx%d composite written to %s\n",
+            firstW, firstH, compositePath.c_str());
+    return compositePath;
+}
+
+//========================================================================================
+//  TraceMaskAndStorePreview — trace a mask PNG with vtracer, parse SVG, store preview paths
+//  Shared by PreviewCutout and RecompositeCutout.
+//  Uses member vars fArtLeft/Top/Right/Bottom and fSvgWidth/fSvgHeight.
+//  Returns number of paths stored, or -1 on failure.
+//========================================================================================
+
+int TraceModule::TraceMaskAndStorePreview(const std::string& maskPath)
+{
+    std::string svgPath = "/tmp/illtool_cutout_output.svg";
+    int smoothness = BridgeGetCutoutSmoothness();
+
+    char cmd[4096];
+    snprintf(cmd, sizeof(cmd),
+        "cd /Users/ryders/Developer/GitHub/ill_tool && "
+        ".venv/bin/python -c \""
+        "import vtracer; "
+        "vtracer.convert_image_to_svg_py("
+        "image_path='%s', "
+        "out_path='%s', "
+        "colormode='bw', "
+        "hierarchical='stacked', "
+        "mode='spline', "
+        "filter_speckle=%d, "
+        "color_precision=6, "
+        "layer_difference=25, "
+        "corner_threshold=30, "
+        "length_threshold=20.0, "
+        "max_iterations=10, "
+        "splice_threshold=45, "
+        "path_precision=3"
+        ")\" 2>&1",
+        maskPath.c_str(), svgPath.c_str(), smoothness);
+
+    fprintf(stderr, "[TraceModule] Cutout vtracer cmd: %s\n", cmd);
+    FILE* pipe = popen(cmd, "r");
+    if (!pipe) return -1;
+
+    char outputBuf[4096] = {};
+    size_t totalRead = 0;
+    while (fgets(outputBuf + totalRead, (int)(sizeof(outputBuf) - totalRead), pipe)) {
+        totalRead = strlen(outputBuf);
+    }
+    int exitCode = pclose(pipe);
+
+    if (exitCode != 0) {
+        fprintf(stderr, "[TraceModule] Cutout vtracer failed (exit %d): %s\n", exitCode, outputBuf);
+        return -1;
+    }
+
+    FILE* svgFile = fopen(svgPath.c_str(), "r");
+    if (!svgFile) return -1;
+
+    fseek(svgFile, 0, SEEK_END);
+    long svgSize = ftell(svgFile);
+    fseek(svgFile, 0, SEEK_SET);
+    std::string svgContent(svgSize, '\0');
+    fread(&svgContent[0], 1, svgSize, svgFile);
+    fclose(svgFile);
+
+    fprintf(stderr, "[TraceModule] Cutout SVG: %ld bytes\n", svgSize);
+
+    // Parse SVG viewBox — sets member vars used by TransformSVGPoint
+    fSvgWidth = 0;
+    fSvgHeight = 0;
+    gSvgViewBoxX = 0;
+    gSvgViewBoxY = 0;
+    {
+        std::string viewBoxValue;
+        if (ExtractSVGAttribute(svgContent, "viewBox", viewBoxValue)) {
+            double vbX = 0, vbY = 0, vbW = 0, vbH = 0;
+            if (sscanf(viewBoxValue.c_str(), "%lf %lf %lf %lf", &vbX, &vbY, &vbW, &vbH) >= 4) {
+                gSvgViewBoxX = vbX;
+                gSvgViewBoxY = vbY;
+                fSvgWidth = vbW;
+                fSvgHeight = vbH;
+            }
+        }
+        if (fSvgWidth <= 0) {
+            std::string wVal, hVal;
+            if (ExtractSVGAttribute(svgContent, "width", wVal) &&
+                ExtractSVGAttribute(svgContent, "height", hVal)) {
+                fSvgWidth = atof(wVal.c_str());
+                fSvgHeight = atof(hVal.c_str());
+            }
+        }
+    }
+
+    if (fSvgWidth <= 0 || fSvgHeight <= 0) return -1;
+
+    fprintf(stderr, "[TraceModule] Cutout mapping: SVG %.0fx%.0f -> Art (%.0f,%.0f)-(%.0f,%.0f)\n",
+            fSvgWidth, fSvgHeight, fArtLeft, fArtTop, fArtRight, fArtBottom);
+
+    // Parse <path d="..."> elements and store art-coordinate points
+    json allPaths = json::array();
+    int pathCount = 0;
+    bool firstPath = true;
+    size_t pos = 0;
+
+    while (true) {
+        size_t pathStart = svgContent.find("<path", pos);
+        if (pathStart == std::string::npos) break;
+
+        size_t pathEnd = svgContent.find(">", pathStart);
+        if (pathEnd == std::string::npos) break;
+
+        std::string pathElement = svgContent.substr(pathStart, pathEnd - pathStart + 1);
+        pos = pathEnd;
+
+        std::string pathData;
+        if (!ExtractSVGAttribute(pathElement, "d", pathData)) continue;
+
+        // Skip first path (vtracer background rectangle)
+        if (firstPath) {
+            firstPath = false;
+            continue;
+        }
+
+        std::string transformValue;
+        ExtractSVGAttribute(pathElement, "transform", transformValue);
+        double txSvg = 0, tySvg = 0;
+        ParseSVGTranslate(transformValue, txSvg, tySvg);
+
+        std::vector<AIPathSegment> segs;
+        bool closed = false;
+        if (!ParseSVGPathToSegments(pathData, segs, closed) || segs.empty()) continue;
+
+        if (txSvg != 0 || tySvg != 0) {
+            ApplyArtTranslation(segs, txSvg, tySvg,
+                                fArtLeft, fArtTop, fArtRight, fArtBottom,
+                                fSvgWidth, fSvgHeight);
+        }
+
+        json pathPoints = json::array();
+        for (const auto& seg : segs) {
+            json pt;
+            pt["x"] = (double)seg.p.h;
+            pt["y"] = (double)seg.p.v;
+            pt["inX"]  = (double)seg.in.h;
+            pt["inY"]  = (double)seg.in.v;
+            pt["outX"] = (double)seg.out.h;
+            pt["outY"] = (double)seg.out.v;
+            pt["corner"] = (bool)seg.corner;
+            pathPoints.push_back(pt);
+        }
+
+        if (pathPoints.size() >= 3) {
+            json pathObj;
+            pathObj["points"] = pathPoints;
+            pathObj["closed"] = closed;
+            allPaths.push_back(pathObj);
+            pathCount++;
+        }
+    }
+
+    BridgeSetCutoutPreviewPaths(allPaths.dump());
+    BridgeSetCutoutPreviewActive(true);
+
+    return pathCount;
+}
+
+//========================================================================================
+//  PreviewCutout — detect per-instance masks, save each as PNG, composite, trace, overlay
+//========================================================================================
+
+void TraceModule::PreviewCutout()
+{
+    if (fTraceInProgress) {
+        fprintf(stderr, "[TraceModule] Trace already in progress, skipping cutout preview\n");
+        return;
+    }
+    fTraceInProgress = true;
+    BridgeSetTraceStatus("Detecting instances...");
+
+    std::string imagePath = FindImagePath();
+    if (imagePath.empty()) {
+        BridgeSetTraceStatus("No image found — use File > Place to add a linked image");
+        fTraceInProgress = false;
+        return;
+    }
+
+    fprintf(stderr, "[TraceModule] Cutout preview for: %s\n", imagePath.c_str());
+
+    // Step 1: Detect per-instance foreground masks via VisionIntelligence
+    VIInstanceMask* masks = nullptr;
+    int instanceCount = VIDetectInstances(imagePath.c_str(), &masks);
+
+    if (instanceCount <= 0 || !masks) {
+        // Fallback: try the legacy merged-mask path
+        fprintf(stderr, "[TraceModule] Instance detection returned 0, falling back to merged mask\n");
+        BridgeSetTraceStatus("Extracting subject (merged)...");
+        BridgeSetCutoutInstanceCount(0);
+
+        const char* maskPath = "/tmp/illtool_cutout_mask.png";
+        if (!VisionExtractSubjectMask(imagePath.c_str(), maskPath)) {
+            BridgeSetTraceStatus("Subject extraction failed — is there a clear subject?");
+            fTraceInProgress = false;
+            return;
+        }
+
+        BridgeSetTraceStatus("Tracing silhouette...");
+        int pathCount = TraceMaskAndStorePreview(maskPath);
+
+        if (pathCount < 0) {
+            BridgeSetTraceStatus("Cutout trace failed");
+        } else {
+            InvalidateFullView();
+            BridgeSetTraceStatus("Cutout preview: " + std::to_string(pathCount) +
+                                 " path(s) — Commit to create");
+            fprintf(stderr, "[TraceModule] Cutout preview ready (merged): %d paths\n", pathCount);
+        }
+        fTraceInProgress = false;
+        return;
+    }
+
+    // Cap at 16
+    if (instanceCount > 16) instanceCount = 16;
+
+    fprintf(stderr, "[TraceModule] Detected %d foreground instance(s)\n", instanceCount);
+
+    // Step 2: Save each instance mask as a separate PNG, store paths in bridge
+    BridgeSetCutoutInstanceCount(instanceCount);
+    for (int i = 0; i < instanceCount; i++) {
+        BridgeSetCutoutInstanceSelected(i, true);  // select all by default
+
+        if (!masks[i].mask || masks[i].width == 0 || masks[i].height == 0) {
+            BridgeSetCutoutInstanceMaskPath(i, "");
+            continue;
+        }
+
+        char path[256];
+        snprintf(path, sizeof(path), "/tmp/illtool_instance_%d.png", i);
+        int wrote = stbi_write_png(path, masks[i].width, masks[i].height,
+                                   1, masks[i].mask, masks[i].width);
+        if (wrote) {
+            BridgeSetCutoutInstanceMaskPath(i, path);
+            fprintf(stderr, "[TraceModule] Instance %d mask saved: %s (%dx%d)\n",
+                    i, path, masks[i].width, masks[i].height);
+        } else {
+            fprintf(stderr, "[TraceModule] Instance %d mask write failed\n", i);
+            BridgeSetCutoutInstanceMaskPath(i, "");
+        }
+    }
+
+    VIFreeInstanceMasks(masks, instanceCount);
+
+    // Step 3: Composite all selected masks into one
+    BridgeSetTraceStatus("Compositing masks...");
+    std::string compositePath = CompositeCutoutMasks();
+    if (compositePath.empty()) {
+        BridgeSetTraceStatus("No valid instance masks to composite");
+        fTraceInProgress = false;
+        return;
+    }
+
+    // Step 4: Trace the composite mask
+    BridgeSetTraceStatus("Tracing silhouette...");
+    int pathCount = TraceMaskAndStorePreview(compositePath);
+
+    if (pathCount < 0) {
+        BridgeSetTraceStatus("Cutout trace failed");
+    } else {
+        InvalidateFullView();
+        BridgeSetTraceStatus(std::to_string(instanceCount) + " instance(s), " +
+                             std::to_string(pathCount) + " path(s) — toggle instances or Commit");
+        fprintf(stderr, "[TraceModule] Cutout preview ready: %d instances, %d paths\n",
+                instanceCount, pathCount);
+    }
+
+    // Activate IllTool Handle for click routing (once, at preview start)
+    BridgeRequestToolActivation();
+    fTraceInProgress = false;
+}
+
+//========================================================================================
+//  RecompositeCutout — re-composite selected instance masks, re-trace, update overlay
+//  Called when user toggles instance checkboxes in the panel.
+//========================================================================================
+
+void TraceModule::RecompositeCutout()
+{
+    if (fTraceInProgress) {
+        fprintf(stderr, "[TraceModule] Trace in progress, skipping recomposite\n");
+        return;
+    }
+
+    int instanceCount = BridgeGetCutoutInstanceCount();
+    if (instanceCount == 0) {
+        fprintf(stderr, "[TraceModule] No instances to recomposite\n");
+        return;
+    }
+
+    fTraceInProgress = true;
+    BridgeSetTraceStatus("Recompositing...");
+
+    // Re-read image bounds (FindImagePath populates fArtLeft/Top/Right/Bottom)
+    std::string imagePath = FindImagePath();
+
+    std::string compositePath = CompositeCutoutMasks();
+    if (compositePath.empty()) {
+        BridgeSetTraceStatus("No instances selected");
+        BridgeSetCutoutPreviewPaths("");
+        BridgeSetCutoutPreviewActive(false);
+        InvalidateFullView();
+        fTraceInProgress = false;
+        return;
+    }
+
+    BridgeSetTraceStatus("Tracing silhouette...");
+    int pathCount = TraceMaskAndStorePreview(compositePath);
+
+    if (pathCount < 0) {
+        BridgeSetTraceStatus("Recomposite trace failed");
+    } else {
+        InvalidateFullView();
+        // Count how many instances are selected
+        int selected = 0;
+        for (int i = 0; i < instanceCount; i++) {
+            if (BridgeGetCutoutInstanceSelected(i)) selected++;
+        }
+        BridgeSetTraceStatus(std::to_string(selected) + "/" + std::to_string(instanceCount) +
+                             " instance(s), " + std::to_string(pathCount) + " path(s)");
+        fprintf(stderr, "[TraceModule] Recomposite: %d/%d instances, %d paths\n",
+                selected, instanceCount, pathCount);
+    }
+    fTraceInProgress = false;
+}
+
+//========================================================================================
+//  CommitCutout — create actual AI paths from stored preview data on "Cut Lines" layer
+//========================================================================================
+
+void TraceModule::CommitCutout()
+{
+    if (fTraceInProgress) {
+        fprintf(stderr, "[TraceModule] Trace in progress, skipping cutout commit\n");
+        return;
+    }
+
+    if (!BridgeGetCutoutPreviewActive()) {
+        BridgeSetTraceStatus("No cutout preview to commit — run Preview first");
+        return;
+    }
+
+    std::string pathsJSON = BridgeGetCutoutPreviewPaths();
+    if (pathsJSON.empty()) {
+        BridgeSetTraceStatus("No cutout path data to commit");
+        return;
+    }
+
+    fTraceInProgress = true;
+    BridgeSetTraceStatus("Creating cut paths...");
+
+    if (sAIUndo) {
+        sAIUndo->SetUndoTextUS(ai::UnicodeString("Undo Subject Cutout"),
+                                ai::UnicodeString("Redo Subject Cutout"));
+    }
+
+    // Reload image bounds for accurate positioning
+    std::string imagePath = FindImagePath();
+
+    try {
+        json previewData = json::parse(pathsJSON);
+        if (!previewData.is_array()) {
+            BridgeSetTraceStatus("Invalid cutout data");
+            fTraceInProgress = false;
+            return;
+        }
+
+        // Find or create the "Cut Lines" layer
+        AILayerHandle cutLayer = nullptr;
+        ai::UnicodeString cutLayerName("Cut Lines");
+        ASErr result = sAILayer->GetLayerByTitle(&cutLayer, cutLayerName);
+
+        if (result != kNoErr || !cutLayer) {
+            result = sAILayer->InsertLayer(nullptr, kPlaceAboveAll, &cutLayer);
+            if (result != kNoErr || !cutLayer) {
+                fprintf(stderr, "[TraceModule] Failed to create Cut Lines layer\n");
+                BridgeSetTraceStatus("Failed to create Cut Lines layer");
+                fTraceInProgress = false;
+                return;
+            }
+            sAILayer->SetLayerTitle(cutLayer, cutLayerName);
+        }
+
+        // Get the layer's art group to insert paths into
+        AIArtHandle layerArt = nullptr;
+        sAIArt->GetFirstArtOfLayer(cutLayer, &layerArt);
+
+        int created = 0;
+
+        for (const auto& pathObj : previewData) {
+            if (!pathObj.contains("points")) continue;
+            const auto& points = pathObj["points"];
+            if (!points.is_array() || points.size() < 3) continue;
+            bool closed = pathObj.value("closed", true);
+
+            // Build path segments from the stored art-coordinate points
+            // Restoring full bezier handle data (in/out control points)
+            std::vector<AIPathSegment> segs;
+            for (const auto& pt : points) {
+                if (!pt.contains("x") || !pt.contains("y")) continue;
+
+                AIPathSegment seg;
+                memset(&seg, 0, sizeof(seg));
+                seg.p.h  = (AIReal)pt["x"].get<double>();
+                seg.p.v  = (AIReal)pt["y"].get<double>();
+                seg.in.h  = (AIReal)pt.value("inX", (double)seg.p.h);
+                seg.in.v  = (AIReal)pt.value("inY", (double)seg.p.v);
+                seg.out.h = (AIReal)pt.value("outX", (double)seg.p.h);
+                seg.out.v = (AIReal)pt.value("outY", (double)seg.p.v);
+                seg.corner = pt.value("corner", true);
+                segs.push_back(seg);
+            }
+
+            if (segs.size() < 3) continue;
+
+            // Create the path art
+            AIArtHandle newPath = nullptr;
+            ASErr err = sAIArt->NewArt(kPathArt,
+                layerArt ? kPlaceInsideOnTop : kPlaceAboveAll,
+                layerArt ? layerArt : nullptr,
+                &newPath);
+
+            if (err != kNoErr || !newPath) continue;
+
+            ai::int16 nc = (ai::int16)segs.size();
+            sAIPath->SetPathSegmentCount(newPath, nc);
+            sAIPath->SetPathSegments(newPath, 0, nc, segs.data());
+            sAIPath->SetPathClosed(newPath, closed);
+
+            // Style: 1pt black stroke, no fill — clean cut line
+            AIPathStyle style;
+            memset(&style, 0, sizeof(style));
+            style.fillPaint   = false;
+            style.strokePaint = true;
+            style.stroke.width = (AIReal)1.0;
+            style.stroke.color.kind = kThreeColor;
+            style.stroke.color.c.rgb.red   = (AIReal)0.0;
+            style.stroke.color.c.rgb.green = (AIReal)0.0;
+            style.stroke.color.c.rgb.blue  = (AIReal)0.0;
+            style.stroke.miterLimit = (AIReal)4.0;
+
+            sAIPathStyle->SetPathStyle(newPath, &style);
+            sAIArt->SetArtName(newPath, ai::UnicodeString("Subject Cutout"));
+            created++;
+        }
+
+        // Clear the preview overlay and instance state
+        BridgeSetCutoutPreviewActive(false);
+        BridgeSetCutoutPreviewPaths("");
+        BridgeSetCutoutInstanceCount(0);
+        InvalidateFullView();
+
+        BridgeSetTraceStatus("Cutout committed: " + std::to_string(created) + " path(s) on Cut Lines");
+        fprintf(stderr, "[TraceModule] Cutout committed: %d paths on Cut Lines layer\n", created);
+
+        sAIDocument->RedrawDocument();
+
+    } catch (std::exception& ex) {
+        fprintf(stderr, "[TraceModule] CommitCutout error: %s\n", ex.what());
+        BridgeSetTraceStatus(std::string("Cutout commit failed: ") + ex.what());
+    }
+
+    fTraceInProgress = false;
 }
 
 //========================================================================================
@@ -1939,6 +2701,18 @@ void TraceModule::OnDocumentChanged()
     fTraceInProgress = false;
     fStatusMessage.clear();
     BridgeSetTraceStatus("");
+
+    // Clear cutout preview on document change
+    BridgeSetCutoutPreviewActive(false);
+    BridgeSetCutoutPreviewPaths("");
+
+    // Clear pose preview on document change
+    fPosePreviewActive = false;
+    fPoseJoints.clear();
+    fFacePoints.clear();
+    fHandJoints.clear();
+    BridgeSetPosePreviewActive(false);
+    BridgeSetPosePreviewJSON("");
 }
 
 //========================================================================================
@@ -1975,4 +2749,764 @@ SurfaceIdentity ReadSurfaceIdentity(AIArtHandle art)
 
     sAIDictionary->Release(dict);
     return result;
+}
+
+//========================================================================================
+//  ExecuteAppleContours — Apple Vision contour detection via VisionIntelligence
+//
+//  Uses VNDetectContoursRequest through the VI abstraction layer.
+//  Converts normalized (0-1) contour points to artboard coordinates and creates AI paths.
+//========================================================================================
+
+void TraceModule::ExecuteAppleContours()
+{
+    if (fTraceInProgress) return;
+    fTraceInProgress = true;
+    BridgeSetTraceStatus("Running Apple Contours...");
+
+    std::string imagePath = FindImagePath();
+    if (imagePath.empty()) {
+        BridgeSetTraceStatus("No image found");
+        fTraceInProgress = false;
+        return;
+    }
+
+    // Read params from bridge
+    float contrast   = (float)BridgeGetTraceContourContrast();
+    float pivot      = (float)BridgeGetTraceContourPivot();
+    bool  darkOnLight = BridgeGetTraceContourDarkOnLight();
+
+    fprintf(stderr, "[TraceModule] Apple Contours: contrast=%.2f pivot=%.2f darkOnLight=%s\n",
+            contrast, pivot, darkOnLight ? "true" : "false");
+
+    // If a cutout mask is active, apply it to the image first (masked contour tracing)
+    std::string traceImagePath = imagePath;
+    std::string maskedPath = ApplyActiveMaskToImage(imagePath);
+    if (!maskedPath.empty()) {
+        traceImagePath = maskedPath;
+        fprintf(stderr, "[TraceModule] Masked contour tracing: using masked image\n");
+    }
+
+    VIContour* contours = nullptr;
+    int count = VIDetectContours(traceImagePath.c_str(), contrast, pivot, darkOnLight, &contours);
+
+    if (count <= 0 || !contours) {
+        BridgeSetTraceStatus("No contours detected");
+        fTraceInProgress = false;
+        return;
+    }
+
+    fprintf(stderr, "[TraceModule] Apple Contours: %d contours detected\n", count);
+    BridgeSetTraceStatus("Creating paths...");
+
+    // Convert normalized contour points to artboard coordinates and create AI paths
+    int created = 0;
+    for (int i = 0; i < count; i++) {
+        VIContour& c = contours[i];
+        if (c.pointCount < 3) continue;  // skip degenerate contours
+
+        // Build segments
+        std::vector<AIPathSegment> segs;
+        for (int j = 0; j < c.pointCount; j++) {
+            double nx = c.points[j * 2];
+            double ny = c.points[j * 2 + 1];
+
+            // Convert normalized (0-1) to artboard coordinates
+            // Vision uses bottom-left origin, AI uses top-left (Y up)
+            double artX = fArtLeft + nx * (fArtRight - fArtLeft);
+            double artY = fArtBottom + ny * (fArtTop - fArtBottom);  // Vision Y matches AI Y direction (both bottom-up in normalized space)
+
+            AIPathSegment seg;
+            memset(&seg, 0, sizeof(seg));
+            seg.p.h = (AIReal)artX;
+            seg.p.v = (AIReal)artY;
+            seg.in  = seg.p;   // straight segments (no bezier handles)
+            seg.out = seg.p;
+            seg.corner = true;
+            segs.push_back(seg);
+        }
+
+        if (segs.empty()) continue;
+
+        // Create AI path
+        AIArtHandle newPath = nullptr;
+        ASErr err = sAIArt->NewArt(kPathArt, kPlaceAboveAll, nullptr, &newPath);
+        if (err != kNoErr || !newPath) continue;
+
+        sAIPath->SetPathSegmentCount(newPath, (ai::int16)segs.size());
+        sAIPath->SetPathSegments(newPath, 0, (ai::int16)segs.size(), segs.data());
+        sAIPath->SetPathClosed(newPath, c.closed);
+
+        // Style: 1pt black stroke, no fill
+        AIPathStyle style;
+        memset(&style, 0, sizeof(style));
+        style.fillPaint = false;
+        style.strokePaint = true;
+        style.stroke.width = 1.0;
+        style.stroke.color.kind = kThreeColor;
+        style.stroke.color.c.rgb.red   = 0.0f;
+        style.stroke.color.c.rgb.green = 0.0f;
+        style.stroke.color.c.rgb.blue  = 0.0f;
+        style.stroke.miterLimit = 4.0;
+        sAIPathStyle->SetPathStyle(newPath, &style);
+
+        created++;
+    }
+
+    VIFreeContours(contours, count);
+
+    std::string statusMsg = "Apple Contours: " + std::to_string(created) + " paths";
+    BridgeSetTraceStatus(statusMsg);
+    fTraceInProgress = false;
+
+    // Force annotator redraw
+    if (sAIAnnotator && gPlugin) {
+        sAIAnnotator->InvalAnnotationRect(NULL, NULL);
+    }
+
+    fprintf(stderr, "[TraceModule] Apple Contours complete: %d paths created\n", created);
+}
+
+//========================================================================================
+//  ExecuteDetectPose — run Vision body/face/hand pose detection, store results for overlay
+//========================================================================================
+
+void TraceModule::ExecuteDetectPose()
+{
+    BridgeSetTraceStatus("Detecting pose...");
+
+    std::string imagePath = FindImagePath();
+    if (imagePath.empty()) {
+        BridgeSetTraceStatus("No image found — place a raster image first");
+        fprintf(stderr, "[TraceModule] DetectPose: no image found\n");
+        return;
+    }
+
+    fprintf(stderr, "[TraceModule] DetectPose: processing %s\n", imagePath.c_str());
+
+    // Body pose detection
+    VIJoint* joints = nullptr;
+    int jointCount = VIDetectBodyPose(imagePath.c_str(), &joints);
+
+    fPoseJoints.clear();
+    for (int i = 0; i < jointCount; i++) {
+        PoseJoint pj;
+        pj.name = joints[i].jointName ? joints[i].jointName : "";
+        pj.x = joints[i].x;
+        pj.y = joints[i].y;
+        pj.confidence = joints[i].confidence;
+        fPoseJoints.push_back(pj);
+    }
+    VIFreeJoints(joints, jointCount);
+
+    // Face landmarks (optional, controlled by bridge flag)
+    fFacePoints.clear();
+    int faceCount = 0;
+    if (BridgeGetPoseIncludeFace()) {
+        VIFacePoint* facePoints = nullptr;
+        faceCount = VIDetectFaceLandmarks(imagePath.c_str(), &facePoints);
+
+        for (int i = 0; i < faceCount; i++) {
+            fFacePoints.push_back({facePoints[i].x, facePoints[i].y});
+        }
+        VIFreeFacePoints(facePoints, faceCount);
+    }
+
+    // Hand pose (optional, controlled by bridge flag)
+    fHandJoints.clear();
+    int handCount = 0;
+    if (BridgeGetPoseIncludeHands()) {
+        VIJoint* handJoints = nullptr;
+        handCount = VIDetectHandPose(imagePath.c_str(), &handJoints);
+
+        for (int i = 0; i < handCount; i++) {
+            PoseJoint pj;
+            pj.name = handJoints[i].jointName ? handJoints[i].jointName : "";
+            pj.x = handJoints[i].x;
+            pj.y = handJoints[i].y;
+            pj.confidence = handJoints[i].confidence;
+            fHandJoints.push_back(pj);
+        }
+        VIFreeJoints(handJoints, handCount);
+    }
+
+    // Build JSON for bridge (enables cross-module access if needed)
+    json poseJSON;
+    poseJSON["bodyJoints"] = json::array();
+    for (auto& j : fPoseJoints) {
+        poseJSON["bodyJoints"].push_back({
+            {"name", j.name}, {"x", j.x}, {"y", j.y}, {"confidence", j.confidence}
+        });
+    }
+    poseJSON["facePoints"] = json::array();
+    for (auto& fp : fFacePoints) {
+        poseJSON["facePoints"].push_back({{"x", fp.first}, {"y", fp.second}});
+    }
+    poseJSON["handJoints"] = json::array();
+    for (auto& hj : fHandJoints) {
+        poseJSON["handJoints"].push_back({
+            {"name", hj.name}, {"x", hj.x}, {"y", hj.y}, {"confidence", hj.confidence}
+        });
+    }
+    BridgeSetPosePreviewJSON(poseJSON.dump());
+
+    fPosePreviewActive = true;
+    BridgeSetPosePreviewActive(true);
+    InvalidateFullView();
+
+    std::string status = "Pose: " + std::to_string(jointCount) + " body joints";
+    if (faceCount > 0) status += ", " + std::to_string(faceCount) + " face pts";
+    if (handCount > 0) status += ", " + std::to_string(handCount) + " hand joints";
+    BridgeSetTraceStatus(status);
+
+    fprintf(stderr, "[TraceModule] DetectPose complete: %s\n", status.c_str());
+}
+
+//========================================================================================
+//  DrawPoseOverlay — render skeleton lines + joint dots + face points as annotator overlay
+//
+//  Coordinate transform: Vision normalized (0-1, bottom-left origin) → artboard coords.
+//  Vision X maps to fArtLeft..fArtRight, Vision Y (0=bottom) maps to fArtBottom..fArtTop.
+//========================================================================================
+
+void TraceModule::DrawPoseOverlay(AIAnnotatorMessage* message)
+{
+    if (!fPosePreviewActive || !BridgeGetPosePreviewActive()) return;
+    if (!message || !message->drawer || !sAIDocumentView) return;
+    if (fPoseJoints.empty() && fFacePoints.empty() && fHandJoints.empty()) return;
+
+    AIAnnotatorDrawer* drawer = message->drawer;
+
+    // Need art bounds for coordinate mapping — use cached values from FindImagePath
+    double artW = fArtRight - fArtLeft;
+    double artH = fArtTop - fArtBottom;  // AI coords: top > bottom
+
+    if (artW < 1.0 || artH < 1.0) {
+        // Art bounds not populated — try to populate them
+        FindImagePath();
+        artW = fArtRight - fArtLeft;
+        artH = fArtTop - fArtBottom;
+        if (artW < 1.0 || artH < 1.0) return;  // still no image
+    }
+
+    // Lambda: convert Vision normalized coords to AI art coords, then to view
+    auto toViewPoint = [&](float normX, float normY, AIPoint& viewPt) -> bool {
+        // Vision: (0,0) = bottom-left, (1,1) = top-right
+        // AI art coords: X = left..right, Y = top..bottom (top is larger)
+        double artX = fArtLeft + normX * artW;
+        double artY = fArtBottom + normY * artH;  // normY 0=bottom → fArtBottom, 1=top → fArtTop
+
+        AIRealPoint artPt;
+        artPt.h = (AIReal)artX;
+        artPt.v = (AIReal)artY;
+        return sAIDocumentView->ArtworkPointToViewPoint(NULL, &artPt, &viewPt) == kNoErr;
+    };
+
+    // --- Draw body skeleton ---
+    if (!fPoseJoints.empty()) {
+        // Cyan for skeleton lines
+        sAIAnnotatorDrawer->SetColor(drawer, ITK_COLOR_SKELETON());
+        sAIAnnotatorDrawer->SetLineWidth(drawer, ITK_WIDTH_SKELETON);
+        sAIAnnotatorDrawer->SetOpacity(drawer, 0.9);
+
+        // Define skeleton bone connections (pairs of joint names)
+        static const char* bones[][2] = {
+            {"nose", "neck"},
+            {"neck", "left_shoulder"}, {"neck", "right_shoulder"},
+            {"left_shoulder", "left_elbow"}, {"left_elbow", "left_wrist"},
+            {"right_shoulder", "right_elbow"}, {"right_elbow", "right_wrist"},
+            {"neck", "root"},
+            {"root", "left_hip"}, {"root", "right_hip"},
+            {"left_hip", "left_knee"}, {"left_knee", "left_ankle"},
+            {"right_hip", "right_knee"}, {"right_knee", "right_ankle"},
+            {"nose", "left_eye"}, {"nose", "right_eye"},
+            {"left_eye", "left_ear"}, {"right_eye", "right_ear"},
+        };
+        static const int boneCount = sizeof(bones) / sizeof(bones[0]);
+
+        // Helper: find joint by name
+        auto findJoint = [&](const char* name) -> PoseJoint* {
+            for (auto& j : fPoseJoints) {
+                if (j.name == name) return &j;
+            }
+            return nullptr;
+        };
+
+        // Draw each bone as a line
+        for (int b = 0; b < boneCount; b++) {
+            PoseJoint* j0 = findJoint(bones[b][0]);
+            PoseJoint* j1 = findJoint(bones[b][1]);
+            if (!j0 || !j1) continue;
+
+            AIPoint v0, v1;
+            if (toViewPoint(j0->x, j0->y, v0) && toViewPoint(j1->x, j1->y, v1)) {
+                sAIAnnotatorDrawer->DrawLine(drawer, v0, v1);
+            }
+        }
+
+        // Draw joint dots (small circles as cross-hairs)
+        sAIAnnotatorDrawer->SetColor(drawer, ITK_COLOR_JOINT());
+        sAIAnnotatorDrawer->SetLineWidth(drawer, 1.5);
+
+        for (auto& j : fPoseJoints) {
+            AIPoint vp;
+            if (!toViewPoint(j.x, j.y, vp)) continue;
+
+            // Draw a small cross at each joint position
+            int dotSize = (int)ITK_SIZE_JOINT_MARKER;
+            AIPoint left  = {vp.h - dotSize, vp.v};
+            AIPoint right = {vp.h + dotSize, vp.v};
+            AIPoint top   = {vp.h, vp.v - dotSize};
+            AIPoint bot   = {vp.h, vp.v + dotSize};
+
+            sAIAnnotatorDrawer->DrawLine(drawer, left, right);
+            sAIAnnotatorDrawer->DrawLine(drawer, top, bot);
+        }
+    }
+
+    // --- Draw face landmark points ---
+    if (!fFacePoints.empty()) {
+        sAIAnnotatorDrawer->SetColor(drawer, ITK_COLOR_FACE());
+        sAIAnnotatorDrawer->SetLineWidth(drawer, 1.0);
+        sAIAnnotatorDrawer->SetOpacity(drawer, 0.7);
+
+        for (auto& fp : fFacePoints) {
+            AIPoint vp;
+            if (!toViewPoint(fp.first, fp.second, vp)) continue;
+
+            // Draw a tiny dot
+            int dotSize = (int)ITK_SIZE_FACE_DOT;
+            AIPoint left  = {vp.h - dotSize, vp.v};
+            AIPoint right = {vp.h + dotSize, vp.v};
+            AIPoint top   = {vp.h, vp.v - dotSize};
+            AIPoint bot   = {vp.h, vp.v + dotSize};
+
+            sAIAnnotatorDrawer->DrawLine(drawer, left, right);
+            sAIAnnotatorDrawer->DrawLine(drawer, top, bot);
+        }
+    }
+
+    // --- Draw hand joint points ---
+    if (!fHandJoints.empty()) {
+        sAIAnnotatorDrawer->SetColor(drawer, ITK_COLOR_HAND());
+        sAIAnnotatorDrawer->SetLineWidth(drawer, 1.5);
+        sAIAnnotatorDrawer->SetOpacity(drawer, 0.85);
+
+        for (auto& hj : fHandJoints) {
+            AIPoint vp;
+            if (!toViewPoint(hj.x, hj.y, vp)) continue;
+
+            // Draw a small X at each hand joint
+            int dotSize = 3;
+            AIPoint tl = {vp.h - dotSize, vp.v - dotSize};
+            AIPoint br = {vp.h + dotSize, vp.v + dotSize};
+            AIPoint tr = {vp.h + dotSize, vp.v - dotSize};
+            AIPoint bl = {vp.h - dotSize, vp.v + dotSize};
+
+            sAIAnnotatorDrawer->DrawLine(drawer, tl, br);
+            sAIAnnotatorDrawer->DrawLine(drawer, tr, bl);
+        }
+    }
+}
+
+//========================================================================================
+//  ApplyActiveMaskToImage — if a cutout composite mask exists, mask the image
+//  Returns path to masked image, or empty string if no mask is active.
+//========================================================================================
+
+std::string TraceModule::ApplyActiveMaskToImage(const std::string& imagePath)
+{
+    // Check if cutout preview is active with a composite mask
+    if (!BridgeGetCutoutPreviewActive()) return "";
+
+    std::string compositePath = "/tmp/illtool_cutout_composite.png";
+    FILE* f = fopen(compositePath.c_str(), "r");
+    if (!f) return "";
+    fclose(f);
+
+    // Load original image (RGB)
+    int imgW = 0, imgH = 0, imgC = 0;
+    unsigned char* img = stbi_load(imagePath.c_str(), &imgW, &imgH, &imgC, 3);
+    if (!img) return "";
+
+    // Load mask (grayscale)
+    int mskW = 0, mskH = 0, mskC = 0;
+    unsigned char* mask = stbi_load(compositePath.c_str(), &mskW, &mskH, &mskC, 1);
+    if (!mask) { stbi_image_free(img); return ""; }
+
+    // Dimensions must match (or close enough — use min)
+    int w = std::min(imgW, mskW);
+    int h = std::min(imgH, mskH);
+
+    // Apply mask: zero out pixels outside the mask
+    unsigned char* masked = (unsigned char*)calloc(w * h * 3, 1);
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            int mIdx = y * mskW + x;
+            int iIdx = (y * imgW + x) * 3;
+            int oIdx = (y * w + x) * 3;
+            if (mask[mIdx] > 128) {
+                masked[oIdx]     = img[iIdx];
+                masked[oIdx + 1] = img[iIdx + 1];
+                masked[oIdx + 2] = img[iIdx + 2];
+            }
+            // else: stays black (calloc zeroed)
+        }
+    }
+
+    stbi_image_free(img);
+    stbi_image_free(mask);
+
+    std::string maskedPath = "/tmp/illtool_masked_contour_input.png";
+    stbi_write_png(maskedPath.c_str(), w, h, 3, masked, w * 3);
+    free(masked);
+
+    fprintf(stderr, "[TraceModule] Masked contour input: %dx%d saved to %s\n", w, h, maskedPath.c_str());
+    return maskedPath;
+}
+
+//========================================================================================
+//  ExecuteDepthDecompose — AI depth-based layer decomposition
+//
+//  Uses Depth Anything V2 (ONNX) to estimate per-pixel depth, then quantizes
+//  the depth map into N bands (foreground → background). For each band,
+//  masks the original image and runs contour detection to extract paths.
+//  Creates one Illustrator layer per depth band with color-coded strokes.
+//========================================================================================
+
+void TraceModule::ExecuteDepthDecompose()
+{
+    if (fTraceInProgress) return;
+    fTraceInProgress = true;
+    BridgeSetTraceStatus("Analyzing depth...");
+
+    std::string imagePath = FindImagePath();
+    if (imagePath.empty()) {
+        BridgeSetTraceStatus("No image found");
+        fTraceInProgress = false;
+        return;
+    }
+
+    // Run depth estimation via ONNX backend
+    float* depthMap = nullptr;
+    int depthW = 0, depthH = 0;
+    if (!VIEstimateDepth(imagePath.c_str(), &depthMap, &depthW, &depthH)) {
+        BridgeSetTraceStatus("Depth estimation failed");
+        fTraceInProgress = false;
+        return;
+    }
+
+    int numLayers = BridgeGetDepthLayerCount();
+    if (numLayers < 2) numLayers = 2;
+    if (numLayers > 8) numLayers = 8;
+
+    fprintf(stderr, "[TraceModule] Depth decompose: %dx%d map, %d layers\n", depthW, depthH, numLayers);
+
+    // Layer name table
+    static const char* layerNames[] = {"FG", "MG-1", "MG-2", "MG-3", "MG-4", "MG-5", "MG-6", "BG"};
+
+    // Load original image for masking
+    int imgW = 0, imgH = 0, imgC = 0;
+    unsigned char* origImg = stbi_load(imagePath.c_str(), &imgW, &imgH, &imgC, 3);
+    if (!origImg) {
+        fprintf(stderr, "[TraceModule] Depth decompose: failed to load original image\n");
+        VIFreeDepthMap(depthMap);
+        BridgeSetTraceStatus("Failed to load image");
+        fTraceInProgress = false;
+        return;
+    }
+
+    int totalContours = 0;
+
+    for (int band = 0; band < numLayers; band++) {
+        float lo = (float)band / numLayers;
+        float hi = (float)(band + 1) / numLayers;
+
+        // Pick layer name: first = FG, last = BG, middle = MG-N
+        const char* name = (band == 0) ? "FG" :
+                          (band == numLayers - 1) ? "BG" :
+                          layerNames[std::min(band, 7)];
+
+        char statusBuf[128];
+        snprintf(statusBuf, sizeof(statusBuf), "Tracing depth layer %d/%d: %s", band+1, numLayers, name);
+        BridgeSetTraceStatus(statusBuf);
+
+        // Create binary mask for this depth band
+        // Map each image pixel to the depth map and check if it falls in [lo, hi)
+        std::vector<unsigned char> mask(imgW * imgH, 0);
+        for (int y = 0; y < imgH; y++) {
+            for (int x = 0; x < imgW; x++) {
+                int dx = (int)((float)x / imgW * depthW);
+                int dy = (int)((float)y / imgH * depthH);
+                if (dx >= depthW) dx = depthW - 1;
+                if (dy >= depthH) dy = depthH - 1;
+
+                float d = depthMap[dy * depthW + dx];
+                // Last band includes upper boundary (>=lo && <=1.0)
+                if (band == numLayers - 1) {
+                    if (d >= lo) mask[y * imgW + x] = 255;
+                } else {
+                    if (d >= lo && d < hi) mask[y * imgW + x] = 255;
+                }
+            }
+        }
+
+        // Apply mask to original image — zero out pixels outside the band
+        std::vector<unsigned char> masked(imgW * imgH * 3, 0);
+        for (int i = 0; i < imgW * imgH; i++) {
+            if (mask[i] > 0) {
+                masked[i * 3]     = origImg[i * 3];
+                masked[i * 3 + 1] = origImg[i * 3 + 1];
+                masked[i * 3 + 2] = origImg[i * 3 + 2];
+            }
+        }
+
+        // Save masked image for contour detection
+        char maskedPath[256];
+        snprintf(maskedPath, sizeof(maskedPath), "/tmp/illtool_depth_band_%d.png", band);
+        stbi_write_png(maskedPath, imgW, imgH, 3, masked.data(), imgW * 3);
+
+        // Run contour detection on the masked image
+        VIContour* contours = nullptr;
+        float contrast = (float)BridgeGetTraceContourContrast();
+        float pivot = (float)BridgeGetTraceContourPivot();
+        bool darkOnLight = BridgeGetTraceContourDarkOnLight();
+        int contourCount = VIDetectContours(maskedPath, contrast, pivot, darkOnLight, &contours);
+
+        if (contourCount > 0 && contours) {
+            // Create or find the layer for this depth band
+            AILayerHandle layer = nullptr;
+            ai::UnicodeString uName(name);
+            sAILayer->GetLayerByTitle(&layer, uName);
+            if (!layer) {
+                sAILayer->InsertLayer(nullptr, kPlaceAboveAll, &layer);
+                if (layer) sAILayer->SetLayerTitle(layer, uName);
+            }
+
+            // Get the first art of the layer as insertion parent
+            AIArtHandle layerArt = nullptr;
+            if (layer) sAIArt->GetFirstArtOfLayer(layer, &layerArt);
+
+            // Create paths from contours
+            for (int i = 0; i < contourCount; i++) {
+                VIContour& c = contours[i];
+                if (c.pointCount < 3) continue;
+
+                std::vector<AIPathSegment> segs;
+                for (int j = 0; j < c.pointCount; j++) {
+                    double nx = c.points[j * 2];
+                    double ny = c.points[j * 2 + 1];
+                    // Map normalized coords (0-1) to artboard coords
+                    double artX = fArtLeft + nx * (fArtRight - fArtLeft);
+                    // Vision framework uses bottom-left origin (Y up), AI uses Y-down for artBounds
+                    // artTop > artBottom in AI coords
+                    double artY = fArtBottom + ny * (fArtTop - fArtBottom);
+
+                    AIPathSegment seg;
+                    memset(&seg, 0, sizeof(seg));
+                    seg.p.h = (AIReal)artX;
+                    seg.p.v = (AIReal)artY;
+                    seg.in = seg.p;
+                    seg.out = seg.p;
+                    seg.corner = true;
+                    segs.push_back(seg);
+                }
+
+                AIArtHandle newPath = nullptr;
+                if (layerArt) {
+                    sAIArt->NewArt(kPathArt, kPlaceInsideOnTop, layerArt, &newPath);
+                } else {
+                    sAIArt->NewArt(kPathArt, kPlaceAboveAll, nullptr, &newPath);
+                }
+
+                if (newPath) {
+                    sAIPath->SetPathSegmentCount(newPath, (ai::int16)segs.size());
+                    sAIPath->SetPathSegments(newPath, 0, (ai::int16)segs.size(), segs.data());
+                    sAIPath->SetPathClosed(newPath, c.closed);
+
+                    // Color-code strokes by depth band: FG=red → mid=yellow/green → BG=blue
+                    AIPathStyle style;
+                    memset(&style, 0, sizeof(style));
+                    style.fillPaint = false;
+                    style.strokePaint = true;
+                    style.stroke.width = 1.0;
+                    style.stroke.color.kind = kThreeColor;
+                    float t = (numLayers > 1) ? (float)band / (numLayers - 1) : 0.0f;
+                    style.stroke.color.c.rgb.red   = 1.0f - t;
+                    style.stroke.color.c.rgb.green = (t < 0.5f) ? t * 2 : (1.0f - t) * 2;
+                    style.stroke.color.c.rgb.blue  = t;
+                    style.stroke.miterLimit = 4.0;
+                    sAIPathStyle->SetPathStyle(newPath, &style);
+                }
+            }
+
+            totalContours += contourCount;
+            VIFreeContours(contours, contourCount);
+            fprintf(stderr, "[TraceModule] Depth band %d (%s): %d contours\n", band, name, contourCount);
+        }
+    }
+
+    stbi_image_free(origImg);
+    VIFreeDepthMap(depthMap);
+
+    fTraceInProgress = false;
+
+    InvalidateFullView();
+
+    char doneBuf[128];
+    snprintf(doneBuf, sizeof(doneBuf), "Depth decomposition: %d layers, %d contours", numLayers, totalContours);
+    BridgeSetTraceStatus(doneBuf);
+    fprintf(stderr, "[TraceModule] %s\n", doneBuf);
+}
+
+//========================================================================================
+//  HandleCutoutClick — Shift+click=add, Option+click=subtract from cutout mask
+//
+//  Uses flood-fill at click point with configurable threshold.
+//  Shift: flood-fill region is ADDED to the composite mask (OR)
+//  Option: flood-fill region is SUBTRACTED from the composite mask (AND NOT)
+//  Threshold controls color tolerance for the flood fill.
+//========================================================================================
+
+bool TraceModule::HandleCutoutClick(AIRealPoint artPt, bool shiftHeld, bool optionHeld)
+{
+    if (!BridgeGetCutoutPreviewActive()) return false;
+    if (!shiftHeld && !optionHeld) return false;  // require modifier key
+
+    // Convert artboard coords to normalized image coords (0-1)
+    double artW = fArtRight - fArtLeft;
+    double artH = fArtTop - fArtBottom;
+    if (artW < 1 || artH < 1) return false;
+
+    double normX = (artPt.h - fArtLeft) / artW;
+    double normY = (fArtTop - artPt.v) / artH;
+
+    if (normX < 0 || normX > 1 || normY < 0 || normY > 1) return false;
+
+    const char* mode = shiftHeld ? "ADD" : "SUBTRACT";
+    fprintf(stderr, "[TraceModule] Cutout %s click at norm(%.3f, %.3f)\n", mode, normX, normY);
+
+    // Load original image as RGB for color-aware flood fill
+    std::string imagePath = FindImagePath();
+    if (imagePath.empty()) return false;
+
+    int imgW = 0, imgH = 0, imgC = 0;
+    unsigned char* img = stbi_load(imagePath.c_str(), &imgW, &imgH, &imgC, 3);  // force RGB
+    if (!img) return false;
+
+    int seedX = (int)(normX * imgW);
+    int seedY = (int)(normY * imgH);
+    if (seedX < 0 || seedX >= imgW || seedY < 0 || seedY >= imgH) {
+        stbi_image_free(img);
+        return false;
+    }
+
+    // Flood fill using RGB color distance (Euclidean in color space)
+    int tolerance = BridgeGetCutoutClickThreshold();
+    int tolSq = tolerance * tolerance;  // squared threshold for color distance
+    int seedIdx = (seedY * imgW + seedX) * 3;
+    int seedR = img[seedIdx], seedG = img[seedIdx + 1], seedB = img[seedIdx + 2];
+
+    // Cap fill to prevent runaway — max 25% of image
+    int maxFill = imgW * imgH / 4;
+
+    std::vector<unsigned char> fillMask(imgW * imgH, 0);
+    std::vector<bool> visited(imgW * imgH, false);
+    std::vector<std::pair<int,int>> fillStack;
+    fillStack.push_back({seedX, seedY});
+    visited[seedY * imgW + seedX] = true;
+    int filledPixels = 0;
+
+    while (!fillStack.empty() && filledPixels < maxFill) {
+        auto [cx, cy] = fillStack.back();
+        fillStack.pop_back();
+
+        int pIdx = (cy * imgW + cx) * 3;
+        int dr = (int)img[pIdx] - seedR;
+        int dg = (int)img[pIdx + 1] - seedG;
+        int db = (int)img[pIdx + 2] - seedB;
+        int distSq = dr * dr + dg * dg + db * db;
+        if (distSq > tolSq) continue;
+
+        fillMask[cy * imgW + cx] = 255;
+        filledPixels++;
+
+        // 4-connected neighbors
+        const int dxOff[] = {-1, 1, 0, 0};
+        const int dyOff[] = {0, 0, -1, 1};
+        for (int d = 0; d < 4; d++) {
+            int nx2 = cx + dxOff[d];
+            int ny2 = cy + dyOff[d];
+            if (nx2 >= 0 && nx2 < imgW && ny2 >= 0 && ny2 < imgH) {
+                int nIdx = ny2 * imgW + nx2;
+                if (!visited[nIdx]) {
+                    visited[nIdx] = true;
+                    fillStack.push_back({nx2, ny2});
+                }
+            }
+        }
+    }
+
+    stbi_image_free(img);
+
+    fprintf(stderr, "[TraceModule] Flood fill: %d pixels (max %d), threshold=%d, mode=%s, seed=(%d,%d) rgb=(%d,%d,%d)\n",
+            filledPixels, maxFill, tolerance, mode, seedX, seedY, seedR, seedG, seedB);
+
+    if (filledPixels == 0) return true;  // consumed click but nothing to add
+
+    // Load existing composite mask (or create blank)
+    std::string compositePath = "/tmp/illtool_cutout_composite.png";
+    int cW = 0, cH = 0, cC = 0;
+    unsigned char* composite = stbi_load(compositePath.c_str(), &cW, &cH, &cC, 1);
+
+    bool createdNew = false;
+    if (!composite || cW != imgW || cH != imgH) {
+        if (composite) stbi_image_free(composite);
+        composite = (unsigned char*)calloc(imgW * imgH, 1);
+        cW = imgW;
+        cH = imgH;
+        createdNew = true;
+
+        // If not created new, start from the existing composite
+        if (!createdNew) {
+            // Already loaded above
+        }
+    }
+
+    // Apply: Shift=OR (add), Option=AND NOT (subtract)
+    for (int i = 0; i < imgW * imgH; i++) {
+        if (fillMask[i] > 0) {
+            if (shiftHeld) {
+                composite[i] = 255;  // add
+            } else {
+                composite[i] = 0;    // subtract
+            }
+        }
+    }
+
+    // Count total white pixels in composite before and after
+    int whiteCount = 0;
+    for (int i = 0; i < imgW * imgH; i++) {
+        if (composite[i] > 128) whiteCount++;
+    }
+
+    // Write updated composite
+    stbi_write_png(compositePath.c_str(), imgW, imgH, 1, composite, imgW);
+    if (createdNew) free(composite);
+    else stbi_image_free(composite);
+
+    fprintf(stderr, "[TraceModule] Composite mask: %d white pixels (%.1f%% of %dx%d)\n",
+            whiteCount, 100.0 * whiteCount / (imgW * imgH), imgW, imgH);
+
+    // Re-trace with lower speckle to preserve small additions
+    // Temporarily override smoothness for this trace
+    int origSmoothness = BridgeGetCutoutSmoothness();
+    BridgeSetCutoutSmoothness(std::min(origSmoothness, 10));  // cap at 10 for click edits
+    TraceMaskAndStorePreview(compositePath);
+    BridgeSetCutoutSmoothness(origSmoothness);  // restore
+
+    InvalidateFullView();
+
+    fprintf(stderr, "[TraceModule] Cutout %s complete, re-traced (speckle capped at 10)\n", mode);
+    return true;
 }
