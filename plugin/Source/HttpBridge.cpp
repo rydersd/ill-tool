@@ -586,6 +586,61 @@ static std::atomic<int> gTraceOutputMode{1};  // 0=outline, 1=fill, 2=centerline
 void BridgeSetTraceOutputMode(int mode)  { gTraceOutputMode.store(mode); }
 int  BridgeGetTraceOutputMode()          { return gTraceOutputMode.load(); }
 
+// New vtracer parameters: length threshold, splice threshold, max iterations, layer difference
+static std::atomic<double> gTraceLengthThresh{4.0};
+static std::atomic<int>    gTraceSpliceThresh{45};
+static std::atomic<int>    gTraceMaxIter{10};
+static std::atomic<int>    gTraceLayerDiff{25};
+
+void BridgeSetTraceLengthThresh(double v)  { gTraceLengthThresh.store(v); }
+double BridgeGetTraceLengthThresh()        { return gTraceLengthThresh.load(); }
+
+void BridgeSetTraceSpliceThresh(int v)     { gTraceSpliceThresh.store(v); }
+int  BridgeGetTraceSpliceThresh()          { return gTraceSpliceThresh.load(); }
+
+void BridgeSetTraceMaxIter(int v)          { gTraceMaxIter.store(v); }
+int  BridgeGetTraceMaxIter()               { return gTraceMaxIter.load(); }
+
+void BridgeSetTraceLayerDiff(int v)        { gTraceLayerDiff.store(v); }
+int  BridgeGetTraceLayerDiff()             { return gTraceLayerDiff.load(); }
+
+// Centerline preprocessing parameters
+static std::atomic<double> gTraceCannyLow{80.0};
+static std::atomic<double> gTraceCannyHigh{200.0};
+static std::atomic<double> gTraceNormalStrength{2.0};
+static std::atomic<int>    gTraceSkeletonThresh{128};
+static std::atomic<int>    gTraceDilationRadius{2};   // kernel = 2*radius+1
+
+void BridgeSetTraceCannyLow(double v)      { gTraceCannyLow.store(v); }
+double BridgeGetTraceCannyLow()            { return gTraceCannyLow.load(); }
+
+void BridgeSetTraceCannyHigh(double v)     { gTraceCannyHigh.store(v); }
+double BridgeGetTraceCannyHigh()           { return gTraceCannyHigh.load(); }
+
+void BridgeSetTraceNormalStrength(double v) { gTraceNormalStrength.store(v); }
+double BridgeGetTraceNormalStrength()       { return gTraceNormalStrength.load(); }
+
+void BridgeSetTraceSkeletonThresh(int v)   { gTraceSkeletonThresh.store(v); }
+int  BridgeGetTraceSkeletonThresh()        { return gTraceSkeletonThresh.load(); }
+
+void BridgeSetTraceDilationRadius(int v)   { gTraceDilationRadius.store(v); }
+int  BridgeGetTraceDilationRadius()        { return gTraceDilationRadius.load(); }
+
+static std::atomic<int>    gTraceKPlanes{6};
+void BridgeSetTraceKPlanes(int v)          { gTraceKPlanes.store(v); }
+int  BridgeGetTraceKPlanes()               { return gTraceKPlanes.load(); }
+
+static std::atomic<double> gTraceNormalBlur{1.5};
+static std::atomic<int>    gTraceKMeansStride{4};
+static std::atomic<int>    gTraceKMeansIter{20};
+
+void BridgeSetTraceNormalBlur(double v)    { gTraceNormalBlur.store(v); }
+double BridgeGetTraceNormalBlur()          { return gTraceNormalBlur.load(); }
+void BridgeSetTraceKMeansStride(int v)     { gTraceKMeansStride.store(v); }
+int  BridgeGetTraceKMeansStride()          { return gTraceKMeansStride.load(); }
+void BridgeSetTraceKMeansIter(int v)       { gTraceKMeansIter.store(v); }
+int  BridgeGetTraceKMeansIter()            { return gTraceKMeansIter.load(); }
+
 //----------------------------------------------------------------------------------------
 //  Surface extraction state (Stage 17)
 //----------------------------------------------------------------------------------------
@@ -663,6 +718,195 @@ void BridgeSetPenTargetGroup(const std::string& groupName) {
 std::string BridgeGetPenTargetGroup() {
     std::lock_guard<std::mutex> lock(gPenGroupMutex);
     return gPenTargetGroup;
+}
+
+//----------------------------------------------------------------------------------------
+//  Layer tree state (Stage 19)
+//----------------------------------------------------------------------------------------
+
+static std::mutex gLayerTreeMutex;
+static std::string gLayerTreeJSON;
+static std::atomic<bool> gLayerTreeDirty{false};
+static std::string gLayerTarget;
+static std::atomic<bool> gLayerAutoAssign{false};
+static std::string gLayerSuggestion;
+
+void BridgeSetLayerTreeJSON(const std::string& json) {
+    std::lock_guard<std::mutex> lock(gLayerTreeMutex);
+    gLayerTreeJSON = json;
+}
+std::string BridgeGetLayerTreeJSON() {
+    std::lock_guard<std::mutex> lock(gLayerTreeMutex);
+    return gLayerTreeJSON;
+}
+void BridgeSetLayerTreeDirty(bool dirty) { gLayerTreeDirty.store(dirty); }
+bool BridgeGetLayerTreeDirty() { return gLayerTreeDirty.load(); }
+
+void BridgeSetLayerTarget(const std::string& name) {
+    std::lock_guard<std::mutex> lock(gLayerTreeMutex);
+    gLayerTarget = name;
+}
+std::string BridgeGetLayerTarget() {
+    std::lock_guard<std::mutex> lock(gLayerTreeMutex);
+    return gLayerTarget;
+}
+void BridgeSetLayerAutoAssign(bool e) { gLayerAutoAssign.store(e); }
+bool BridgeGetLayerAutoAssign() { return gLayerAutoAssign.load(); }
+
+void BridgeSetLayerSuggestion(const std::string& s) {
+    std::lock_guard<std::mutex> lock(gLayerTreeMutex);
+    gLayerSuggestion = s;
+}
+std::string BridgeGetLayerSuggestion() {
+    std::lock_guard<std::mutex> lock(gLayerTreeMutex);
+    return gLayerSuggestion;
+}
+
+//----------------------------------------------------------------------------------------
+//  Subject Cutout preview state (Stage 20)
+//----------------------------------------------------------------------------------------
+
+static std::atomic<bool> gCutoutPreviewActive{false};
+static std::mutex        gCutoutPreviewMutex;
+static std::string       gCutoutPreviewPaths;
+static std::atomic<int>  gCutoutSmoothness{50};
+
+void BridgeSetCutoutPreviewActive(bool active) { gCutoutPreviewActive.store(active); }
+bool BridgeGetCutoutPreviewActive()            { return gCutoutPreviewActive.load(); }
+
+void BridgeSetCutoutPreviewPaths(const std::string& json) {
+    std::lock_guard<std::mutex> lock(gCutoutPreviewMutex);
+    gCutoutPreviewPaths = json;
+}
+std::string BridgeGetCutoutPreviewPaths() {
+    std::lock_guard<std::mutex> lock(gCutoutPreviewMutex);
+    return gCutoutPreviewPaths;
+}
+
+void BridgeSetCutoutSmoothness(int val)  { gCutoutSmoothness.store(val); }
+int  BridgeGetCutoutSmoothness()         { return gCutoutSmoothness.load(); }
+
+// Per-instance cutout state (max 16 instances)
+static std::atomic<int>  gCutoutInstanceCount{0};
+static std::atomic<bool> gCutoutInstanceSelected[16] = {};
+static std::mutex        gCutoutMaskMutex;
+static std::string       gCutoutInstanceMaskPaths[16];
+
+void BridgeSetCutoutInstanceCount(int count) {
+    if (count < 0)  count = 0;
+    if (count > 16) count = 16;
+    gCutoutInstanceCount.store(count);
+}
+int BridgeGetCutoutInstanceCount() { return gCutoutInstanceCount.load(); }
+
+void BridgeSetCutoutInstanceSelected(int index, bool selected) {
+    if (index >= 0 && index < 16)
+        gCutoutInstanceSelected[index].store(selected);
+}
+bool BridgeGetCutoutInstanceSelected(int index) {
+    if (index >= 0 && index < 16)
+        return gCutoutInstanceSelected[index].load();
+    return false;
+}
+
+void BridgeSetCutoutInstanceMaskPath(int index, const std::string& path) {
+    if (index < 0 || index >= 16) return;
+    std::lock_guard<std::mutex> lock(gCutoutMaskMutex);
+    gCutoutInstanceMaskPaths[index] = path;
+}
+std::string BridgeGetCutoutInstanceMaskPath(int index) {
+    if (index < 0 || index >= 16) return "";
+    std::lock_guard<std::mutex> lock(gCutoutMaskMutex);
+    return gCutoutInstanceMaskPaths[index];
+}
+
+//----------------------------------------------------------------------------------------
+//  Apple Contours state (VisionIntelligence contour detection params)
+//----------------------------------------------------------------------------------------
+
+static std::atomic<double> gTraceContourContrast{1.5};
+static std::atomic<double> gTraceContourPivot{0.5};
+static std::atomic<bool>   gTraceContourDarkOnLight{true};
+
+void BridgeSetTraceContourContrast(double val)   { gTraceContourContrast.store(val); }
+double BridgeGetTraceContourContrast()           { return gTraceContourContrast.load(); }
+
+void BridgeSetTraceContourPivot(double val)      { gTraceContourPivot.store(val); }
+double BridgeGetTraceContourPivot()              { return gTraceContourPivot.load(); }
+
+void BridgeSetTraceContourDarkOnLight(bool val)  { gTraceContourDarkOnLight.store(val); }
+bool BridgeGetTraceContourDarkOnLight()          { return gTraceContourDarkOnLight.load(); }
+
+//----------------------------------------------------------------------------------------
+//  Pose Detection preview state (Stage 22)
+//----------------------------------------------------------------------------------------
+
+static std::atomic<bool> gPosePreviewActive{false};
+static std::mutex        gPosePreviewMutex;
+static std::string       gPosePreviewJSON;
+static std::atomic<bool> gPoseIncludeFace{true};
+static std::atomic<bool> gPoseIncludeHands{false};
+
+void BridgeSetPosePreviewActive(bool active) { gPosePreviewActive.store(active); }
+bool BridgeGetPosePreviewActive()            { return gPosePreviewActive.load(); }
+
+void BridgeSetPosePreviewJSON(const std::string& json) {
+    std::lock_guard<std::mutex> lock(gPosePreviewMutex);
+    gPosePreviewJSON = json;
+}
+std::string BridgeGetPosePreviewJSON() {
+    std::lock_guard<std::mutex> lock(gPosePreviewMutex);
+    return gPosePreviewJSON;
+}
+
+void BridgeSetPoseIncludeFace(bool include) { gPoseIncludeFace.store(include); }
+bool BridgeGetPoseIncludeFace()             { return gPoseIncludeFace.load(); }
+
+void BridgeSetPoseIncludeHands(bool include) { gPoseIncludeHands.store(include); }
+bool BridgeGetPoseIncludeHands()             { return gPoseIncludeHands.load(); }
+
+//----------------------------------------------------------------------------------------
+//  Hardware capability flags (set once at startup, read by panels for UI gating)
+//----------------------------------------------------------------------------------------
+
+static std::atomic<bool> gHasNeuralEngine{false};
+static std::atomic<bool> gHasContourDetection{false};
+static std::atomic<bool> gHasInstanceSegmentation{false};
+static std::atomic<bool> gHasPoseDetection{false};
+
+void BridgeSetHasNeuralEngine(bool has)          { gHasNeuralEngine.store(has); }
+bool BridgeGetHasNeuralEngine()                  { return gHasNeuralEngine.load(); }
+
+void BridgeSetHasContourDetection(bool has)      { gHasContourDetection.store(has); }
+bool BridgeGetHasContourDetection()              { return gHasContourDetection.load(); }
+
+void BridgeSetHasInstanceSegmentation(bool has)  { gHasInstanceSegmentation.store(has); }
+bool BridgeGetHasInstanceSegmentation()          { return gHasInstanceSegmentation.load(); }
+
+void BridgeSetHasPoseDetection(bool has)         { gHasPoseDetection.store(has); }
+bool BridgeGetHasPoseDetection()                 { return gHasPoseDetection.load(); }
+
+//----------------------------------------------------------------------------------------
+//  Depth Layers state (ONNX Depth Anything V2)
+//----------------------------------------------------------------------------------------
+
+static std::atomic<int>  gDepthLayerCount{4};
+static std::atomic<bool> gHasDepthEstimation{false};
+
+void BridgeSetDepthLayerCount(int count)         { gDepthLayerCount.store(count); }
+int  BridgeGetDepthLayerCount()                  { return gDepthLayerCount.load(); }
+void BridgeSetHasDepthEstimation(bool has)       { gHasDepthEstimation.store(has); }
+bool BridgeGetHasDepthEstimation()               { return gHasDepthEstimation.load(); }
+
+static std::atomic<int>  gCutoutClickThreshold{30};
+void BridgeSetCutoutClickThreshold(int v) { gCutoutClickThreshold.store(v); }
+int  BridgeGetCutoutClickThreshold()      { return gCutoutClickThreshold.load(); }
+
+static std::atomic<bool> gToolActivationRequested{false};
+void BridgeRequestToolActivation()               { gToolActivationRequested.store(true); }
+bool BridgeConsumeToolActivationRequest()         {
+    bool expected = true;
+    return gToolActivationRequested.compare_exchange_strong(expected, false);
 }
 
 //----------------------------------------------------------------------------------------

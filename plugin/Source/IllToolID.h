@@ -33,6 +33,7 @@
 #define kIllToolTracePanelID            "Ill Trace"
 #define kIllToolSurfacePanelID          "Ill Surface"
 #define kIllToolPenPanelID              "Ill Pen"
+#define kIllToolLayerPanelID            "Ill Layers"
 
 // Panel menu item identifiers
 #define kIllToolSelectionMenuItem        "IllTool Selection Panel"
@@ -46,6 +47,7 @@
 #define kIllToolTraceMenuItem            "IllTool Trace Panel"
 #define kIllToolSurfaceMenuItem          "IllTool Surface Panel"
 #define kIllToolPenMenuItem              "IllTool Pen Panel"
+#define kIllToolLayerMenuItem            "IllTool Layer Panel"
 
 // Application menu (Window > IllTool submenu)
 #define kIllToolMenuGroupName            "IllTool Menu Group"

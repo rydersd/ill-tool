@@ -10,6 +10,7 @@
 //========================================================================================
 
 #import "BlendPanelController.h"
+#import "IllToolTheme.h"
 #import "HttpBridge.h"
 #import <cstdio>
 #import <string>
@@ -17,16 +18,6 @@
 #import <mutex>
 #import <cmath>
 
-//----------------------------------------------------------------------------------------
-//  Dark theme constants matching Illustrator
-//----------------------------------------------------------------------------------------
-
-static NSColor* ITBGColor()       { return [NSColor colorWithRed:0.20 green:0.20 blue:0.20 alpha:1.0]; }
-static NSColor* ITTextColor()     { return [NSColor colorWithRed:0.85 green:0.85 blue:0.85 alpha:1.0]; }
-static NSColor* ITAccentColor()   { return [NSColor colorWithRed:0.48 green:0.72 blue:0.94 alpha:1.0]; }
-static NSColor* ITDimColor()      { return [NSColor colorWithRed:0.55 green:0.55 blue:0.55 alpha:1.0]; }
-static NSFont*  ITLabelFont()     { return [NSFont systemFontOfSize:11]; }
-static NSFont*  ITMonoFont()      { return [NSFont monospacedSystemFontOfSize:10 weight:NSFontWeightRegular]; }
 
 static const CGFloat kPanelWidth  = 240.0;
 static const CGFloat kPadding     = 8.0;
@@ -53,30 +44,6 @@ static void BridgeSetBlendEasingPoints(const std::vector<std::pair<double,double
 static std::mutex sPresetMutex;
 static std::vector<std::vector<std::pair<double,double>>> sPresets;
 
-//----------------------------------------------------------------------------------------
-//  Helpers
-//----------------------------------------------------------------------------------------
-
-static NSTextField* MakeLabel(NSString *text, NSFont *font, NSColor *color)
-{
-    NSTextField *label = [NSTextField labelWithString:text];
-    label.font = font;
-    label.textColor = color;
-    label.backgroundColor = [NSColor clearColor];
-    label.drawsBackground = NO;
-    label.bordered = NO;
-    label.editable = NO;
-    label.selectable = NO;
-    return label;
-}
-
-static NSButton* MakeButton(NSString *title, id target, SEL action)
-{
-    NSButton *btn = [NSButton buttonWithTitle:title target:target action:action];
-    btn.font = ITLabelFont();
-    btn.bezelStyle = NSBezelStyleSmallSquare;
-    return btn;
-}
 
 //========================================================================================
 //  EasingCurveView — Interactive cubic-bezier curve editor
@@ -210,7 +177,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     // Diagonal guide line (0,0) -> (1,1)
     NSBezierPath *diagPath = [NSBezierPath bezierPath];
     diagPath.lineWidth = 0.5;
-    [ITDimColor() setStroke];
+    [[IllToolTheme secondaryTextColor] setStroke];
     [diagPath moveToPoint:NSMakePoint(0, 0)];
     [diagPath lineToPoint:NSMakePoint(w, h)];
     [diagPath stroke];
@@ -304,7 +271,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
         CGFloat cy = pt.y * h;
         NSRect circleRect = NSMakeRect(cx - 4, cy - 4, 8, 8);
         NSBezierPath *circle = [NSBezierPath bezierPathWithOvalInRect:circleRect];
-        [ITAccentColor() setFill];
+        [[IllToolTheme accentColor] setFill];
         [circle fill];
         [[NSColor whiteColor] setStroke];
         circle.lineWidth = 1.0;
@@ -466,7 +433,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     CGFloat totalHeight = 520.0;
     NSView *root = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, kPanelWidth, totalHeight)];
     root.wantsLayer = YES;
-    root.layer.backgroundColor = ITBGColor().CGColor;
+    root.layer.backgroundColor = [IllToolTheme panelBackground].CGColor;
     root.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     self.rootViewInternal = root;
     [root release];  // P2: balance alloc — strong property retains
@@ -474,7 +441,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     CGFloat y = totalHeight - kPadding;
 
     // --- Title ---
-    NSTextField *title = MakeLabel(@"Blend", [NSFont boldSystemFontOfSize:12], ITTextColor());
+    NSTextField *title = [IllToolTheme makeLabelWithText:@"Blend" font:[NSFont boldSystemFontOfSize:12] color:[IllToolTheme textColor]];
     title.frame = NSMakeRect(kPadding, y - 16, kPanelWidth - 2*kPadding, 16);
     [root addSubview:title];
     y -= 24;
@@ -485,18 +452,18 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
 
     CGFloat halfW = (kPanelWidth - 2*kPadding - 4) / 2.0;
 
-    NSButton *pickABtn = MakeButton(@"Pick A", self, @selector(onPickA:));
+    NSButton *pickABtn = [IllToolTheme makeButtonWithTitle:@"Pick A" target:self action:@selector(onPickA:)];
     pickABtn.frame = NSMakeRect(kPadding, y - kRowHeight, halfW, kRowHeight);
     [root addSubview:pickABtn];
     self.pickAButton = pickABtn;
 
-    NSButton *pickBBtn = MakeButton(@"Pick B", self, @selector(onPickB:));
+    NSButton *pickBBtn = [IllToolTheme makeButtonWithTitle:@"Pick B" target:self action:@selector(onPickB:)];
     pickBBtn.frame = NSMakeRect(kPadding + halfW + 4, y - kRowHeight, halfW, kRowHeight);
     [root addSubview:pickBBtn];
     self.pickBButton = pickBBtn;
     y -= (kRowHeight + 4);
 
-    NSTextField *status = MakeLabel(@"No paths selected", ITMonoFont(), ITDimColor());
+    NSTextField *status = [IllToolTheme makeLabelWithText:@"No paths selected" font:[IllToolTheme monoFont] color:[IllToolTheme secondaryTextColor]];
     status.frame = NSMakeRect(kPadding, y - 14, kPanelWidth - 2*kPadding, 14);
     [root addSubview:status];
     self.statusLabel = status;
@@ -513,11 +480,11 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     //  Section 2: Step Count (50pt)
     //==================================================================================
 
-    NSTextField *stepsLbl = MakeLabel(@"Steps", ITLabelFont(), ITTextColor());
+    NSTextField *stepsLbl = [IllToolTheme makeLabelWithText:@"Steps" font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
     stepsLbl.frame = NSMakeRect(kPadding, y - 14, 60, 14);
     [root addSubview:stepsLbl];
 
-    NSTextField *stepsVal = MakeLabel(@"5", ITMonoFont(), ITAccentColor());
+    NSTextField *stepsVal = [IllToolTheme makeLabelWithText:@"5" font:[IllToolTheme monoFont] color:[IllToolTheme accentColor]];
     stepsVal.frame = NSMakeRect(kPanelWidth - kPadding - 30, y - 14, 30, 14);
     stepsVal.alignment = NSTextAlignmentRight;
     [root addSubview:stepsVal];
@@ -544,7 +511,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     //  Section 3: Easing Presets (60pt)
     //==================================================================================
 
-    NSTextField *easingLbl = MakeLabel(@"Easing", ITLabelFont(), ITTextColor());
+    NSTextField *easingLbl = [IllToolTheme makeLabelWithText:@"Easing" font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
     easingLbl.frame = NSMakeRect(kPadding, y - 14, 60, 14);
     [root addSubview:easingLbl];
     y -= (14 + 4);
@@ -553,7 +520,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     CGFloat btnW = (kPanelWidth - 2*kPadding - 3*4) / 4.0;
     NSMutableArray<NSButton *> *easingBtns = [NSMutableArray array];
     for (int i = 0; i < 4; i++) {
-        NSButton *btn = MakeButton(presetNames[i], self, @selector(onEasingPreset:));
+        NSButton *btn = [IllToolTheme makeButtonWithTitle:presetNames[i] target:self action:@selector(onEasingPreset:)];
         btn.frame = NSMakeRect(kPadding + i * (btnW + 4), y - kRowHeight, btnW, kRowHeight);
         btn.tag = i;
         [root addSubview:btn];
@@ -596,11 +563,11 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     //  Section 5: Presets Save/Load (40pt)
     //==================================================================================
 
-    NSButton *saveBtn = MakeButton(@"Save", self, @selector(onSavePreset:));
+    NSButton *saveBtn = [IllToolTheme makeButtonWithTitle:@"Save" target:self action:@selector(onSavePreset:)];
     saveBtn.frame = NSMakeRect(kPadding, y - kRowHeight, halfW, kRowHeight);
     [root addSubview:saveBtn];
 
-    NSButton *loadBtn = MakeButton(@"Load", self, @selector(onLoadPreset:));
+    NSButton *loadBtn = [IllToolTheme makeButtonWithTitle:@"Load" target:self action:@selector(onLoadPreset:)];
     loadBtn.frame = NSMakeRect(kPadding + halfW + 4, y - kRowHeight, halfW, kRowHeight);
     [root addSubview:loadBtn];
     y -= (kRowHeight + kPadding);
@@ -623,7 +590,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     blendBtn.enabled = NO;
     // Style the blend button with accent color
     blendBtn.wantsLayer = YES;
-    blendBtn.layer.backgroundColor = ITAccentColor().CGColor;
+    blendBtn.layer.backgroundColor = [IllToolTheme accentColor].CGColor;
     blendBtn.layer.cornerRadius = 3.0;
     NSMutableAttributedString *blendTitle = [[NSMutableAttributedString alloc]
         initWithString:@"Blend"];
@@ -650,14 +617,14 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
         NSButton *btn = self.easingButtons[i];
         btn.wantsLayer = YES;
         if (i == activeIndex) {
-            btn.layer.backgroundColor = ITAccentColor().CGColor;
+            btn.layer.backgroundColor = [IllToolTheme accentColor].CGColor;
             NSMutableAttributedString *attrTitle = [[NSMutableAttributedString alloc]
                 initWithString:btn.title];
             [attrTitle addAttribute:NSForegroundColorAttributeName
                               value:[NSColor whiteColor]
                               range:NSMakeRange(0, btn.title.length)];
             [attrTitle addAttribute:NSFontAttributeName
-                              value:ITLabelFont()
+                              value:[IllToolTheme labelFont]
                               range:NSMakeRange(0, btn.title.length)];
             btn.attributedTitle = attrTitle;
             [attrTitle release];
@@ -666,10 +633,10 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
             NSMutableAttributedString *attrTitle = [[NSMutableAttributedString alloc]
                 initWithString:btn.title];
             [attrTitle addAttribute:NSForegroundColorAttributeName
-                              value:ITTextColor()
+                              value:[IllToolTheme textColor]
                               range:NSMakeRange(0, btn.title.length)];
             [attrTitle addAttribute:NSFontAttributeName
-                              value:ITLabelFont()
+                              value:[IllToolTheme labelFont]
                               range:NSMakeRange(0, btn.title.length)];
             btn.attributedTitle = attrTitle;
             [attrTitle release];
@@ -689,14 +656,14 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     // Update Pick A button appearance
     self.pickAButton.wantsLayer = YES;
     if (hasA) {
-        self.pickAButton.layer.backgroundColor = ITAccentColor().CGColor;
+        self.pickAButton.layer.backgroundColor = [IllToolTheme accentColor].CGColor;
         NSMutableAttributedString *attrTitle = [[NSMutableAttributedString alloc]
             initWithString:@"Pick A"];
         [attrTitle addAttribute:NSForegroundColorAttributeName
                           value:[NSColor whiteColor]
                           range:NSMakeRange(0, 6)];
         [attrTitle addAttribute:NSFontAttributeName
-                          value:ITLabelFont()
+                          value:[IllToolTheme labelFont]
                           range:NSMakeRange(0, 6)];
         self.pickAButton.attributedTitle = attrTitle;
         [attrTitle release];
@@ -707,14 +674,14 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     // Update Pick B button appearance
     self.pickBButton.wantsLayer = YES;
     if (hasB) {
-        self.pickBButton.layer.backgroundColor = ITAccentColor().CGColor;
+        self.pickBButton.layer.backgroundColor = [IllToolTheme accentColor].CGColor;
         NSMutableAttributedString *attrTitle = [[NSMutableAttributedString alloc]
             initWithString:@"Pick B"];
         [attrTitle addAttribute:NSForegroundColorAttributeName
                           value:[NSColor whiteColor]
                           range:NSMakeRange(0, 6)];
         [attrTitle addAttribute:NSFontAttributeName
-                          value:ITLabelFont()
+                          value:[IllToolTheme labelFont]
                           range:NSMakeRange(0, 6)];
         self.pickBButton.attributedTitle = attrTitle;
         [attrTitle release];
@@ -725,23 +692,23 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     // Update status label
     if (hasA && hasB) {
         self.statusLabel.stringValue = @"Ready to blend";
-        self.statusLabel.textColor = ITAccentColor();
+        self.statusLabel.textColor = [IllToolTheme accentColor];
     } else if (hasA) {
         self.statusLabel.stringValue = @"Path A set";
-        self.statusLabel.textColor = ITDimColor();
+        self.statusLabel.textColor = [IllToolTheme secondaryTextColor];
     } else if (hasB) {
         self.statusLabel.stringValue = @"Path B set";
-        self.statusLabel.textColor = ITDimColor();
+        self.statusLabel.textColor = [IllToolTheme secondaryTextColor];
     } else {
         self.statusLabel.stringValue = @"No paths selected";
-        self.statusLabel.textColor = ITDimColor();
+        self.statusLabel.textColor = [IllToolTheme secondaryTextColor];
     }
 
     // Enable/disable blend button
     self.blendButton.enabled = (hasA && hasB);
     self.blendButton.wantsLayer = YES;
     if (hasA && hasB) {
-        self.blendButton.layer.backgroundColor = ITAccentColor().CGColor;
+        self.blendButton.layer.backgroundColor = [IllToolTheme accentColor].CGColor;
     } else {
         self.blendButton.layer.backgroundColor =
             [NSColor colorWithRed:0.30 green:0.30 blue:0.30 alpha:1.0].CGColor;

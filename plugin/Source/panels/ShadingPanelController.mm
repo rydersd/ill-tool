@@ -10,50 +10,17 @@
 //========================================================================================
 
 #import "ShadingPanelController.h"
+#import "IllToolTheme.h"
 #import "HttpBridge.h"
 #import <cstdio>
 #import <cmath>
 
-//----------------------------------------------------------------------------------------
-//  Dark theme constants matching Illustrator
-//----------------------------------------------------------------------------------------
-
-static NSColor* ITBGColor()       { return [NSColor colorWithRed:0.20 green:0.20 blue:0.20 alpha:1.0]; }
-static NSColor* ITTextColor()     { return [NSColor colorWithRed:0.85 green:0.85 blue:0.85 alpha:1.0]; }
-static NSColor* ITAccentColor()   { return [NSColor colorWithRed:0.48 green:0.72 blue:0.94 alpha:1.0]; }
-static NSColor* ITDimColor()      { return [NSColor colorWithRed:0.55 green:0.55 blue:0.55 alpha:1.0]; }
-static NSFont*  ITLabelFont()     { return [NSFont systemFontOfSize:11]; }
-static NSFont*  ITMonoFont()      { return [NSFont monospacedSystemFontOfSize:10 weight:NSFontWeightRegular]; }
 
 static const CGFloat kPanelWidth  = 240.0;
 static const CGFloat kPadding     = 8.0;
 static const CGFloat kRowHeight   = 22.0;
 static const CGFloat kSliderH     = 18.0;
 
-//----------------------------------------------------------------------------------------
-//  Helpers
-//----------------------------------------------------------------------------------------
-
-static NSTextField* MakeLabel(NSString *text, NSFont *font, NSColor *color)
-{
-    NSTextField *label = [NSTextField labelWithString:text];
-    label.font = font;
-    label.textColor = color;
-    label.backgroundColor = [NSColor clearColor];
-    label.drawsBackground = NO;
-    label.bordered = NO;
-    label.editable = NO;
-    label.selectable = NO;
-    return label;
-}
-
-static NSButton* MakeButton(NSString *title, id target, SEL action)
-{
-    NSButton *btn = [NSButton buttonWithTitle:title target:target action:action];
-    btn.font = ITLabelFont();
-    btn.bezelStyle = NSBezelStyleSmallSquare;
-    return btn;
-}
 
 //========================================================================================
 //  LightDirectionView — Circular widget with draggable handle
@@ -155,7 +122,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     // Line from center to handle
     NSBezierPath *dirLine = [NSBezierPath bezierPath];
     dirLine.lineWidth = 1.5;
-    [ITAccentColor() setStroke];
+    [[IllToolTheme accentColor] setStroke];
     [dirLine moveToPoint:NSMakePoint(cx, cy)];
     [dirLine lineToPoint:NSMakePoint(hx, hy)];
     [dirLine stroke];
@@ -175,7 +142,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     // Handle circle (accent, 10pt)
     NSRect handleRect = NSMakeRect(hx - 5, hy - 5, 10, 10);
     NSBezierPath *handleCircle = [NSBezierPath bezierPathWithOvalInRect:handleRect];
-    [ITAccentColor() setFill];
+    [[IllToolTheme accentColor] setFill];
     [handleCircle fill];
     [[NSColor whiteColor] setStroke];
     handleCircle.lineWidth = 1.0;
@@ -184,13 +151,13 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     // Shadow side indicator (small dim circle)
     NSRect shadowRect = NSMakeRect(sx - 3, sy - 3, 6, 6);
     NSBezierPath *shadowCircle = [NSBezierPath bezierPathWithOvalInRect:shadowRect];
-    [ITDimColor() setFill];
+    [[IllToolTheme secondaryTextColor] setFill];
     [shadowCircle fill];
 
     // Center dot
     NSRect centerRect = NSMakeRect(cx - 2, cy - 2, 4, 4);
     NSBezierPath *centerDot = [NSBezierPath bezierPathWithOvalInRect:centerRect];
-    [ITDimColor() setFill];
+    [[IllToolTheme secondaryTextColor] setFill];
     [centerDot fill];
 }
 
@@ -351,7 +318,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     CGFloat totalHeight = 540.0;
     NSView *root = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, kPanelWidth, totalHeight)];
     root.wantsLayer = YES;
-    root.layer.backgroundColor = ITBGColor().CGColor;
+    root.layer.backgroundColor = [IllToolTheme panelBackground].CGColor;
     root.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     self.rootViewInternal = root;
     [root release];  // P2: balance alloc — strong property retains
@@ -359,7 +326,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     CGFloat y = totalHeight - kPadding;
 
     // --- Title ---
-    NSTextField *title = MakeLabel(@"Shading", [NSFont boldSystemFontOfSize:12], ITTextColor());
+    NSTextField *title = [IllToolTheme makeLabelWithText:@"Shading" font:[NSFont boldSystemFontOfSize:12] color:[IllToolTheme textColor]];
     title.frame = NSMakeRect(kPadding, y - 16, kPanelWidth - 2*kPadding, 16);
     [root addSubview:title];
     y -= 24;
@@ -389,7 +356,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     //==================================================================================
 
     // Highlight row
-    NSTextField *hlLabel = MakeLabel(@"Highlight:", ITLabelFont(), ITTextColor());
+    NSTextField *hlLabel = [IllToolTheme makeLabelWithText:@"Highlight:" font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
     hlLabel.frame = NSMakeRect(kPadding, y - 30, 70, 14);
     [root addSubview:hlLabel];
 
@@ -399,7 +366,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     self.highlightColorWell = hlWell;
     [hlWell release];
 
-    NSButton *hlPick = MakeButton(@"Pick", self, @selector(onPickHighlight:));
+    NSButton *hlPick = [IllToolTheme makeButtonWithTitle:@"Pick" target:self action:@selector(onPickHighlight:)];
     hlPick.frame = NSMakeRect(kPadding + 110, y - 30, 40, 22);
     hlPick.toolTip = @"Sample highlight color from selected path";
     [root addSubview:hlPick];
@@ -408,7 +375,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     y -= (34 + 4);
 
     // Shadow row
-    NSTextField *shLabel = MakeLabel(@"Shadow:", ITLabelFont(), ITTextColor());
+    NSTextField *shLabel = [IllToolTheme makeLabelWithText:@"Shadow:" font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
     shLabel.frame = NSMakeRect(kPadding, y - 30, 70, 14);
     [root addSubview:shLabel];
 
@@ -418,7 +385,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     self.shadowColorWell = shWell;
     [shWell release];
 
-    NSButton *shPick = MakeButton(@"Pick", self, @selector(onPickShadow:));
+    NSButton *shPick = [IllToolTheme makeButtonWithTitle:@"Pick" target:self action:@selector(onPickShadow:)];
     shPick.frame = NSMakeRect(kPadding + 110, y - 30, 40, 22);
     shPick.toolTip = @"Sample shadow color from selected path";
     [root addSubview:shPick];
@@ -437,7 +404,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     //  Section 3: Light Direction (160pt)
     //==================================================================================
 
-    NSTextField *lightLabel = MakeLabel(@"Light Direction", ITLabelFont(), ITTextColor());
+    NSTextField *lightLabel = [IllToolTheme makeLabelWithText:@"Light Direction" font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
     lightLabel.frame = NSMakeRect(kPadding, y - 14, 120, 14);
     [root addSubview:lightLabel];
     y -= (14 + 4);
@@ -451,7 +418,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     [lightView release];
 
     // Angle readout below the circle
-    NSTextField *angleLbl = MakeLabel(@"135\u00B0", ITMonoFont(), ITAccentColor());
+    NSTextField *angleLbl = [IllToolTheme makeLabelWithText:@"135\u00B0" font:[IllToolTheme monoFont] color:[IllToolTheme accentColor]];
     angleLbl.frame = NSMakeRect(kPadding, y - circleSize - 16, kPanelWidth - 2*kPadding, 14);
     angleLbl.alignment = NSTextAlignmentCenter;
     [root addSubview:angleLbl];
@@ -476,11 +443,11 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     //  Section 4: Intensity (40pt)
     //==================================================================================
 
-    NSTextField *intLabel = MakeLabel(@"Intensity", ITLabelFont(), ITTextColor());
+    NSTextField *intLabel = [IllToolTheme makeLabelWithText:@"Intensity" font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
     intLabel.frame = NSMakeRect(kPadding, y - 14, 60, 14);
     [root addSubview:intLabel];
 
-    NSTextField *intVal = MakeLabel(@"70", ITMonoFont(), ITAccentColor());
+    NSTextField *intVal = [IllToolTheme makeLabelWithText:@"70" font:[IllToolTheme monoFont] color:[IllToolTheme accentColor]];
     intVal.frame = NSMakeRect(kPanelWidth - kPadding - 30, y - 14, 30, 14);
     intVal.alignment = NSTextAlignmentRight;
     [root addSubview:intVal];
@@ -521,11 +488,11 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
         self.blendControlsView = blendView;
         [blendView release];
 
-        NSTextField *stepLbl = MakeLabel(@"Steps", ITLabelFont(), ITTextColor());
+        NSTextField *stepLbl = [IllToolTheme makeLabelWithText:@"Steps" font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
         stepLbl.frame = NSMakeRect(kPadding, 60 - 14, 60, 14);
         [blendView addSubview:stepLbl];
 
-        NSTextField *stepVal = MakeLabel(@"7", ITMonoFont(), ITAccentColor());
+        NSTextField *stepVal = [IllToolTheme makeLabelWithText:@"7" font:[IllToolTheme monoFont] color:[IllToolTheme accentColor]];
         stepVal.frame = NSMakeRect(kPanelWidth - kPadding - 30, 60 - 14, 30, 14);
         stepVal.alignment = NSTextAlignmentRight;
         [blendView addSubview:stepVal];
@@ -549,11 +516,11 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
         self.meshControlsView = meshView;
         [meshView release];
 
-        NSTextField *gridLbl = MakeLabel(@"Grid", ITLabelFont(), ITTextColor());
+        NSTextField *gridLbl = [IllToolTheme makeLabelWithText:@"Grid" font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
         gridLbl.frame = NSMakeRect(kPadding, 60 - 14, 60, 14);
         [meshView addSubview:gridLbl];
 
-        NSTextField *gridVal = MakeLabel(@"3x3", ITMonoFont(), ITAccentColor());
+        NSTextField *gridVal = [IllToolTheme makeLabelWithText:@"3x3" font:[IllToolTheme monoFont] color:[IllToolTheme accentColor]];
         gridVal.frame = NSMakeRect(kPanelWidth - kPadding - 40, 60 - 14, 40, 14);
         gridVal.alignment = NSTextAlignmentRight;
         [meshView addSubview:gridVal];
@@ -586,7 +553,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     applyBtn.bezelStyle = NSBezelStyleSmallSquare;
     applyBtn.frame = NSMakeRect(kPadding, y - 30, kPanelWidth - 2*kPadding, 30);
     applyBtn.wantsLayer = YES;
-    applyBtn.layer.backgroundColor = ITAccentColor().CGColor;
+    applyBtn.layer.backgroundColor = [IllToolTheme accentColor].CGColor;
     applyBtn.layer.cornerRadius = 3.0;
 
     NSMutableAttributedString *applyTitle = [[NSMutableAttributedString alloc]
