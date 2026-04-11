@@ -303,14 +303,17 @@ public:
     };
 
     /** Cluster an RGB normal map into K surface regions via k-means on (R,G,B) vectors.
-        Samples every Nth pixel (stride=4) for speed, treats RGB as normal direction.
+        Samples every Nth pixel for speed, treats RGB as normal direction.
         @param normalMapRGB  Raw RGB pixel data (3 bytes per pixel, row-major).
         @param width         Image width in pixels.
         @param height        Image height in pixels.
         @param k             Number of clusters.
+        @param stride        Sample every Nth pixel (lower = more accurate, slower).
+        @param maxIter       Maximum k-means iterations (higher = better convergence).
         @return Vector of NormalRegion sorted by pixel count (largest first). */
     std::vector<NormalRegion> ClusterNormalMapRegions(
-        const unsigned char* normalMapRGB, int width, int height, int k);
+        const unsigned char* normalMapRGB, int width, int height, int k,
+        int stride = 4, int maxIter = 20);
 
     /** Result of normal direction clustering — a dominant surface plane. */
     struct PlaneCluster {

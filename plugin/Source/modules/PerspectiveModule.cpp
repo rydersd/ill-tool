@@ -17,6 +17,7 @@
 #include "CleanupModule.h"
 #include "IllToolPlugin.h"
 #include "IllToolSuites.h"
+#include "IllToolTokens.h"
 #include "HttpBridge.h"
 #include "VisionEngine.h"
 

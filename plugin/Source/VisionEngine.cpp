@@ -1697,15 +1697,17 @@ VisionEngine::SurfaceHint VisionEngine::InferSurfaceType(int x, int y, int w, in
 //========================================================================================
 
 std::vector<VisionEngine::NormalRegion> VisionEngine::ClusterNormalMapRegions(
-    const unsigned char* normalMapRGB, int width, int height, int k)
+    const unsigned char* normalMapRGB, int width, int height, int k,
+    int stride, int maxIter)
 {
     std::lock_guard<std::recursive_mutex> lock(mMutex);
     std::vector<NormalRegion> result;
 
     if (!normalMapRGB || width < 1 || height < 1 || k < 1) return result;
 
-    // 1. Sample every Nth pixel (stride=4 for speed on large images)
-    const int stride = 4;
+    // 1. Sample every Nth pixel for speed on large images
+    if (stride < 1) stride = 1;
+    if (stride > 20) stride = 20;
     struct Sample { double r, g, b; double px, py; };
     std::vector<Sample> samples;
     samples.reserve((width / stride + 1) * (height / stride + 1));
@@ -1734,9 +1736,10 @@ std::vector<VisionEngine::NormalRegion> VisionEngine::ClusterNormalMapRegions(
         centroids[i] = {samples[idx].r, samples[idx].g, samples[idx].b};
     }
 
-    // 3. K-means: 20 iterations of Lloyd's algorithm
+    // 3. K-means iterations of Lloyd's algorithm
     std::vector<int> assignment(samples.size(), 0);
-    const int maxIter = 20;
+    if (maxIter < 1) maxIter = 1;
+    if (maxIter > 100) maxIter = 100;
 
     for (int iter = 0; iter < maxIter; iter++) {
         // Assign each sample to nearest centroid (by Euclidean distance in RGB)
