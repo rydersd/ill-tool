@@ -96,7 +96,7 @@ void TraceModule::ExecuteTrace()
         VisionEngine& ve = VisionEngine::Instance();
 
         int imgW = 0, imgH = 0, imgC = 0;
-        unsigned char* gray = stbi_load(imagePath.c_str(), &imgW, &imgH, &imgC, 1);
+        unsigned char* gray = stbi_load(traceInputPath.c_str(), &imgW, &imgH, &imgC, 1);
         if (!gray) {
             BridgeSetTraceStatus("Failed to load image for centerline");
             fTraceInProgress = false;
@@ -107,7 +107,7 @@ void TraceModule::ExecuteTrace()
         // Thresholds are user-configurable via Centerline Settings sliders
         double cannyLow = BridgeGetTraceCannyLow();
         double cannyHigh = BridgeGetTraceCannyHigh();
-        ve.LoadImage(imagePath.c_str());
+        ve.LoadImage(traceInputPath.c_str());
         auto edges = ve.CannyEdges(cannyLow, cannyHigh);
 
         if (edges.empty() || (int)edges.size() != imgW * imgH) {

@@ -796,9 +796,11 @@ void TraceModule::DrawOverlay(AIAnnotatorMessage* message)
             if (viewPoly.size() < 3) continue;
 
             // Signed area (shoelace) in view space detects hole vs outer.
-            // vtracer-cutout + Y-down view coords: outer CCW = positive, hole CW = negative.
-            // (Previously verified working in runtime — "it's working" per user feedback
-            //  after switching to hierarchical='cutout' + subpath M-split.)
+            // View coords are Y-DOWN, so the shoelace sign is the REVERSE of the
+            // math-textbook convention:
+            //   positive signedArea → CW in math space → hole (reversed winding)
+            //   negative signedArea → CCW in math space → outer contour
+            // Verified empirically against vtracer hierarchical='cutout' output.
             double signedArea = 0.0;
             for (size_t i = 0; i < viewPoly.size(); i++) {
                 size_t j = (i + 1) % viewPoly.size();

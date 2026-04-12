@@ -1158,10 +1158,11 @@ bool TraceModule::HandleCutoutClick(AIRealPoint artPt, bool shiftHeld, bool opti
     unsigned char* existingMask = stbi_load(compositePath2.c_str(), &cmpW, &cmpH, &cmpC, 1);
     bool hasMask = (existingMask && cmpW == imgW && cmpH == imgH);
 
-    // Allow flood to cover the full image — cap only as a runaway guardrail,
-    // not as an artistic limit. Users commonly need to add/subtract large background
-    // regions in one click.
-    int maxFill = imgW * imgH;
+    // Allow flood to cover a large fraction of the image so users can add/subtract
+    // whole background regions in one click. Hard cap prevents OOM on huge sources.
+    // At 16M pixels we use ~20 MB for fillMask + visited (bitset) which is safe.
+    const int kMaxFloodPixels = 16 * 1024 * 1024;  // ~16 megapixels
+    int maxFill = std::min(imgW * imgH, kMaxFloodPixels);
     int maxRadius = std::max(imgW, imgH);  // effectively no radius cap
     int maxRadiusSq = maxRadius * maxRadius;
 
