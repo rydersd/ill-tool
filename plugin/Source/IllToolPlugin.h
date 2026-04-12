@@ -95,6 +95,12 @@ private:
     /** Handle for illustrator shutdown notifier. */
     AINotifierHandle        fShutdownApplicationNotifier;
 
+    /** Handle for effective tool changed notifier (space-to-pan cursor restore). */
+    AINotifierHandle        fEffectiveToolChangedNotifier;
+
+    /** Handle for document changed notifier (clear per-doc state on switch). */
+    AINotifierHandle        fDocumentChangedNotifier;
+
     /** Pointer to IllToolAnnotator object. */
     IllToolAnnotator*       fAnnotator;
 
@@ -120,6 +126,7 @@ private:
     AIPanelRef              fTracePanel;
     AIPanelRef              fSurfacePanel;
     AIPanelRef              fPenPanel;
+    AIPanelRef              fLayerPanel;
 
     /** Menu item handles for panel show/hide in Window menu. */
     AIMenuItemHandle        fSelectionMenuHandle;
@@ -133,6 +140,7 @@ private:
     AIMenuItemHandle        fTraceMenuHandle;
     AIMenuItemHandle        fSurfaceMenuHandle;
     AIMenuItemHandle        fPenMenuHandle;
+    AIMenuItemHandle        fLayerMenuHandle;
 
     //------------------------------------------------------------------------------------
     //  Application menu (Window > IllTool submenu)
@@ -169,6 +177,7 @@ private:
     void*                   fTraceController;
     void*                   fSurfaceController;
     void*                   fPenController;
+    void*                   fLayerController;
 
     //------------------------------------------------------------------------------------
     //  Module system

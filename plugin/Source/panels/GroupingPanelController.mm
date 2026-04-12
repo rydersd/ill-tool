@@ -8,50 +8,18 @@
 //========================================================================================
 
 #import "GroupingPanelController.h"
+#import "IllToolTheme.h"
+#import "IllToolStrings.h"
 #import "HttpBridge.h"
 #import <cstdio>
 #import <string>
 
-//----------------------------------------------------------------------------------------
-//  Dark theme constants matching Illustrator
-//----------------------------------------------------------------------------------------
-
-static NSColor* ITBGColor()       { return [NSColor colorWithRed:0.20 green:0.20 blue:0.20 alpha:1.0]; }
-static NSColor* ITTextColor()     { return [NSColor colorWithRed:0.85 green:0.85 blue:0.85 alpha:1.0]; }
-static NSColor* ITAccentColor()   { return [NSColor colorWithRed:0.48 green:0.72 blue:0.94 alpha:1.0]; }
-static NSColor* ITDimColor()      { return [NSColor colorWithRed:0.55 green:0.55 blue:0.55 alpha:1.0]; }
-static NSFont*  ITLabelFont()     { return [NSFont systemFontOfSize:11]; }
-static NSFont*  ITMonoFont()      { return [NSFont monospacedSystemFontOfSize:10 weight:NSFontWeightRegular]; }
 
 static const CGFloat kPanelWidth  = 240.0;
 static const CGFloat kPadding     = 8.0;
 static const CGFloat kRowHeight   = 22.0;
 static const CGFloat kSliderH     = 18.0;
 
-//----------------------------------------------------------------------------------------
-//  Helpers
-//----------------------------------------------------------------------------------------
-
-static NSTextField* MakeLabel(NSString *text, NSFont *font, NSColor *color)
-{
-    NSTextField *label = [NSTextField labelWithString:text];
-    label.font = font;
-    label.textColor = color;
-    label.backgroundColor = [NSColor clearColor];
-    label.drawsBackground = NO;
-    label.bordered = NO;
-    label.editable = NO;
-    label.selectable = NO;
-    return label;
-}
-
-static NSButton* MakeButton(NSString *title, id target, SEL action)
-{
-    NSButton *btn = [NSButton buttonWithTitle:title target:target action:action];
-    btn.font = ITLabelFont();
-    btn.bezelStyle = NSBezelStyleSmallSquare;
-    return btn;
-}
 
 //========================================================================================
 //  GroupingPanelController
@@ -96,7 +64,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     CGFloat totalHeight = 340.0;
     NSView *root = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, kPanelWidth, totalHeight)];
     root.wantsLayer = YES;
-    root.layer.backgroundColor = ITBGColor().CGColor;
+    root.layer.backgroundColor = [IllToolTheme panelBackground].CGColor;
     root.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     self.rootViewInternal = root;
     [root release];  // P2: balance alloc — strong property retains
@@ -104,21 +72,21 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     CGFloat y = totalHeight - kPadding;
 
     // --- Title ---
-    NSTextField *title = MakeLabel(@"Grouping Tools", [NSFont boldSystemFontOfSize:12], ITTextColor());
+    NSTextField *title = [IllToolTheme makeLabelWithText:kITS_GroupingTools font:[NSFont boldSystemFontOfSize:12] color:[IllToolTheme textColor]];
     title.frame = NSMakeRect(kPadding, y - 16, kPanelWidth - 2*kPadding, 16);
     [root addSubview:title];
     y -= 24;
 
     // --- Group name field ---
-    NSTextField *nameLbl = MakeLabel(@"Group Name", ITLabelFont(), ITTextColor());
+    NSTextField *nameLbl = [IllToolTheme makeLabelWithText:kITS_GroupName font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
     nameLbl.frame = NSMakeRect(kPadding, y - 14, 80, 14);
     [root addSubview:nameLbl];
     y -= (14 + 2);
 
     NSTextField *nameField = [[NSTextField alloc] initWithFrame:
         NSMakeRect(kPadding, y - kRowHeight, kPanelWidth - 2*kPadding, kRowHeight)];
-    nameField.font = ITLabelFont();
-    nameField.placeholderString = @"Enter group name...";
+    nameField.font = [IllToolTheme labelFont];
+    nameField.placeholderString = kITS_GroupNamePlaceholder;
     nameField.bezelStyle = NSTextFieldSquareBezel;
     nameField.bordered = YES;
     nameField.editable = YES;
@@ -128,7 +96,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     y -= (kRowHeight + kPadding);
 
     // --- Copy to Group button ---
-    NSButton *copyBtn = MakeButton(@"Copy to Group", self, @selector(onCopyToGroup:));
+    NSButton *copyBtn = [IllToolTheme makeButtonWithTitle:kITS_CopyToGroup target:self action:@selector(onCopyToGroup:)];
     copyBtn.frame = NSMakeRect(kPadding, y - kRowHeight, kPanelWidth - 2*kPadding, kRowHeight);
     [root addSubview:copyBtn];
     y -= (kRowHeight + kPadding);
@@ -141,11 +109,11 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     y -= (1 + kPadding);
 
     // --- Simplification slider ---
-    NSTextField *simpLbl = MakeLabel(@"Simplification", ITLabelFont(), ITTextColor());
+    NSTextField *simpLbl = [IllToolTheme makeLabelWithText:kITS_Simplification font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
     simpLbl.frame = NSMakeRect(kPadding, y - 14, 110, 14);
     [root addSubview:simpLbl];
 
-    NSTextField *simpVal = MakeLabel(@"50", ITMonoFont(), ITAccentColor());
+    NSTextField *simpVal = [IllToolTheme makeLabelWithText:@"50" font:[IllToolTheme monoFont] color:[IllToolTheme accentColor]];
     simpVal.frame = NSMakeRect(kPanelWidth - kPadding - 30, y - 14, 30, 14);
     simpVal.alignment = NSTextAlignmentRight;
     [root addSubview:simpVal];
@@ -160,7 +128,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     y -= (kSliderH + kPadding);
 
     // --- Points count ---
-    NSTextField *ptsLbl = MakeLabel(@"Points: 0", ITMonoFont(), ITAccentColor());
+    NSTextField *ptsLbl = [IllToolTheme makeLabelWithText:[NSString stringWithFormat:kITS_PointsN, 0] font:[IllToolTheme monoFont] color:[IllToolTheme accentColor]];
     ptsLbl.frame = NSMakeRect(kPadding, y - 14, kPanelWidth - 2*kPadding, 14);
     [root addSubview:ptsLbl];
     self.pointsCountLabel = ptsLbl;
@@ -168,15 +136,15 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
 
     // --- Confirm / Reset / Cancel row ---
     CGFloat thirdW = (kPanelWidth - 2*kPadding - 2*4) / 3.0;
-    NSButton *confirmBtn = MakeButton(@"Confirm", self, @selector(onConfirm:));
+    NSButton *confirmBtn = [IllToolTheme makeButtonWithTitle:kITS_Confirm target:self action:@selector(onConfirm:)];
     confirmBtn.frame = NSMakeRect(kPadding, y - kRowHeight, thirdW, kRowHeight);
     [root addSubview:confirmBtn];
 
-    NSButton *resetBtn = MakeButton(@"Reset", self, @selector(onReset:));
+    NSButton *resetBtn = [IllToolTheme makeButtonWithTitle:kITS_Reset target:self action:@selector(onReset:)];
     resetBtn.frame = NSMakeRect(kPadding + thirdW + 4, y - kRowHeight, thirdW, kRowHeight);
     [root addSubview:resetBtn];
 
-    NSButton *cancelBtn = MakeButton(@"Cancel", self, @selector(onCancel:));
+    NSButton *cancelBtn = [IllToolTheme makeButtonWithTitle:kITS_Cancel target:self action:@selector(onCancel:)];
     cancelBtn.frame = NSMakeRect(kPadding + 2*(thirdW + 4), y - kRowHeight, thirdW, kRowHeight);
     [root addSubview:cancelBtn];
     y -= (kRowHeight + kPadding);
@@ -189,13 +157,13 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
     y -= (1 + kPadding);
 
     // --- In-group controls (hidden by default) ---
-    NSButton *detachBtn = MakeButton(@"Detach from Group", self, @selector(onDetach:));
+    NSButton *detachBtn = [IllToolTheme makeButtonWithTitle:kITS_DetachFromGroup target:self action:@selector(onDetach:)];
     detachBtn.frame = NSMakeRect(kPadding, y - kRowHeight, kPanelWidth - 2*kPadding, kRowHeight);
     [root addSubview:detachBtn];
     self.detachButton = detachBtn;
     y -= (kRowHeight + 4);
 
-    NSButton *splitBtn = MakeButton(@"Split to New Group", self, @selector(onSplit:));
+    NSButton *splitBtn = [IllToolTheme makeButtonWithTitle:kITS_SplitToNewGroup target:self action:@selector(onSplit:)];
     splitBtn.frame = NSMakeRect(kPadding, y - kRowHeight, kPanelWidth - 2*kPadding, kRowHeight);
     [root addSubview:splitBtn];
     self.splitButton = splitBtn;
@@ -212,7 +180,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
 {
     NSString *name = self.groupNameField.stringValue;
     if (name.length == 0) {
-        name = @"Untitled Group";
+        name = kITS_UntitledGroup;
     }
     std::string groupName(name.UTF8String);
     fprintf(stderr, "[IllTool Panel] Copy to Group: '%s' — queuing via bridge\n", groupName.c_str());
@@ -264,7 +232,7 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
 
 - (void)updatePointsCount:(NSInteger)count
 {
-    self.pointsCountLabel.stringValue = [NSString stringWithFormat:@"Points: %ld", (long)count];
+    self.pointsCountLabel.stringValue = [NSString stringWithFormat:kITS_PointsNLong, (long)count];
 }
 
 - (void)setInGroupMode:(BOOL)inGroup

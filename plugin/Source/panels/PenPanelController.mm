@@ -8,50 +8,12 @@
 //========================================================================================
 
 #import "PenPanelController.h"
+#import "IllToolTheme.h"
+#import "IllToolStrings.h"
 #import "HttpBridge.h"
 #import <cstdio>
 #import <cmath>
 
-//----------------------------------------------------------------------------------------
-//  Dark theme constants matching Illustrator
-//----------------------------------------------------------------------------------------
-
-static NSColor* PenBGColor()       { return [NSColor colorWithRed:0.20 green:0.20 blue:0.20 alpha:1.0]; }
-static NSColor* PenTextColor()     { return [NSColor colorWithRed:0.85 green:0.85 blue:0.85 alpha:1.0]; }
-static NSColor* PenAccentColor()   { return [NSColor colorWithRed:0.48 green:0.72 blue:0.94 alpha:1.0]; }
-static NSColor* PenDimColor()      { return [NSColor colorWithRed:0.55 green:0.55 blue:0.55 alpha:1.0]; }
-static NSFont*  PenLabelFont()     { return [NSFont systemFontOfSize:11]; }
-static NSFont*  PenHeaderFont()    { return [NSFont boldSystemFontOfSize:12]; }
-
-static const CGFloat kPenPanelWidth  = 240.0;
-static const CGFloat kPenPadding     = 8.0;
-static const CGFloat kPenRowHeight   = 22.0;
-static const CGFloat kPenSliderH     = 18.0;
-
-//----------------------------------------------------------------------------------------
-//  Helpers
-//----------------------------------------------------------------------------------------
-
-static NSTextField* PenMakeLabel(NSString *text, NSFont *font, NSColor *color)
-{
-    NSTextField *label = [NSTextField labelWithString:text];
-    label.font = font;
-    label.textColor = color;
-    label.backgroundColor = [NSColor clearColor];
-    label.drawsBackground = NO;
-    label.bordered = NO;
-    label.editable = NO;
-    label.selectable = NO;
-    return label;
-}
-
-static NSButton* PenMakeButton(NSString *title, id target, SEL action)
-{
-    NSButton *btn = [NSButton buttonWithTitle:title target:target action:action];
-    btn.font = PenLabelFont();
-    btn.bezelStyle = NSBezelStyleSmallSquare;
-    return btn;
-}
 
 //========================================================================================
 //  PenPanelController
@@ -102,14 +64,14 @@ static NSButton* PenMakeButton(NSString *title, id target, SEL action)
     //  Title
     //------------------------------------------------------------------
     {
-        NSTextField *title = PenMakeLabel(@"Ill Pen", PenHeaderFont(), PenAccentColor());
-        title.frame = NSMakeRect(kPenPadding, 0, kPenPanelWidth - 2 * kPenPadding, kPenRowHeight);
+        NSTextField *title = [IllToolTheme makeLabelWithText:kITS_IllPen font:[IllToolTheme titleFont] color:[IllToolTheme accentColor]];
+        title.frame = NSMakeRect(kPadding, 0, kPanelWidth - 2 * kPadding, kRowHeight);
         [rows addObject:title];
     }
 
     // Separator
     {
-        NSBox *sep = [[NSBox alloc] initWithFrame:NSMakeRect(kPenPadding, 0, kPenPanelWidth - 2 * kPenPadding, 1)];
+        NSBox *sep = [[NSBox alloc] initWithFrame:NSMakeRect(kPadding, 0, kPanelWidth - 2 * kPadding, 1)];
         sep.boxType = NSBoxSeparator;
         [rows addObject:sep];
     }
@@ -118,10 +80,10 @@ static NSButton* PenMakeButton(NSString *title, id target, SEL action)
     //  Pen Mode toggle
     //------------------------------------------------------------------
     {
-        NSButton *cb = [NSButton checkboxWithTitle:@"Pen Mode Active" target:self action:@selector(penModeToggled:)];
-        cb.font = PenLabelFont();
+        NSButton *cb = [NSButton checkboxWithTitle:kITS_PenModeActive target:self action:@selector(penModeToggled:)];
+        cb.font = [IllToolTheme labelFont];
         [cb setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
-        cb.frame = NSMakeRect(kPenPadding, 0, kPenPanelWidth - 2 * kPenPadding, kPenRowHeight);
+        cb.frame = NSMakeRect(kPadding, 0, kPanelWidth - 2 * kPadding, kRowHeight);
         cb.state = NSControlStateValueOff;
         _penModeCheckbox = cb;
         [rows addObject:cb];
@@ -131,13 +93,13 @@ static NSButton* PenMakeButton(NSString *title, id target, SEL action)
     //  Path Name
     //------------------------------------------------------------------
     {
-        NSTextField *label = PenMakeLabel(@"Path Name:", PenLabelFont(), PenDimColor());
-        label.frame = NSMakeRect(kPenPadding, 0, 80, kPenRowHeight);
+        NSTextField *label = [IllToolTheme makeLabelWithText:kITS_PathName font:[IllToolTheme labelFont] color:[IllToolTheme secondaryTextColor]];
+        label.frame = NSMakeRect(kPadding, 0, 80, kRowHeight);
         [rows addObject:label];
 
-        NSTextField *field = [[NSTextField alloc] initWithFrame:NSMakeRect(kPenPadding + 82, 0, kPenPanelWidth - 2 * kPenPadding - 82, kPenRowHeight)];
-        field.font = PenLabelFont();
-        field.textColor = PenTextColor();
+        NSTextField *field = [[NSTextField alloc] initWithFrame:NSMakeRect(kPadding + 82, 0, kPanelWidth - 2 * kPadding - 82, kRowHeight)];
+        field.font = [IllToolTheme labelFont];
+        field.textColor = [IllToolTheme textColor];
         field.backgroundColor = [NSColor colorWithRed:0.15 green:0.15 blue:0.15 alpha:1.0];
         field.bordered = YES;
         field.editable = YES;
@@ -152,13 +114,13 @@ static NSButton* PenMakeButton(NSString *title, id target, SEL action)
     //  Target Group
     //------------------------------------------------------------------
     {
-        NSTextField *label = PenMakeLabel(@"Target Group:", PenLabelFont(), PenDimColor());
-        label.frame = NSMakeRect(kPenPadding, 0, 90, kPenRowHeight);
+        NSTextField *label = [IllToolTheme makeLabelWithText:kITS_TargetGroup font:[IllToolTheme labelFont] color:[IllToolTheme secondaryTextColor]];
+        label.frame = NSMakeRect(kPadding, 0, 90, kRowHeight);
         [rows addObject:label];
 
-        NSPopUpButton *popup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(kPenPadding + 92, 0, kPenPanelWidth - 2 * kPenPadding - 92, kPenRowHeight) pullsDown:NO];
-        popup.font = PenLabelFont();
-        [popup addItemWithTitle:@"None"];
+        NSPopUpButton *popup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(kPadding + 92, 0, kPanelWidth - 2 * kPadding - 92, kRowHeight) pullsDown:NO];
+        popup.font = [IllToolTheme labelFont];
+        [popup addItemWithTitle:kITS_None];
         popup.target = self;
         popup.action = @selector(targetGroupChanged:);
         _targetGroupPopup = popup;
@@ -167,7 +129,7 @@ static NSButton* PenMakeButton(NSString *title, id target, SEL action)
 
     // Separator
     {
-        NSBox *sep = [[NSBox alloc] initWithFrame:NSMakeRect(kPenPadding, 0, kPenPanelWidth - 2 * kPenPadding, 1)];
+        NSBox *sep = [[NSBox alloc] initWithFrame:NSMakeRect(kPadding, 0, kPanelWidth - 2 * kPadding, 1)];
         sep.boxType = NSBoxSeparator;
         [rows addObject:sep];
     }
@@ -176,8 +138,8 @@ static NSButton* PenMakeButton(NSString *title, id target, SEL action)
     //  Chamfer section header
     //------------------------------------------------------------------
     {
-        NSTextField *header = PenMakeLabel(@"Chamfer", PenHeaderFont(), PenTextColor());
-        header.frame = NSMakeRect(kPenPadding, 0, kPenPanelWidth - 2 * kPenPadding, kPenRowHeight);
+        NSTextField *header = [IllToolTheme makeLabelWithText:kITS_Chamfer font:[IllToolTheme titleFont] color:[IllToolTheme textColor]];
+        header.frame = NSMakeRect(kPadding, 0, kPanelWidth - 2 * kPadding, kRowHeight);
         [rows addObject:header];
     }
 
@@ -185,11 +147,11 @@ static NSButton* PenMakeButton(NSString *title, id target, SEL action)
     //  Chamfer Radius slider
     //------------------------------------------------------------------
     {
-        NSTextField *label = PenMakeLabel(@"Radius:", PenLabelFont(), PenDimColor());
-        label.frame = NSMakeRect(kPenPadding, 0, 50, kPenSliderH);
+        NSTextField *label = [IllToolTheme makeLabelWithText:kITS_Radius font:[IllToolTheme labelFont] color:[IllToolTheme secondaryTextColor]];
+        label.frame = NSMakeRect(kPadding, 0, 50, kSliderH);
         [rows addObject:label];
 
-        NSSlider *slider = [[NSSlider alloc] initWithFrame:NSMakeRect(kPenPadding + 52, 0, kPenPanelWidth - 2 * kPenPadding - 92, kPenSliderH)];
+        NSSlider *slider = [[NSSlider alloc] initWithFrame:NSMakeRect(kPadding + 52, 0, kPanelWidth - 2 * kPadding - 92, kSliderH)];
         slider.minValue = 0;
         slider.maxValue = 20;
         slider.doubleValue = 0;
@@ -199,8 +161,8 @@ static NSButton* PenMakeButton(NSString *title, id target, SEL action)
         _chamferSlider = slider;
         [rows addObject:slider];
 
-        NSTextField *valLabel = PenMakeLabel(@"0pt", PenLabelFont(), PenTextColor());
-        valLabel.frame = NSMakeRect(kPenPanelWidth - kPenPadding - 36, 0, 36, kPenSliderH);
+        NSTextField *valLabel = [IllToolTheme makeLabelWithText:@"0pt" font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
+        valLabel.frame = NSMakeRect(kPanelWidth - kPadding - 36, 0, 36, kSliderH);
         valLabel.alignment = NSTextAlignmentRight;
         _chamferValueLabel = valLabel;
         [rows addObject:valLabel];
@@ -210,9 +172,9 @@ static NSButton* PenMakeButton(NSString *title, id target, SEL action)
     //  Uniform Edges checkbox
     //------------------------------------------------------------------
     {
-        NSButton *cb = [NSButton checkboxWithTitle:@"Uniform Edges" target:self action:@selector(uniformEdgesToggled:)];
-        cb.font = PenLabelFont();
-        cb.frame = NSMakeRect(kPenPadding, 0, kPenPanelWidth - 2 * kPenPadding, kPenRowHeight);
+        NSButton *cb = [NSButton checkboxWithTitle:kITS_UniformEdges target:self action:@selector(uniformEdgesToggled:)];
+        cb.font = [IllToolTheme labelFont];
+        cb.frame = NSMakeRect(kPadding, 0, kPanelWidth - 2 * kPadding, kRowHeight);
         cb.state = NSControlStateValueOn;
         _uniformEdgesCheckbox = cb;
         [rows addObject:cb];
@@ -222,16 +184,16 @@ static NSButton* PenMakeButton(NSString *title, id target, SEL action)
     //  Preset popup
     //------------------------------------------------------------------
     {
-        NSTextField *label = PenMakeLabel(@"Preset:", PenLabelFont(), PenDimColor());
-        label.frame = NSMakeRect(kPenPadding, 0, 50, kPenRowHeight);
+        NSTextField *label = [IllToolTheme makeLabelWithText:kITS_PresetLabel font:[IllToolTheme labelFont] color:[IllToolTheme secondaryTextColor]];
+        label.frame = NSMakeRect(kPadding, 0, 50, kRowHeight);
         [rows addObject:label];
 
-        NSPopUpButton *popup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(kPenPadding + 52, 0, kPenPanelWidth - 2 * kPenPadding - 52, kPenRowHeight) pullsDown:NO];
-        popup.font = PenLabelFont();
-        [popup addItemWithTitle:@"Sharp"];
-        [popup addItemWithTitle:@"Soft"];
-        [popup addItemWithTitle:@"Round"];
-        [popup addItemWithTitle:@"Custom"];
+        NSPopUpButton *popup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(kPadding + 52, 0, kPanelWidth - 2 * kPadding - 52, kRowHeight) pullsDown:NO];
+        popup.font = [IllToolTheme labelFont];
+        [popup addItemWithTitle:kITS_PresetSharp];
+        [popup addItemWithTitle:kITS_PresetSoft];
+        [popup addItemWithTitle:kITS_PresetRound];
+        [popup addItemWithTitle:kITS_PresetCustom];
         popup.target = self;
         popup.action = @selector(presetChanged:);
         _presetPopup = popup;
@@ -240,7 +202,7 @@ static NSButton* PenMakeButton(NSString *title, id target, SEL action)
 
     // Separator
     {
-        NSBox *sep = [[NSBox alloc] initWithFrame:NSMakeRect(kPenPadding, 0, kPenPanelWidth - 2 * kPenPadding, 1)];
+        NSBox *sep = [[NSBox alloc] initWithFrame:NSMakeRect(kPadding, 0, kPanelWidth - 2 * kPadding, 1)];
         sep.boxType = NSBoxSeparator;
         [rows addObject:sep];
     }
@@ -249,12 +211,12 @@ static NSButton* PenMakeButton(NSString *title, id target, SEL action)
     //  Finalize / Cancel buttons
     //------------------------------------------------------------------
     {
-        NSButton *finalizeBtn = PenMakeButton(@"Finalize", self, @selector(finalizeClicked:));
-        finalizeBtn.frame = NSMakeRect(kPenPadding, 0, (kPenPanelWidth - 3 * kPenPadding) / 2, 28);
+        NSButton *finalizeBtn = [IllToolTheme makeButtonWithTitle:kITS_Finalize target:self action:@selector(finalizeClicked:)];
+        finalizeBtn.frame = NSMakeRect(kPadding, 0, (kPanelWidth - 3 * kPadding) / 2, 28);
         [rows addObject:finalizeBtn];
 
-        NSButton *cancelBtn = PenMakeButton(@"Cancel", self, @selector(cancelClicked:));
-        cancelBtn.frame = NSMakeRect(kPenPadding + (kPenPanelWidth - 3 * kPenPadding) / 2 + kPenPadding, 0, (kPenPanelWidth - 3 * kPenPadding) / 2, 28);
+        NSButton *cancelBtn = [IllToolTheme makeButtonWithTitle:kITS_Cancel target:self action:@selector(cancelClicked:)];
+        cancelBtn.frame = NSMakeRect(kPadding + (kPanelWidth - 3 * kPadding) / 2 + kPadding, 0, (kPanelWidth - 3 * kPadding) / 2, 28);
         [rows addObject:cancelBtn];
     }
 
@@ -262,8 +224,8 @@ static NSButton* PenMakeButton(NSString *title, id target, SEL action)
     //  Status label
     //------------------------------------------------------------------
     {
-        NSTextField *status = PenMakeLabel(@"Click to draw, double-click to finish", PenLabelFont(), PenDimColor());
-        status.frame = NSMakeRect(kPenPadding, 0, kPenPanelWidth - 2 * kPenPadding, kPenRowHeight);
+        NSTextField *status = [IllToolTheme makeLabelWithText:kITS_ClickDrawHelp font:[IllToolTheme labelFont] color:[IllToolTheme secondaryTextColor]];
+        status.frame = NSMakeRect(kPadding, 0, kPanelWidth - 2 * kPadding, kRowHeight);
         _statusLabel = status;
         [rows addObject:status];
     }
@@ -273,19 +235,19 @@ static NSButton* PenMakeButton(NSString *title, id target, SEL action)
     //------------------------------------------------------------------
 
     // We do manual layout since we're not using Auto Layout
-    CGFloat totalHeight = kPenPadding;
+    CGFloat totalHeight = kPadding;
     // First pass: compute sizes and positions
     NSMutableArray<NSValue*> *yPositions = [NSMutableArray array];
     for (NSView *row in rows) {
         [yPositions addObject:[NSValue valueWithPoint:NSMakePoint(0, totalHeight)]];
         totalHeight += row.frame.size.height + 4;  // 4pt spacing between rows
     }
-    totalHeight += kPenPadding;
+    totalHeight += kPadding;
 
     // Create flipped root view (so y=0 is at top)
-    _rootViewBacking = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, kPenPanelWidth, totalHeight)];
+    _rootViewBacking = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, kPanelWidth, totalHeight)];
     _rootViewBacking.wantsLayer = YES;
-    _rootViewBacking.layer.backgroundColor = PenBGColor().CGColor;
+    _rootViewBacking.layer.backgroundColor = [IllToolTheme panelBackground].CGColor;
 
     // Add all rows (flip y coordinates since NSView is not flipped by default)
     for (NSUInteger i = 0; i < rows.count; i++) {
@@ -296,7 +258,7 @@ static NSButton* PenMakeButton(NSString *title, id target, SEL action)
         // In non-flipped coords, y=0 is bottom, so we flip
         frame.origin.y = totalHeight - rowY - frame.size.height;
         frame.origin.x = row.frame.origin.x;
-        if (frame.origin.x < 0.001) frame.origin.x = kPenPadding;
+        if (frame.origin.x < 0.001) frame.origin.x = kPadding;
         row.frame = frame;
         [_rootViewBacking addSubview:row];
     }
@@ -408,11 +370,11 @@ static NSButton* PenMakeButton(NSString *title, id target, SEL action)
     _penModeCheckbox.state = penMode ? NSControlStateValueOn : NSControlStateValueOff;
 
     if (!penMode) {
-        _statusLabel.stringValue = @"Enable Pen Mode to draw";
-        _statusLabel.textColor = PenDimColor();
+        _statusLabel.stringValue = kITS_EnablePenHelp;
+        _statusLabel.textColor = [IllToolTheme secondaryTextColor];
     } else {
-        _statusLabel.stringValue = @"Click to draw, double-click to finish";
-        _statusLabel.textColor = PenAccentColor();
+        _statusLabel.stringValue = kITS_ClickDrawHelp;
+        _statusLabel.textColor = [IllToolTheme accentColor];
     }
 }
 

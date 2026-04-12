@@ -44,6 +44,8 @@ extern "C"
     AIPreferenceSuite*          sAIPreference = NULL;
     AIArtboardSuite*            sAIArtboard = NULL;
     AIRasterSuite*              sAIRaster = NULL;
+    AIGroupSuite*               sAIGroup = NULL;
+    AITransformArtSuite*        sAITransformArt = NULL;
 }
 
 ImportSuite gImportSuites[] =
@@ -79,6 +81,8 @@ ImportSuite gImportSuites[] =
     kAIPreferenceSuite, kAIPreferenceVersion, &sAIPreference,
     kAIArtboardSuite, kAIArtboardSuiteVersion, &sAIArtboard,
     kAIRasterSuite, kAIRasterSuiteVersion, &sAIRaster,
+    kAIGroupSuite, kAIGroupVersion, &sAIGroup,
+    kAITransformArtSuite, kAITransformArtSuiteVersion, &sAITransformArt,
     nullptr, 0, nullptr
 };
 // End IllToolSuites.cpp

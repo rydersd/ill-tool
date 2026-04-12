@@ -13,7 +13,20 @@
 #include "IllToolSuites.h"
 #include "IllToolID.h"
 
+// VisionCutout.mm — compiled here (ObjC++ TU) so TraceModule.cpp can link to it
+#include "VisionIntelligence.h"
+#include "VisionCutout.h"
+#include "VisionCutout.mm"
+#include "AppleVisionBridge.h"
+#include "AppleVisionBridge.mm"
+// ONNX Runtime backend (pure C++, provides depth estimation via Depth Anything V2)
+#include "OnnxVisionBridge.h"
+#include "OnnxVisionBridge.cpp"
+#include "VisionIntelligence.cpp"
+
 #import <Cocoa/Cocoa.h>
+#import "panels/IllToolTheme.h"
+#include "panels/IllToolTheme.mm"
 #import "panels/SelectionPanelController.h"
 #import "panels/CleanupPanelController.h"
 #import "panels/GroupingPanelController.h"
@@ -25,12 +38,14 @@
 #import "panels/TracePanelController.h"
 #import "panels/SurfacePanelController.h"
 #import "panels/PenPanelController.h"
+#import "panels/LayerPanelController.h"
 
 // Panel controller .mm files aren't in Xcode pbxproj — compile them here
 #include "panels/TransformPanelController.mm"
 #include "panels/TracePanelController.mm"
 #include "panels/SurfacePanelController.mm"
 #include "panels/PenPanelController.mm"
+#include "panels/LayerPanelController.mm"
 
 #include <cstdio>
 
@@ -142,6 +157,16 @@ static void SurfacePanelVisibilityChanged(AIPanelRef inPanel, AIBoolean isVisibl
 }
 
 static void PenPanelVisibilityChanged(AIPanelRef inPanel, AIBoolean isVisible)
+{
+    AIPanelUserData ud = NULL;
+    sAIPanel->GetUserData(inPanel, ud);
+    if (ud) {
+        IllToolPlugin* plugin = reinterpret_cast<IllToolPlugin*>(ud);
+        plugin->UpdatePanelMenu(inPanel, isVisible);
+    }
+}
+
+static void LayerPanelVisibilityChanged(AIPanelRef inPanel, AIBoolean isVisible)
 {
     AIPanelUserData ud = NULL;
     sAIPanel->GetUserData(inPanel, ud);
@@ -409,7 +434,7 @@ ASErr IllToolPlugin::AddPanels()
             fPluginRef, this,
             kIllToolPerspectivePanelID,
             kIllToolPerspectiveMenuItem,
-            530.0,
+            610.0,
             PerspectivePanelVisibilityChanged,
             ctrl, ctrl.rootView,
             fPerspectivePanel, fPerspectiveMenuHandle);
@@ -521,6 +546,31 @@ ASErr IllToolPlugin::AddPanels()
                 [[ex name] UTF8String], [[ex reason] UTF8String]);
     }
 
+    // --- Layer Panel (Stage 19) ---
+    @try {
+        fprintf(stderr, "[IllTool] Creating Layer panel...\n");
+        LayerPanelController *ctrl = [[LayerPanelController alloc] init];
+        fLayerController = (void*)[ctrl retain];
+
+        error = CreateOnePanel(
+            fPluginRef, this,
+            kIllToolLayerPanelID,
+            kIllToolLayerMenuItem,
+            520.0,
+            LayerPanelVisibilityChanged,
+            ctrl, ctrl.rootView,
+            fLayerPanel, fLayerMenuHandle);
+
+        if (error) {
+            fprintf(stderr, "[IllTool] Layer panel creation failed: %d\n", (int)error);
+        } else {
+            fprintf(stderr, "[IllTool] Layer panel registered\n");
+        }
+    } @catch (NSException *ex) {
+        fprintf(stderr, "[IllTool] Layer panel EXCEPTION: %s — %s\n",
+                [[ex name] UTF8String], [[ex reason] UTF8String]);
+    }
+
     fprintf(stderr, "[IllTool] AddPanels complete\n");
     return kNoErr;
 }
@@ -545,6 +595,7 @@ void IllToolPlugin::DestroyPanels()
         if (fTracePanel)         { sAIPanel->Destroy(fTracePanel);         fTracePanel = NULL; }
         if (fSurfacePanel)       { sAIPanel->Destroy(fSurfacePanel);       fSurfacePanel = NULL; }
         if (fPenPanel)           { sAIPanel->Destroy(fPenPanel);           fPenPanel = NULL; }
+        if (fLayerPanel)         { sAIPanel->Destroy(fLayerPanel);         fLayerPanel = NULL; }
     }
 
     // Release retained Objective-C controllers
@@ -559,6 +610,7 @@ void IllToolPlugin::DestroyPanels()
     if (fTraceController)        { [(id)fTraceController release];        fTraceController = NULL; }
     if (fSurfaceController)      { [(id)fSurfaceController release];      fSurfaceController = NULL; }
     if (fPenController)          { [(id)fPenController release];          fPenController = NULL; }
+    if (fLayerController)        { [(id)fLayerController release];        fLayerController = NULL; }
 }
 
 //========================================================================================
@@ -580,6 +632,7 @@ void IllToolPlugin::UpdatePanelMenu(AIPanelRef panel, AIBoolean isVisible)
     else if (panel == fTracePanel)         menuHandle = fTraceMenuHandle;
     else if (panel == fSurfacePanel)       menuHandle = fSurfaceMenuHandle;
     else if (panel == fPenPanel)           menuHandle = fPenMenuHandle;
+    else if (panel == fLayerPanel)         menuHandle = fLayerMenuHandle;
 
     if (menuHandle && sAIMenu) {
         sAIMenu->CheckItem(menuHandle, isVisible);

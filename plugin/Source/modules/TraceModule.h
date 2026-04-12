@@ -2,6 +2,8 @@
 
 #include "IllToolModule.h"
 #include <string>
+#include <vector>
+#include <utility>
 
 //========================================================================================
 //  SurfaceIdentity — per-path metadata written to AIDictionary by GroupPathsBySurface.
@@ -33,12 +35,73 @@ public:
     void OnDocumentChanged() override;
     void OnSelectionChanged() override;
 
+    // Per-document state persistence — symmetry + cutout preview flags
+    void SaveDocState();
+    void LoadDocState();
+
+    // Cutout click-to-add/subtract: Shift+click to add, Option+click to subtract
+    // Plain click toggles instance under cursor
+    bool HandleCutoutClick(AIRealPoint artPt, bool shiftHeld, bool optionHeld);
+
+    // Pure const bounds check — caller must call EnsureImageBounds() first
+    bool IsPointInImageBounds(AIRealPoint artPt) const {
+        if (fArtRight <= fArtLeft || fArtTop <= fArtBottom) return false;
+        return artPt.h >= fArtLeft && artPt.h <= fArtRight &&
+               artPt.v <= fArtTop  && artPt.v >= fArtBottom;
+    }
+
+    // Refresh image bounds from document. Call before bounds-dependent work.
+    // Clears stale state on failure.
+    void EnsureImageBounds();
+
+    // Preview path interactive editing — click+drag to move points, Cmd+drag to smooth
+    bool HitTestPreviewPoint(AIRealPoint artPt, double tolerance);
+    void DragPreviewPoint(AIRealPoint artPt, bool cmdHeld);
+    void CommitPreviewEdit();
+
 private:
     // Execute trace via vtracer (SVG path output)
     void ExecuteTrace();
 
     // Execute Python-based backends (normal_ref, form_edge) that produce PNG images
     void ExecutePythonBackend(const std::string& backend);
+
+    // Subject Cutout — Vision framework foreground segmentation (macOS 14+)
+    // PreviewCutout: detect instances, save per-instance masks, composite, trace, overlay
+    void PreviewCutout();
+    // CommitCutout: create actual AI paths from stored preview data on "Cut Lines" layer
+    void CommitCutout();
+    // RecompositeCutout: re-composite selected instance masks, re-trace, update overlay
+    void RecompositeCutout();
+    // CompositeCutoutMasks: OR selected instance mask PNGs into a single composite PNG
+    // Returns path to composite mask or empty string if no instances selected
+    std::string CompositeCutoutMasks();
+    // TraceMaskAndStorePreview: trace a mask PNG with vtracer, parse SVG, store preview paths
+    // Returns number of paths stored, or -1 on failure
+    int TraceMaskAndStorePreview(const std::string& maskPath);
+
+    // Apple Contours — Vision framework contour detection (macOS 11+)
+    // Uses VNDetectContoursRequest via VisionIntelligence abstraction layer
+    void ExecuteAppleContours();
+
+    // Masked Contour Tracing — apply active instance/depth mask before contour detection
+    // If cutout mask is active, masks the image first so contours are only within the subject
+    std::string ApplyActiveMaskToImage(const std::string& imagePath);
+
+    // Pose Detection — Vision framework body/face/hand keypoints (macOS 11+)
+    void ExecuteDetectPose();
+    void DrawPoseOverlay(AIAnnotatorMessage* msg);
+
+    // Preprocess Preview — render the preprocessing chain as an annotator overlay
+    // Generates a grayscale/edge/skeleton image based on output mode and shows it
+    void GeneratePreprocessPreview();
+
+    // Symmetry Correction — mirror + blend for fixing near-symmetrical reference images
+    void GenerateSymmetryPreview();
+    void ExecuteSymmetryCommit();
+
+    // Depth Decomposition — ONNX Depth Anything V2 depth-based layer separation
+    void ExecuteDepthDecompose();
 
     // Parse SVG path data string into AI path segments
     bool ParseSVGPathToSegments(const std::string& svgPath,
@@ -93,4 +156,30 @@ private:
     // Used to position embedded rasters at the exact same location
     AIRealMatrix fOrigRasterMatrix;
     bool fHasOrigMatrix = false;
+
+    // Cached art handle from FindImagePath — the placed/raster art object
+    // Used by CommitCutout to create clipping mask around the image
+    AIArtHandle fImageArtHandle = nullptr;
+
+public:
+    // Preview path editing state — accessed by IllToolPlugin for event routing
+    int  fEditingPathIndex  = -1;    // which path in the preview array (-1 = none)
+    int  fEditingPointIndex = -1;    // which point in that path
+    bool fEditingSmooth     = false; // Cmd+drag smooth mode vs move mode
+    AIRealPoint fEditDragStart = {0, 0};  // where the drag started (art coords)
+
+    // Symmetry correction state — preview data for overlay rendering
+    std::vector<unsigned char> fSymmetryPreviewData;
+
+private:
+    // Pose detection state — cached results for overlay rendering
+    // Each joint: {name, {normalizedX, normalizedY, confidence}}
+    struct PoseJoint {
+        std::string name;
+        float x, y, confidence;
+    };
+    std::vector<PoseJoint> fPoseJoints;
+    std::vector<std::pair<float,float>> fFacePoints;  // (x,y) normalized
+    std::vector<PoseJoint> fHandJoints;
+    bool fPosePreviewActive = false;
 };

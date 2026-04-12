@@ -243,15 +243,18 @@ public:
     /** Estimate vanishing points from line convergence in the loaded image.
         Runs Canny + Hough, clusters lines by angle, intersects pairs within
         each cluster, and takes the median intersection point.
-        @param maxVPs        Maximum number of VPs to return (default 2).
-        @param cannyLow      Canny lower threshold.
-        @param cannyHigh     Canny upper threshold.
-        @param houghThreshold Minimum Hough accumulator votes.
+        @param maxVPs              Maximum number of VPs to return (default 2).
+        @param cannyLow            Canny lower threshold (used when adaptiveThresholds is false).
+        @param cannyHigh           Canny upper threshold (used when adaptiveThresholds is false).
+        @param houghThreshold      Minimum Hough accumulator votes.
+        @param adaptiveThresholds  When true, compute Otsu threshold from the grayscale
+                                   image and derive Canny thresholds as 0.33*otsu / otsu.
         @return Vector of VPs sorted by confidence (largest cluster first). */
     std::vector<VanishingPointEstimate> EstimateVanishingPoints(
         int maxVPs = 2,
         double cannyLow = 50.0, double cannyHigh = 150.0,
-        int houghThreshold = 30);
+        int houghThreshold = 30,
+        bool adaptiveThresholds = false);
 
     //------------------------------------------------------------------------------------
     //  Surface type inference
@@ -303,14 +306,17 @@ public:
     };
 
     /** Cluster an RGB normal map into K surface regions via k-means on (R,G,B) vectors.
-        Samples every Nth pixel (stride=4) for speed, treats RGB as normal direction.
+        Samples every Nth pixel for speed, treats RGB as normal direction.
         @param normalMapRGB  Raw RGB pixel data (3 bytes per pixel, row-major).
         @param width         Image width in pixels.
         @param height        Image height in pixels.
         @param k             Number of clusters.
+        @param stride        Sample every Nth pixel (lower = more accurate, slower).
+        @param maxIter       Maximum k-means iterations (higher = better convergence).
         @return Vector of NormalRegion sorted by pixel count (largest first). */
     std::vector<NormalRegion> ClusterNormalMapRegions(
-        const unsigned char* normalMapRGB, int width, int height, int k);
+        const unsigned char* normalMapRGB, int width, int height, int k,
+        int stride = 4, int maxIter = 20);
 
     /** Result of normal direction clustering — a dominant surface plane. */
     struct PlaneCluster {
@@ -336,6 +342,18 @@ public:
         @param maxVPs  Maximum number of VPs to return.
         @return Vector of VanishingPointEstimate derived from normal clusters. */
     std::vector<VanishingPointEstimate> EstimateVPsFromNormals(int maxVPs = 2);
+
+    /** Estimate vanishing points using Metric3D ML normals for plane segmentation,
+        combined with Hough line intersection for accurate VP localization.
+        Uses ONNX bridge to get per-pixel surface normals, clusters into plane
+        families, then runs edge/line detection within each plane mask.
+        VP position comes from median line intersection (robust), weighted
+        by plane size and edge density.
+        @param imagePath  Absolute file path (needed for ONNX inference).
+        @param maxVPs     Maximum number of VPs to return (default 2).
+        @return Vector of VanishingPointEstimate, or empty if ML normals unavailable. */
+    std::vector<VanishingPointEstimate> EstimateVPsFromMLNormals(const char* imagePath,
+                                                                  int maxVPs = 2);
 
     /** Set the artwork-to-pixel coordinate mapping.
         Called after loading an image and determining where it's placed on the artboard. */

@@ -48,6 +48,9 @@ public:
     /** Number of placed points in current path. */
     size_t GetPointCount() const { return fPoints.size(); }
 
+    /** Called from timer tick to update preview path in SDK context. */
+    void TickUpdatePreview();
+
 private:
     //------------------------------------------------------------------------------------
     //  Drawing state
@@ -74,6 +77,9 @@ private:
 
     /** Preview path art handle — updated live as points are placed. */
     AIArtHandle fPreviewPath = nullptr;
+
+    /** Set when internal state changes; timer callback will update the preview art. */
+    bool fPreviewDirty = false;
 
     //------------------------------------------------------------------------------------
     //  Double-click detection

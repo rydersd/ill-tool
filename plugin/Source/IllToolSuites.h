@@ -11,6 +11,7 @@
 #define __ILLTOOLSUITES_H__
 
 #include "IllustratorSDK.h"
+#include "AITransformArt.h"
 #include "AIAnnotator.h"
 #include "AIAnnotatorDrawer.h"
 #include "AIStringFormatUtils.h"
@@ -32,6 +33,7 @@
 #include "AIPreference.h"  // AIPreferenceSuite — boolean preference get/put
 #include "AIArtboard.h"    // AIArtboardSuite — artboard list, bounds, active index
 #include "AIRaster.h"      // AIRasterSuite — raster pixel data access
+#include "AIGroup.h"       // AIGroupSuite — clip groups, compound path normalization
 
 extern  "C" AIUnicodeStringSuite*       sAIUnicodeString;
 extern  "C" SPBlocksSuite*              sSPBlocks;
@@ -64,5 +66,7 @@ extern  "C" AICursorSnapSuite*        sAICursorSnap;
 extern  "C" AIPreferenceSuite*        sAIPreference;
 extern  "C" AIArtboardSuite*         sAIArtboard;
 extern  "C" AIRasterSuite*           sAIRaster;
+extern  "C" AIGroupSuite*           sAIGroup;
+extern  "C" AITransformArtSuite*    sAITransformArt;
 
 #endif // __ILLTOOLSUITES_H__

@@ -13,22 +13,13 @@
 //========================================================================================
 
 #import "PerspectivePanelController.h"
+#import "IllToolTheme.h"
+#import "IllToolStrings.h"
 #import "HttpBridge.h"
 #import <cstdio>
 #import <cmath>
 #import <string>
 
-//----------------------------------------------------------------------------------------
-//  Dark theme constants matching Illustrator (same as other panels)
-//----------------------------------------------------------------------------------------
-
-static NSColor* ITBGColor()       { return [NSColor colorWithRed:0.20 green:0.20 blue:0.20 alpha:1.0]; }
-static NSColor* ITTextColor()     { return [NSColor colorWithRed:0.85 green:0.85 blue:0.85 alpha:1.0]; }
-static NSColor* ITAccentColor()   { return [NSColor colorWithRed:0.48 green:0.72 blue:0.94 alpha:1.0]; }
-static NSColor* ITDimColor()      { return [NSColor colorWithRed:0.55 green:0.55 blue:0.55 alpha:1.0]; }
-static NSColor* ITGreenColor()    { return [NSColor colorWithRed:0.40 green:0.80 blue:0.40 alpha:1.0]; }
-static NSFont*  ITLabelFont()     { return [NSFont systemFontOfSize:11]; }
-static NSFont*  ITMonoFont()      { return [NSFont monospacedSystemFontOfSize:10 weight:NSFontWeightRegular]; }
 
 // Per-line VP colors (red, green, blue for VP1, VP2, VP3)
 static NSColor* ITVP1Color()     { return [NSColor colorWithRed:0.90 green:0.30 blue:0.30 alpha:1.0]; }
@@ -40,39 +31,15 @@ static const CGFloat kPadding     = 8.0;
 static const CGFloat kRowHeight   = 22.0;
 static const CGFloat kSliderH     = 18.0;
 
-//----------------------------------------------------------------------------------------
-//  Helpers
-//----------------------------------------------------------------------------------------
-
-static NSTextField* MakeLabel(NSString *text, NSFont *font, NSColor *color)
-{
-    NSTextField *label = [NSTextField labelWithString:text];
-    label.font = font;
-    label.textColor = color;
-    label.backgroundColor = [NSColor clearColor];
-    label.drawsBackground = NO;
-    label.bordered = NO;
-    label.editable = NO;
-    label.selectable = NO;
-    return label;
-}
-
-static NSButton* MakeButton(NSString *title, id target, SEL action)
-{
-    NSButton *btn = [NSButton buttonWithTitle:title target:target action:action];
-    btn.font = ITLabelFont();
-    btn.bezelStyle = NSBezelStyleSmallSquare;
-    return btn;
-}
 
 static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
 {
     NSButton *chk = [NSButton checkboxWithTitle:title target:target action:action];
-    chk.font = ITLabelFont();
+    chk.font = [IllToolTheme labelFont];
     // Dark theme text color for checkbox
     NSMutableAttributedString *attrTitle = [[NSMutableAttributedString alloc]
         initWithString:title
-        attributes:@{NSForegroundColorAttributeName: ITTextColor(), NSFontAttributeName: ITLabelFont()}];
+        attributes:@{NSForegroundColorAttributeName: [IllToolTheme textColor], NSFontAttributeName: [IllToolTheme labelFont]}];
     chk.attributedTitle = attrTitle;
     [attrTitle release];
     return chk;
@@ -115,6 +82,9 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
 @property (nonatomic, strong) NSButton *deleteGridButton;
 @property (nonatomic, strong) NSButton *autoMatchButton;
 @property (nonatomic, strong) NSButton *snapToggle;
+@property (nonatomic, strong) NSButton *adaptiveCannyToggle;
+@property (nonatomic, strong) NSButton *threePointToggle;
+@property (nonatomic, strong) NSButton *showVPLinesToggle;
 
 // Grid tab — status and VP readouts
 @property (nonatomic, strong) NSTextField *statusLabel;
@@ -199,24 +169,24 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     // Update status label
     if (locked && valid) {
         if (activeCount >= 3) {
-            self.statusLabel.stringValue = @"Locked \u2014 3-point";
+            self.statusLabel.stringValue = kITS_LockedThreePoint;
         } else {
-            self.statusLabel.stringValue = @"Locked \u2014 2-point";
+            self.statusLabel.stringValue = kITS_LockedTwoPoint;
         }
-        self.statusLabel.textColor = ITGreenColor();
+        self.statusLabel.textColor = [IllToolTheme greenColor];
     } else if (valid) {
         if (activeCount >= 3) {
-            self.statusLabel.stringValue = @"3-point perspective";
+            self.statusLabel.stringValue = kITS_ThreePointPersp;
         } else {
-            self.statusLabel.stringValue = @"2-point perspective";
+            self.statusLabel.stringValue = kITS_TwoPointPersp;
         }
-        self.statusLabel.textColor = ITAccentColor();
+        self.statusLabel.textColor = [IllToolTheme accentColor];
     } else if (activeCount > 0) {
-        self.statusLabel.stringValue = [NSString stringWithFormat:@"%d line(s) placed", activeCount];
-        self.statusLabel.textColor = ITDimColor();
+        self.statusLabel.stringValue = [NSString stringWithFormat:kITS_LinesPlaced, activeCount];
+        self.statusLabel.textColor = [IllToolTheme secondaryTextColor];
     } else {
-        self.statusLabel.stringValue = @"No grid";
-        self.statusLabel.textColor = ITDimColor();
+        self.statusLabel.stringValue = kITS_NoGrid;
+        self.statusLabel.textColor = [IllToolTheme secondaryTextColor];
     }
 
     // Update VP coordinate readouts
@@ -232,9 +202,9 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
 
     // Update Set Perspective button title based on state
     if (activeCount >= 2) {
-        self.setPerspectiveButton.title = @"Reset Perspective";
+        self.setPerspectiveButton.title = kITS_ResetPerspective;
     } else {
-        self.setPerspectiveButton.title = @"Set Perspective";
+        self.setPerspectiveButton.title = kITS_SetPerspective;
     }
 
     // Disable "Add Vertical" if VP3 is already placed or VP1/VP2 not yet placed
@@ -251,10 +221,10 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
         double mx = (line.h1x + line.h2x) * 0.5;
         double my = (line.h1y + line.h2y) * 0.5;
         label.stringValue = [NSString stringWithFormat:@"%@: (%.0f, %.0f)", prefix, mx, my];
-        label.textColor = ITTextColor();
+        label.textColor = [IllToolTheme textColor];
     } else {
-        label.stringValue = [NSString stringWithFormat:@"%@ \u2014 Not set", prefix];
-        label.textColor = ITDimColor();
+        label.stringValue = [NSString stringWithFormat:kITS_VPNotSet, prefix];
+        label.textColor = [IllToolTheme secondaryTextColor];
     }
 }
 
@@ -264,12 +234,12 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
 
 - (void)buildUI
 {
-    CGFloat totalHeight = 530.0;  // must match panel height in IllToolPanels.mm
+    CGFloat totalHeight = 610.0;  // must match panel height in IllToolPanels.mm
     // Flipped view: y=0 at top, content builds top-down. If panel is shorter,
     // bottom gets clipped (less important) rather than top (buttons).
     PerspFlippedView *root = [[PerspFlippedView alloc] initWithFrame:NSMakeRect(0, 0, kPanelWidth, totalHeight)];
     root.wantsLayer = YES;
-    root.layer.backgroundColor = ITBGColor().CGColor;
+    root.layer.backgroundColor = [IllToolTheme panelBackground].CGColor;
     root.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     self.rootViewInternal = root;
     [root release];
@@ -277,7 +247,7 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     CGFloat y = kPadding;
 
     // --- Bottom: [Snap to Perspective] ---
-    NSButton *snapChk = MakeCheckbox(@"Snap to Perspective", self, @selector(onSnapToggle:));
+    NSButton *snapChk = MakeCheckbox(kITS_SnapToPersp, self, @selector(onSnapToggle:));
     snapChk.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kRowHeight);
     snapChk.state = NSControlStateValueOn;
     [root addSubview:snapChk];
@@ -285,18 +255,18 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     y += (kRowHeight + 4);
 
     // --- Row: [Lock] [Show] [Delete Grid] ---
-    NSButton *lockChk = MakeCheckbox(@"Lock", self, @selector(onLockToggle:));
+    NSButton *lockChk = MakeCheckbox(kITS_Lock, self, @selector(onLockToggle:));
     lockChk.frame = NSMakeRect(kPadding, y, 52, kRowHeight);
     [root addSubview:lockChk];
     self.lockToggle = lockChk;
 
-    NSButton *showChk = MakeCheckbox(@"Show", self, @selector(onShowToggle:));
+    NSButton *showChk = MakeCheckbox(kITS_Show, self, @selector(onShowToggle:));
     showChk.frame = NSMakeRect(kPadding + 56, y, 52, kRowHeight);
     showChk.state = NSControlStateValueOn;
     [root addSubview:showChk];
     self.showToggle = showChk;
 
-    NSButton *delBtn = MakeButton(@"Delete Grid", self, @selector(onDeleteGrid:));
+    NSButton *delBtn = [IllToolTheme makeButtonWithTitle:kITS_DeleteGrid target:self action:@selector(onDeleteGrid:)];
     delBtn.frame = NSMakeRect(kPadding + 112, y, kPanelWidth - 2*kPadding - 112, kRowHeight);
     [root addSubview:delBtn];
     self.deleteGridButton = delBtn;
@@ -305,26 +275,45 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     // --- Row: [Set Perspective] [Add Vertical] ---
     CGFloat halfBtnW = (kPanelWidth - 2*kPadding - 4) / 2.0;
 
-    NSButton *setBtn = MakeButton(@"Set Perspective", self, @selector(onSetPerspective:));
+    NSButton *setBtn = [IllToolTheme makeButtonWithTitle:kITS_SetPerspective target:self action:@selector(onSetPerspective:)];
     setBtn.frame = NSMakeRect(kPadding, y, halfBtnW, kRowHeight);
     [root addSubview:setBtn];
     self.setPerspectiveButton = setBtn;
 
-    NSButton *addVertBtn = MakeButton(@"Add Vertical", self, @selector(onAddVertical:));
+    NSButton *addVertBtn = [IllToolTheme makeButtonWithTitle:kITS_AddVertical target:self action:@selector(onAddVertical:)];
     addVertBtn.frame = NSMakeRect(kPadding + halfBtnW + 4, y, halfBtnW, kRowHeight);
     [root addSubview:addVertBtn];
     self.addVerticalButton = addVertBtn;
     y += (kRowHeight + 4);
 
     // --- Row: [Auto Match] — detect VPs from placed reference image ---
-    NSButton *autoMatchBtn = MakeButton(@"Auto Match", self, @selector(onAutoMatch:));
+    NSButton *autoMatchBtn = [IllToolTheme makeButtonWithTitle:kITS_AutoMatch target:self action:@selector(onAutoMatch:)];
     autoMatchBtn.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kRowHeight);
     [root addSubview:autoMatchBtn];
     self.autoMatchButton = autoMatchBtn;
     y += (kRowHeight + kPadding);
 
+    // --- Auto-Match Settings ---
+    NSButton *adaptiveCannyChk = MakeCheckbox(kITS_AdaptiveCanny, self, @selector(onAdaptiveCannyToggle:));
+    adaptiveCannyChk.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kRowHeight);
+    [root addSubview:adaptiveCannyChk];
+    self.adaptiveCannyToggle = adaptiveCannyChk;
+    y += (kRowHeight + 4);
+
+    NSButton *threePointChk = MakeCheckbox(kITS_3PointPerspective, self, @selector(on3PointPerspectiveToggle:));
+    threePointChk.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kRowHeight);
+    [root addSubview:threePointChk];
+    self.threePointToggle = threePointChk;
+    y += (kRowHeight + 4);
+
+    NSButton *showVPLinesChk = MakeCheckbox(kITS_ShowVPLines, self, @selector(onShowVPLinesToggle:));
+    showVPLinesChk.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kRowHeight);
+    [root addSubview:showVPLinesChk];
+    self.showVPLinesToggle = showVPLinesChk;
+    y += (kRowHeight + kPadding);
+
     // --- Per-line color legend ---
-    NSTextField *colorTitle = MakeLabel(@"Line Colors:", ITLabelFont(), ITDimColor());
+    NSTextField *colorTitle = [IllToolTheme makeLabelWithText:kITS_LineColors font:[IllToolTheme labelFont] color:[IllToolTheme secondaryTextColor]];
     colorTitle.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, 14);
     [root addSubview:colorTitle];
     y += (14 + 4);
@@ -339,7 +328,7 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     [root addSubview:sw1];
     [sw1 release];
 
-    NSTextField *vp1Lbl = MakeLabel(@"VP1", ITMonoFont(), ITVP1Color());
+    NSTextField *vp1Lbl = [IllToolTheme makeLabelWithText:@"VP1" font:[IllToolTheme monoFont] color:ITVP1Color()];
     vp1Lbl.frame = NSMakeRect(kPadding + 14, y, colW - 14, 12);
     [root addSubview:vp1Lbl];
 
@@ -351,7 +340,7 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     [root addSubview:sw2];
     [sw2 release];
 
-    NSTextField *vp2Lbl = MakeLabel(@"VP2", ITMonoFont(), ITVP2Color());
+    NSTextField *vp2Lbl = [IllToolTheme makeLabelWithText:@"VP2" font:[IllToolTheme monoFont] color:ITVP2Color()];
     vp2Lbl.frame = NSMakeRect(kPadding + colW + 14, y, colW - 14, 12);
     [root addSubview:vp2Lbl];
 
@@ -363,14 +352,14 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     [root addSubview:sw3];
     [sw3 release];
 
-    NSTextField *vp3Lbl = MakeLabel(@"VP3", ITMonoFont(), ITVP3Color());
+    NSTextField *vp3Lbl = [IllToolTheme makeLabelWithText:@"VP3" font:[IllToolTheme monoFont] color:ITVP3Color()];
     vp3Lbl.frame = NSMakeRect(kPadding + 2*colW + 14, y, colW - 14, 12);
     [root addSubview:vp3Lbl];
 
     y += (12 + kPadding);
 
     // --- Tab Segment Control ---
-    NSArray *tabs = @[@"Grid", @"Mirror", @"Duplicate", @"Paste"];
+    NSArray *tabs = @[kITS_Grid, kITS_Mirror, kITS_Duplicate, kITS_Paste];
     NSSegmentedControl *seg = [NSSegmentedControl segmentedControlWithLabels:tabs
         trackingMode:NSSegmentSwitchTrackingSelectOne
         target:self action:@selector(onTabChanged:)];
@@ -426,37 +415,37 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     CGFloat y = kPadding;
 
     // --- Status label ---
-    NSTextField *status = MakeLabel(@"No grid", ITMonoFont(), ITDimColor());
+    NSTextField *status = [IllToolTheme makeLabelWithText:kITS_NoGrid font:[IllToolTheme monoFont] color:[IllToolTheme secondaryTextColor]];
     status.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, 14);
     [container addSubview:status];
     self.statusLabel = status;
     y += (14 + kPadding);
 
     // --- VP coordinate readouts (read-only) ---
-    NSTextField *vp1 = MakeLabel(@"VP1 \u2014 Not set", ITMonoFont(), ITDimColor());
+    NSTextField *vp1 = [IllToolTheme makeLabelWithText:[NSString stringWithFormat:kITS_VPNotSet, @"VP1"] font:[IllToolTheme monoFont] color:[IllToolTheme secondaryTextColor]];
     vp1.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, 14);
     [container addSubview:vp1];
     self.vp1CoordLabel = vp1;
     y += (14 + 2);
 
-    NSTextField *vp2 = MakeLabel(@"VP2 \u2014 Not set", ITMonoFont(), ITDimColor());
+    NSTextField *vp2 = [IllToolTheme makeLabelWithText:[NSString stringWithFormat:kITS_VPNotSet, @"VP2"] font:[IllToolTheme monoFont] color:[IllToolTheme secondaryTextColor]];
     vp2.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, 14);
     [container addSubview:vp2];
     self.vp2CoordLabel = vp2;
     y += (14 + 2);
 
-    NSTextField *vp3 = MakeLabel(@"VP3 \u2014 Not set", ITMonoFont(), ITDimColor());
+    NSTextField *vp3 = [IllToolTheme makeLabelWithText:[NSString stringWithFormat:kITS_VPNotSet, @"VP3"] font:[IllToolTheme monoFont] color:[IllToolTheme secondaryTextColor]];
     vp3.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, 14);
     [container addSubview:vp3];
     self.vp3CoordLabel = vp3;
     y += (14 + kPadding);
 
     // --- Horizon slider (0-100% of artboard height, 100=top) ---
-    NSTextField *horizLbl = MakeLabel(@"Horizon", ITLabelFont(), ITTextColor());
+    NSTextField *horizLbl = [IllToolTheme makeLabelWithText:kITS_Horizon font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
     horizLbl.frame = NSMakeRect(kPadding, y, 80, 14);
     [container addSubview:horizLbl];
 
-    NSTextField *horizVal = MakeLabel(@"33%", ITMonoFont(), ITAccentColor());
+    NSTextField *horizVal = [IllToolTheme makeLabelWithText:@"33%" font:[IllToolTheme monoFont] color:[IllToolTheme accentColor]];
     horizVal.frame = NSMakeRect(kPanelWidth - kPadding - 40, y, 40, 14);
     horizVal.alignment = NSTextAlignmentRight;
     [container addSubview:horizVal];
@@ -471,11 +460,11 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     y += (kSliderH + kPadding);
 
     // --- Grid density slider ---
-    NSTextField *densLbl = MakeLabel(@"Grid Density", ITLabelFont(), ITTextColor());
+    NSTextField *densLbl = [IllToolTheme makeLabelWithText:kITS_GridDensity font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
     densLbl.frame = NSMakeRect(kPadding, y, 100, 14);
     [container addSubview:densLbl];
 
-    NSTextField *densVal = MakeLabel(@"5", ITMonoFont(), ITAccentColor());
+    NSTextField *densVal = [IllToolTheme makeLabelWithText:@"5" font:[IllToolTheme monoFont] color:[IllToolTheme accentColor]];
     densVal.frame = NSMakeRect(kPanelWidth - kPadding - 30, y, 30, 14);
     densVal.alignment = NSTextAlignmentRight;
     [container addSubview:densVal];
@@ -497,15 +486,15 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     y += (1 + kPadding);
 
     // --- Preset section ---
-    NSTextField *presetLbl = MakeLabel(@"Preset", ITLabelFont(), ITTextColor());
+    NSTextField *presetLbl = [IllToolTheme makeLabelWithText:kITS_Preset font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
     presetLbl.frame = NSMakeRect(kPadding, y, 50, 14);
     [container addSubview:presetLbl];
     y += (14 + 4);
 
     // Preset name text field (editable)
     NSTextField *presetField = [[NSTextField alloc] initWithFrame:NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kRowHeight)];
-    presetField.font = ITMonoFont();
-    presetField.textColor = ITTextColor();
+    presetField.font = [IllToolTheme monoFont];
+    presetField.textColor = [IllToolTheme textColor];
     presetField.backgroundColor = [NSColor colorWithRed:0.15 green:0.15 blue:0.15 alpha:1.0];
     presetField.drawsBackground = YES;
     presetField.bordered = YES;
@@ -519,12 +508,12 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     // Save / Load buttons side by side
     CGFloat halfW = (kPanelWidth - 2*kPadding - 4) / 2.0;
 
-    NSButton *saveBtn = MakeButton(@"Save Preset", self, @selector(onPresetSave:));
+    NSButton *saveBtn = [IllToolTheme makeButtonWithTitle:kITS_SavePreset target:self action:@selector(onPresetSave:)];
     saveBtn.frame = NSMakeRect(kPadding, y, halfW, kRowHeight);
     [container addSubview:saveBtn];
     self.presetSaveButton = saveBtn;
 
-    NSButton *loadBtn = MakeButton(@"Load Preset", self, @selector(onPresetLoad:));
+    NSButton *loadBtn = [IllToolTheme makeButtonWithTitle:kITS_LoadPreset target:self action:@selector(onPresetLoad:)];
     loadBtn.frame = NSMakeRect(kPadding + halfW + 4, y, halfW, kRowHeight);
     [container addSubview:loadBtn];
     self.presetLoadButton = loadBtn;
@@ -538,7 +527,7 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     y += (1 + kPadding);
 
     // --- Clear Grid button ---
-    NSButton *clearBtn = MakeButton(@"Clear Grid", self, @selector(onClearGrid:));
+    NSButton *clearBtn = [IllToolTheme makeButtonWithTitle:kITS_ClearGrid target:self action:@selector(onClearGrid:)];
     clearBtn.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kRowHeight);
     [container addSubview:clearBtn];
 
@@ -555,12 +544,12 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     CGFloat y = kPadding;
 
     // --- Axis selector ---
-    NSTextField *axisLbl = MakeLabel(@"Axis:", ITLabelFont(), ITTextColor());
+    NSTextField *axisLbl = [IllToolTheme makeLabelWithText:kITS_Axis font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
     axisLbl.frame = NSMakeRect(kPadding, y, 40, 14);
     [container addSubview:axisLbl];
     y += (14 + 4);
 
-    NSArray *axisLabels = @[@"Vertical", @"Horizontal", @"Custom"];
+    NSArray *axisLabels = @[kITS_Vertical, kITS_Horizontal, kITS_Custom];
     NSSegmentedControl *axisSeg = [NSSegmentedControl segmentedControlWithLabels:axisLabels
         trackingMode:NSSegmentSwitchTrackingSelectOne
         target:self action:@selector(onMirrorAxisChanged:)];
@@ -572,20 +561,20 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     y += (kRowHeight + kPadding);
 
     // --- Options ---
-    NSButton *replaceChk = MakeCheckbox(@"Replace original (copy by default)", self, @selector(onMirrorOptionChanged:));
+    NSButton *replaceChk = MakeCheckbox(kITS_ReplaceOriginal, self, @selector(onMirrorOptionChanged:));
     replaceChk.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kRowHeight);
     [container addSubview:replaceChk];
     self.mirrorReplaceCheck = replaceChk;
     y += (kRowHeight + 2);
 
-    NSButton *previewChk = MakeCheckbox(@"Preview", self, @selector(onMirrorOptionChanged:));
+    NSButton *previewChk = MakeCheckbox(kITS_Preview, self, @selector(onMirrorOptionChanged:));
     previewChk.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kRowHeight);
     [container addSubview:previewChk];
     self.mirrorPreviewCheck = previewChk;
     y += (kRowHeight + kPadding);
 
     // --- Mirror button ---
-    NSButton *mirrorBtn = MakeButton(@"Mirror", self, @selector(onMirrorExecute:));
+    NSButton *mirrorBtn = [IllToolTheme makeButtonWithTitle:kITS_Mirror target:self action:@selector(onMirrorExecute:)];
     mirrorBtn.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kRowHeight);
     [container addSubview:mirrorBtn];
 
@@ -602,11 +591,11 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     CGFloat y = kPadding;
 
     // --- Count slider ---
-    NSTextField *countLbl = MakeLabel(@"Count:", ITLabelFont(), ITTextColor());
+    NSTextField *countLbl = [IllToolTheme makeLabelWithText:kITS_Count font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
     countLbl.frame = NSMakeRect(kPadding, y, 50, 14);
     [container addSubview:countLbl];
 
-    NSTextField *countVal = MakeLabel(@"3", ITMonoFont(), ITAccentColor());
+    NSTextField *countVal = [IllToolTheme makeLabelWithText:@"3" font:[IllToolTheme monoFont] color:[IllToolTheme accentColor]];
     countVal.frame = NSMakeRect(kPanelWidth - kPadding - 30, y, 30, 14);
     countVal.alignment = NSTextAlignmentRight;
     [container addSubview:countVal];
@@ -621,14 +610,14 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     y += (kSliderH + kPadding);
 
     // --- Spacing popup ---
-    NSTextField *spaceLbl = MakeLabel(@"Spacing:", ITLabelFont(), ITTextColor());
+    NSTextField *spaceLbl = [IllToolTheme makeLabelWithText:kITS_Spacing font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
     spaceLbl.frame = NSMakeRect(kPadding, y, 60, 14);
     [container addSubview:spaceLbl];
     y += (14 + 4);
 
     NSPopUpButton *popup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kRowHeight) pullsDown:NO];
-    [popup addItemsWithTitles:@[@"Equal in Perspective", @"Equal in Screen", @"Custom"]];
-    popup.font = ITLabelFont();
+    [popup addItemsWithTitles:@[kITS_EqualPersp, kITS_EqualScreen, kITS_Custom]];
+    popup.font = [IllToolTheme labelFont];
     popup.target = self;
     popup.action = @selector(onDupSpacingChanged:);
     [container addSubview:popup];
@@ -637,14 +626,14 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     y += (kRowHeight + kPadding);
 
     // --- Options ---
-    NSButton *previewChk = MakeCheckbox(@"Preview", self, @selector(onDupOptionChanged:));
+    NSButton *previewChk = MakeCheckbox(kITS_Preview, self, @selector(onDupOptionChanged:));
     previewChk.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kRowHeight);
     [container addSubview:previewChk];
     self.dupPreviewCheck = previewChk;
     y += (kRowHeight + kPadding);
 
     // --- Duplicate button ---
-    NSButton *dupBtn = MakeButton(@"Duplicate", self, @selector(onDuplicateExecute:));
+    NSButton *dupBtn = [IllToolTheme makeButtonWithTitle:kITS_Duplicate target:self action:@selector(onDuplicateExecute:)];
     dupBtn.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kRowHeight);
     [container addSubview:dupBtn];
 
@@ -661,12 +650,12 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     CGFloat y = kPadding;
 
     // --- Plane selector ---
-    NSTextField *planeLbl = MakeLabel(@"Plane:", ITLabelFont(), ITTextColor());
+    NSTextField *planeLbl = [IllToolTheme makeLabelWithText:kITS_Plane font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
     planeLbl.frame = NSMakeRect(kPadding, y, 50, 14);
     [container addSubview:planeLbl];
     y += (14 + 4);
 
-    NSArray *planeLabels = @[@"Floor", @"Left Wall", @"Right Wall", @"Custom"];
+    NSArray *planeLabels = @[kITS_Floor, kITS_LeftWall, kITS_RightWall, kITS_Custom];
     NSSegmentedControl *planeSeg = [NSSegmentedControl segmentedControlWithLabels:planeLabels
         trackingMode:NSSegmentSwitchTrackingSelectOne
         target:self action:@selector(onPastePlaneChanged:)];
@@ -678,11 +667,11 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     y += (kRowHeight + kPadding);
 
     // --- Scale slider ---
-    NSTextField *scaleLbl = MakeLabel(@"Scale:", ITLabelFont(), ITTextColor());
+    NSTextField *scaleLbl = [IllToolTheme makeLabelWithText:kITS_Scale font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
     scaleLbl.frame = NSMakeRect(kPadding, y, 50, 14);
     [container addSubview:scaleLbl];
 
-    NSTextField *scaleVal = MakeLabel(@"100%", ITMonoFont(), ITAccentColor());
+    NSTextField *scaleVal = [IllToolTheme makeLabelWithText:@"100%" font:[IllToolTheme monoFont] color:[IllToolTheme accentColor]];
     scaleVal.frame = NSMakeRect(kPanelWidth - kPadding - 45, y, 45, 14);
     scaleVal.alignment = NSTextAlignmentRight;
     [container addSubview:scaleVal];
@@ -697,7 +686,7 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     y += (kSliderH + kPadding * 2);
 
     // --- Paste in Perspective button ---
-    NSButton *pasteBtn = MakeButton(@"Paste in Perspective", self, @selector(onPasteExecute:));
+    NSButton *pasteBtn = [IllToolTheme makeButtonWithTitle:kITS_PasteInPersp target:self action:@selector(onPasteExecute:)];
     pasteBtn.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kRowHeight);
     [container addSubview:pasteBtn];
 
@@ -805,6 +794,27 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     bool snap = (sender.state == NSControlStateValueOn);
     BridgeSetSnapToPerspective(snap);
     fprintf(stderr, "[IllTool Panel] Snap to perspective: %s\n", snap ? "ON" : "OFF");
+}
+
+- (void)onAdaptiveCannyToggle:(NSButton *)sender
+{
+    bool enabled = (sender.state == NSControlStateValueOn);
+    BridgeSetAdaptiveCanny(enabled);
+    fprintf(stderr, "[IllTool Panel] Adaptive Canny: %s\n", enabled ? "ON" : "OFF");
+}
+
+- (void)on3PointPerspectiveToggle:(NSButton *)sender
+{
+    bool enabled = (sender.state == NSControlStateValueOn);
+    BridgeSet3PointPerspective(enabled);
+    fprintf(stderr, "[IllTool Panel] 3-Point Perspective: %s\n", enabled ? "ON" : "OFF");
+}
+
+- (void)onShowVPLinesToggle:(NSButton *)sender
+{
+    bool show = (sender.state == NSControlStateValueOn);
+    BridgeSetShowVPLines(show);
+    fprintf(stderr, "[IllTool Panel] Show VP Lines: %s\n", show ? "ON" : "OFF");
 }
 
 //----------------------------------------------------------------------------------------
@@ -952,14 +962,14 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
 - (void)updateGridStatus:(BOOL)valid vpCount:(int)count density:(int)density
 {
     if (!valid) {
-        self.statusLabel.stringValue = @"No grid";
-        self.statusLabel.textColor = ITDimColor();
+        self.statusLabel.stringValue = kITS_NoGrid;
+        self.statusLabel.textColor = [IllToolTheme secondaryTextColor];
     } else if (count >= 3) {
-        self.statusLabel.stringValue = @"3-point perspective";
-        self.statusLabel.textColor = ITAccentColor();
+        self.statusLabel.stringValue = kITS_ThreePointPersp;
+        self.statusLabel.textColor = [IllToolTheme accentColor];
     } else {
-        self.statusLabel.stringValue = @"2-point perspective";
-        self.statusLabel.textColor = ITAccentColor();
+        self.statusLabel.stringValue = kITS_TwoPointPersp;
+        self.statusLabel.textColor = [IllToolTheme accentColor];
     }
     self.densitySlider.integerValue = density;
     self.densityValueLabel.stringValue = [NSString stringWithFormat:@"%d", density];

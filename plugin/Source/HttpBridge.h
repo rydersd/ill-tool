@@ -12,6 +12,7 @@
 #define __HTTPBRIDGE_H__
 
 #include <string>
+#include <vector>
 #include <condition_variable>
 
 /** Start the HTTP bridge server on the given port.
@@ -110,7 +111,30 @@ enum class OpType : int {
     PenFinalize,             // create path from accumulated points
     PenCancel,               // discard current drawing
     PenSetChamfer,           // param1 = radius
-    PenUndo                  // remove last point
+    PenUndo,                 // remove last point
+    // Stage 19: Ill Layers
+    LayerScanTree,
+    LayerSetVisible,
+    LayerSetLocked,
+    LayerReorder,
+    LayerRename,
+    LayerCreate,
+    LayerDelete,
+    LayerMoveArt,
+    LayerAutoOrganize,
+    LayerPresetSave,
+    LayerPresetLoad,
+    LayerAutoAssign,
+    LayerLLMLookup,
+    LayerSelectNode,     // click-to-select: set current layer or select art
+    LayerGroupSelected,  // Cmd+G: group selected items
+    // Preprocess Preview — render preprocessing chain as annotator overlay
+    TracePreprocessPreview,  // generate preprocess preview PNG and show as overlay
+    // Stage 23: Symmetry Correction
+    SymmetryPreview,     // generate symmetry preview PNG for overlay
+    CommitSymmetry,      // commit symmetry correction to placed art
+    // Restore the prior tool after cutout preview is cleared/committed
+    RestorePriorTool
 };
 
 /** A queued operation with parameters. Pushed by panels/HTTP, popped by timer. */
@@ -451,6 +475,21 @@ float BridgeGetPasteScale();
 void BridgeSetSnapToPerspective(bool snap);
 bool BridgeGetSnapToPerspective();
 
+/** Adaptive Canny toggle — when true, VP estimation uses Otsu-derived thresholds
+    instead of fixed 50/150. Thread-safe. */
+void BridgeSetAdaptiveCanny(bool adaptive);
+bool BridgeGetAdaptiveCanny();
+
+/** Show detected Hough lines toggle — when true, overlay draws the lines that
+    contributed to each VP, color-coded by cluster. Thread-safe. */
+void BridgeSetShowVPLines(bool show);
+bool BridgeGetShowVPLines();
+
+/** 3-point perspective toggle — when true, auto-match will detect and place a
+    vertical VP (VP3) from near-vertical lines. Thread-safe. */
+void BridgeSet3PointPerspective(bool enable);
+bool BridgeGet3PointPerspective();
+
 /** Request mirror in perspective. Thread-safe. */
 void BridgeRequestMirrorPerspective(int axis, bool replace);
 
@@ -543,6 +582,59 @@ std::string BridgeGetTraceStatus();
 void BridgeSetTraceOutputMode(int mode);
 int  BridgeGetTraceOutputMode();
 
+/** Set/get trace length threshold (min path length to keep). Thread-safe. */
+void BridgeSetTraceLengthThresh(double val);
+double BridgeGetTraceLengthThresh();
+
+/** Set/get trace splice threshold in degrees (angle for joining paths). Thread-safe. */
+void BridgeSetTraceSpliceThresh(int val);
+int  BridgeGetTraceSpliceThresh();
+
+/** Set/get trace max iterations (curve fitting passes). Thread-safe. */
+void BridgeSetTraceMaxIter(int val);
+int  BridgeGetTraceMaxIter();
+
+/** Set/get trace layer difference (color difference for layer separation). Thread-safe. */
+void BridgeSetTraceLayerDiff(int val);
+int  BridgeGetTraceLayerDiff();
+
+/** Set/get Canny edge low threshold (centerline mode). Thread-safe. */
+void BridgeSetTraceCannyLow(double val);
+double BridgeGetTraceCannyLow();
+
+/** Set/get Canny edge high threshold (centerline mode). Thread-safe. */
+void BridgeSetTraceCannyHigh(double val);
+double BridgeGetTraceCannyHigh();
+
+/** Set/get normal map generation strength (centerline mode). Thread-safe. */
+void BridgeSetTraceNormalStrength(double val);
+double BridgeGetTraceNormalStrength();
+
+/** Set/get skeletonization brightness threshold (centerline mode). Thread-safe. */
+void BridgeSetTraceSkeletonThresh(int val);
+int  BridgeGetTraceSkeletonThresh();
+
+/** Set/get dilation kernel radius for centerline edge thickening. Thread-safe.
+    Kernel size = 2*radius+1, so radius=2 means 5x5 kernel. */
+void BridgeSetTraceDilationRadius(int val);
+int  BridgeGetTraceDilationRadius();
+
+/** Set/get K planes for normal-map surface clustering. Thread-safe. */
+void BridgeSetTraceKPlanes(int val);
+int  BridgeGetTraceKPlanes();
+
+/** Set/get pre-blur sigma for height-to-normal conversion. 0 = no blur. Thread-safe. */
+void BridgeSetTraceNormalBlur(double val);
+double BridgeGetTraceNormalBlur();
+
+/** Set/get k-means sampling stride for normal clustering. Thread-safe. */
+void BridgeSetTraceKMeansStride(int val);
+int  BridgeGetTraceKMeansStride();
+
+/** Set/get k-means max iterations for normal clustering. Thread-safe. */
+void BridgeSetTraceKMeansIter(int val);
+int  BridgeGetTraceKMeansIter();
+
 //----------------------------------------------------------------------------------------
 //  Surface extraction state (Stage 17) — click-to-extract mode
 //----------------------------------------------------------------------------------------
@@ -609,5 +701,188 @@ bool BridgeMcpPeekRequest(PluginOp& out);
 
 /** Clear the pending request after processing. Called from ProcessOperationQueue only. */
 void BridgeMcpClearRequest();
+
+//----------------------------------------------------------------------------------------
+//  Layer tree state (Stage 19)
+//----------------------------------------------------------------------------------------
+
+/** Set/get the layer tree JSON (written from SDK context, read by panel). Thread-safe. */
+void BridgeSetLayerTreeJSON(const std::string& json);
+std::string BridgeGetLayerTreeJSON();
+
+/** Set/get layer tree dirty flag. Thread-safe. */
+void BridgeSetLayerTreeDirty(bool dirty);
+bool BridgeGetLayerTreeDirty();
+
+/** Set/get layer target for GroupingModule integration. Thread-safe. */
+void BridgeSetLayerTarget(const std::string& layerName);
+std::string BridgeGetLayerTarget();
+
+/** Set/get layer auto-assign toggle. Thread-safe. */
+void BridgeSetLayerAutoAssign(bool enabled);
+bool BridgeGetLayerAutoAssign();
+
+/** Set/get layer suggestion text. Thread-safe. */
+void BridgeSetLayerSuggestion(const std::string& suggestion);
+std::string BridgeGetLayerSuggestion();
+
+//----------------------------------------------------------------------------------------
+//  Subject Cutout preview state (Stage 20) — non-destructive Vision framework cutout
+//----------------------------------------------------------------------------------------
+
+/** Set/get cutout preview active flag. Thread-safe. */
+void BridgeSetCutoutPreviewActive(bool active);
+bool BridgeGetCutoutPreviewActive();
+
+/** Set/get cutout preview path data (JSON array of {x,y} points in art coords).
+    Written by PreviewCutout(), read by DrawOverlay(). Thread-safe. */
+void BridgeSetCutoutPreviewPaths(const std::string& json);
+std::string BridgeGetCutoutPreviewPaths();
+
+/** Set/get cutout smoothness (vtracer speckle for outline tracing, 1-100). Thread-safe. */
+void BridgeSetCutoutSmoothness(int val);
+int  BridgeGetCutoutSmoothness();
+
+/** Set/get the number of detected cutout instances (0-16). Thread-safe. */
+void BridgeSetCutoutInstanceCount(int count);
+int  BridgeGetCutoutInstanceCount();
+
+/** Set/get per-instance selected state for add/subtract compositing. Thread-safe. */
+void BridgeSetCutoutInstanceSelected(int index, bool selected);
+bool BridgeGetCutoutInstanceSelected(int index);
+
+/** Set/get file path for a per-instance mask PNG. Thread-safe. */
+void BridgeSetCutoutInstanceMaskPath(int index, const std::string& path);
+std::string BridgeGetCutoutInstanceMaskPath(int index);
+
+//----------------------------------------------------------------------------------------
+//  Apple Contours state (VisionIntelligence contour detection params)
+//----------------------------------------------------------------------------------------
+
+/** Set/get contour contrast adjustment (0.0-3.0, default 1.5). Thread-safe. */
+void BridgeSetTraceContourContrast(double val);
+double BridgeGetTraceContourContrast();
+
+/** Set/get contour contrast pivot point (0.0-1.0, default 0.5). Thread-safe. */
+void BridgeSetTraceContourPivot(double val);
+double BridgeGetTraceContourPivot();
+
+/** Set/get contour dark-on-light detection mode (default true). Thread-safe. */
+void BridgeSetTraceContourDarkOnLight(bool val);
+bool BridgeGetTraceContourDarkOnLight();
+
+//----------------------------------------------------------------------------------------
+//  Pose Detection state (Stage 22) — body/face/hand pose overlay
+//----------------------------------------------------------------------------------------
+
+/** Set/get pose preview active flag. Thread-safe. */
+void BridgeSetPosePreviewActive(bool active);
+bool BridgeGetPosePreviewActive();
+
+/** Set/get pose preview JSON data (body joints + face points). Thread-safe. */
+void BridgeSetPosePreviewJSON(const std::string& json);
+std::string BridgeGetPosePreviewJSON();
+
+/** Set/get include-face-landmarks flag. Thread-safe. */
+void BridgeSetPoseIncludeFace(bool include);
+bool BridgeGetPoseIncludeFace();
+
+/** Set/get include-hand-pose flag. Thread-safe. */
+void BridgeSetPoseIncludeHands(bool include);
+bool BridgeGetPoseIncludeHands();
+
+//----------------------------------------------------------------------------------------
+//  Hardware capability flags (set once at startup, read by panels for UI gating)
+//----------------------------------------------------------------------------------------
+
+/** Set/get Neural Engine availability (Apple Silicon). Thread-safe. */
+void BridgeSetHasNeuralEngine(bool has);
+bool BridgeGetHasNeuralEngine();
+
+/** Set/get contour detection availability (macOS 11+). Thread-safe. */
+void BridgeSetHasContourDetection(bool has);
+bool BridgeGetHasContourDetection();
+
+/** Set/get instance segmentation availability (Apple Silicon required). Thread-safe. */
+void BridgeSetHasInstanceSegmentation(bool has);
+bool BridgeGetHasInstanceSegmentation();
+
+/** Set/get pose detection availability (macOS 11+). Thread-safe. */
+void BridgeSetHasPoseDetection(bool has);
+bool BridgeGetHasPoseDetection();
+
+//----------------------------------------------------------------------------------------
+//  Depth Layers state (ONNX Depth Anything V2) — depth decomposition parameters
+//----------------------------------------------------------------------------------------
+
+/** Set/get depth layer count (2-8, default 4). Thread-safe. */
+void BridgeSetDepthLayerCount(int count);
+int  BridgeGetDepthLayerCount();
+
+/** Set/get depth estimation availability (ONNX model loaded). Thread-safe. */
+void BridgeSetHasDepthEstimation(bool has);
+bool BridgeGetHasDepthEstimation();
+
+/** Set/get depth model selection (0=Depth Anything V2 relative, 1=Metric3D v2 metric). Thread-safe. */
+void BridgeSetDepthModel(int model);
+int  BridgeGetDepthModel();
+
+/** Set/get Metric3D v2 availability (ONNX model loaded). Thread-safe. */
+void BridgeSetHasMetricDepth(bool has);
+bool BridgeGetHasMetricDepth();
+
+/** Set/get cutout click threshold (brightness tolerance for flood fill). Thread-safe. */
+void BridgeSetCutoutClickThreshold(int val);
+int  BridgeGetCutoutClickThreshold();
+
+/** Request that the IllTool Handle tool be activated (for click routing). Thread-safe. */
+void BridgeRequestToolActivation();
+bool BridgeConsumeToolActivationRequest();
+
+/** Save/restore the prior tool number (before IllTool Handle auto-activation). Thread-safe.
+    Stores by number (not handle) because native tool handles may be NULL. */
+void BridgeSetPriorToolNumber(int toolNum);
+int  BridgeGetPriorToolNumber();
+
+//----------------------------------------------------------------------------------------
+//  Preprocess Preview state — stores preprocessed image data for annotator overlay
+//----------------------------------------------------------------------------------------
+
+/** Set/get preprocess preview PNG data (raw PNG bytes for annotator DrawPNGImage).
+    Written by GeneratePreprocessPreview(), read by DrawOverlay(). Thread-safe. */
+void BridgeSetPreprocessPreviewData(const std::vector<unsigned char>& data);
+std::vector<unsigned char> BridgeGetPreprocessPreviewData();
+
+/** Set/get preprocess preview active flag. Thread-safe. */
+void BridgeSetPreprocessPreviewActive(bool active);
+bool BridgeGetPreprocessPreviewActive();
+
+//----------------------------------------------------------------------------------------
+//  Symmetry Correction state (Stage 23) — midline axis + mirror side
+//----------------------------------------------------------------------------------------
+
+/** Set/get symmetry axis X position (0.0-1.0 normalized within image). Thread-safe. */
+void BridgeSetSymmetryAxisX(float normalizedX);
+float BridgeGetSymmetryAxisX();
+
+/** Set/get symmetry side selection (0=left is good, 1=right is good). Thread-safe. */
+void BridgeSetSymmetrySide(int side);
+int  BridgeGetSymmetrySide();
+
+/** Set/get symmetry blend width as percentage of image width (0.5-3.0). Thread-safe. */
+void BridgeSetSymmetryBlendPct(float pct);
+float BridgeGetSymmetryBlendPct();
+
+/** Set/get symmetry overlay active flag. Thread-safe. */
+void BridgeSetSymmetryActive(bool active);
+bool BridgeGetSymmetryActive();
+
+/** Set/get symmetry preview PNG path (written by async worker). Thread-safe. */
+void BridgeSetSymmetryPreviewPath(const std::string& path);
+std::string BridgeGetSymmetryPreviewPath();
+
+/** Set/get symmetry output PNG path (written by async worker). Thread-safe. */
+void BridgeSetSymmetryOutputPath(const std::string& path);
+std::string BridgeGetSymmetryOutputPath();
 
 #endif // __HTTPBRIDGE_H__

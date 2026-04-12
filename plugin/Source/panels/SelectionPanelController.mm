@@ -8,56 +8,16 @@
 //========================================================================================
 
 #import "SelectionPanelController.h"
+#import "IllToolTheme.h"
+#import "IllToolStrings.h"
 #include "IllToolPlugin.h"
 #include "HttpBridge.h"
 #import <cstdio>
-
-//----------------------------------------------------------------------------------------
-//  Dark theme constants matching Illustrator
-//----------------------------------------------------------------------------------------
-
-static NSColor* ITBGColor()       { return [NSColor colorWithRed:0.20 green:0.20 blue:0.20 alpha:1.0]; }
-static NSColor* ITTextColor()     { return [NSColor colorWithRed:0.85 green:0.85 blue:0.85 alpha:1.0]; }
-static NSColor* ITAccentColor()   { return [NSColor colorWithRed:0.48 green:0.72 blue:0.94 alpha:1.0]; }
-static NSColor* ITDimColor()      { return [NSColor colorWithRed:0.55 green:0.55 blue:0.55 alpha:1.0]; }
-static NSFont*  ITLabelFont()     { return [NSFont systemFontOfSize:11]; }
-static NSFont*  ITMonoFont()      { return [NSFont monospacedSystemFontOfSize:10 weight:NSFontWeightRegular]; }
 
 static const CGFloat kPanelWidth  = 240.0;
 static const CGFloat kPadding     = 8.0;
 static const CGFloat kRowHeight   = 22.0;
 static const CGFloat kSliderH     = 18.0;
-
-//----------------------------------------------------------------------------------------
-//  Helper: create a styled label
-//----------------------------------------------------------------------------------------
-
-static NSTextField* MakeLabel(NSString *text, NSFont *font, NSColor *color)
-{
-    NSTextField *label = [NSTextField labelWithString:text];
-    label.font = font;
-    label.textColor = color;
-    label.backgroundColor = [NSColor clearColor];
-    label.drawsBackground = NO;
-    label.bordered = NO;
-    label.editable = NO;
-    label.selectable = NO;
-    label.translatesAutoresizingMaskIntoConstraints = NO;
-    return label;
-}
-
-//----------------------------------------------------------------------------------------
-//  Helper: create a styled button
-//----------------------------------------------------------------------------------------
-
-static NSButton* MakeButton(NSString *title, id target, SEL action)
-{
-    NSButton *btn = [NSButton buttonWithTitle:title target:target action:action];
-    btn.font = ITLabelFont();
-    btn.bezelStyle = NSBezelStyleSmallSquare;
-    btn.translatesAutoresizingMaskIntoConstraints = NO;
-    return btn;
-}
 
 //----------------------------------------------------------------------------------------
 //  Helper: create a styled checkbox
@@ -66,12 +26,12 @@ static NSButton* MakeButton(NSString *title, id target, SEL action)
 static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
 {
     NSButton *cb = [NSButton checkboxWithTitle:title target:target action:action];
-    cb.font = ITLabelFont();
+    cb.font = [IllToolTheme labelFont];
     // Checkboxes inherit the cell's text color
     NSMutableAttributedString *attrTitle = [[NSMutableAttributedString alloc] initWithString:title];
-    [attrTitle addAttribute:NSForegroundColorAttributeName value:ITTextColor()
+    [attrTitle addAttribute:NSForegroundColorAttributeName value:[IllToolTheme textColor]
                       range:NSMakeRange(0, title.length)];
-    [attrTitle addAttribute:NSFontAttributeName value:ITLabelFont()
+    [attrTitle addAttribute:NSFontAttributeName value:[IllToolTheme labelFont]
                       range:NSMakeRange(0, title.length)];
     cb.attributedTitle = attrTitle;
     [attrTitle release];
@@ -171,7 +131,7 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     CGFloat totalHeight = 260.0;
     NSView *root = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, kPanelWidth, totalHeight)];
     root.wantsLayer = YES;
-    root.layer.backgroundColor = ITBGColor().CGColor;
+    root.layer.backgroundColor = [IllToolTheme panelBackground].CGColor;
     root.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     self.rootViewInternal = root;
     [root release];  // P2: balance alloc — strong property retains
@@ -179,27 +139,27 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     CGFloat y = totalHeight - kPadding;
 
     // --- Title ---
-    NSTextField *title = MakeLabel(@"Selection Tools", [NSFont boldSystemFontOfSize:12], ITTextColor());
+    NSTextField *title = [IllToolTheme makeLabelWithText:kITS_SelectionTools font:[IllToolTheme titleFont] color:[IllToolTheme textColor]];
     title.frame = NSMakeRect(kPadding, y - 16, kPanelWidth - 2*kPadding, 16);
     title.autoresizingMask = NSViewWidthSizable;
     [root addSubview:title];
     y -= 24;
 
     // --- Segmented control: Lasso | Smart ---
-    NSSegmentedControl *seg = [NSSegmentedControl segmentedControlWithLabels:@[@"Lasso", @"Smart"]
+    NSSegmentedControl *seg = [NSSegmentedControl segmentedControlWithLabels:@[kITS_Lasso, kITS_Smart]
                                 trackingMode:NSSegmentSwitchTrackingSelectOne
                                       target:self
                                       action:@selector(onModeChanged:)];
     seg.frame = NSMakeRect(kPadding, y - kRowHeight, kPanelWidth - 2*kPadding, kRowHeight);
     seg.selectedSegment = 0;
     seg.autoresizingMask = NSViewWidthSizable;
-    seg.font = ITLabelFont();
+    seg.font = [IllToolTheme labelFont];
     [root addSubview:seg];
     self.modeSegment = seg;
     y -= (kRowHeight + kPadding);
 
     // --- Status label ---
-    NSTextField *status = MakeLabel(@"Click to place points, Enter or double-click to select", ITLabelFont(), ITDimColor());
+    NSTextField *status = [IllToolTheme makeLabelWithText:kITS_LassoHelp font:[IllToolTheme labelFont] color:[IllToolTheme secondaryTextColor]];
     status.frame = NSMakeRect(kPadding, y - 28, kPanelWidth - 2*kPadding, 28);
     status.maximumNumberOfLines = 2;
     status.lineBreakMode = NSLineBreakByWordWrapping;
@@ -209,20 +169,20 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     y -= (28 + kPadding);
 
     // --- Clear button ---
-    NSButton *clearBtn = MakeButton(@"Clear", self, @selector(onClear:));
+    NSButton *clearBtn = [IllToolTheme makeButtonWithTitle:kITS_Clear target:self action:@selector(onClear:)];
     clearBtn.frame = NSMakeRect(kPadding, y - kRowHeight, 80, kRowHeight);
     [root addSubview:clearBtn];
     y -= (kRowHeight + kPadding);
 
     // --- Add to Selection checkbox ---
-    NSButton *addCB = MakeCheckbox(@"Add to Selection", self, @selector(onAddToSelection:));
+    NSButton *addCB = MakeCheckbox(kITS_AddToSelection, self, @selector(onAddToSelection:));
     addCB.frame = NSMakeRect(kPadding, y - kRowHeight, kPanelWidth - 2*kPadding, kRowHeight);
     [root addSubview:addCB];
     self.addToSelectionCheckbox = addCB;
     y -= (kRowHeight + kPadding);
 
     // --- Selection count ---
-    NSTextField *countLbl = MakeLabel(@"0 anchors selected", ITMonoFont(), ITAccentColor());
+    NSTextField *countLbl = [IllToolTheme makeLabelWithText:[NSString stringWithFormat:kITS_AnchorsSelected, 0] font:[IllToolTheme monoFont] color:[IllToolTheme accentColor]];
     countLbl.frame = NSMakeRect(kPadding, y - 16, kPanelWidth - 2*kPadding, 16);
     countLbl.autoresizingMask = NSViewWidthSizable;
     [root addSubview:countLbl];
@@ -237,12 +197,12 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     y -= (1 + kPadding);
 
     // --- Threshold slider (Smart mode only) ---
-    NSTextField *threshLbl = MakeLabel(@"Similarity Threshold", ITLabelFont(), ITTextColor());
+    NSTextField *threshLbl = [IllToolTheme makeLabelWithText:kITS_SimilarityThresh font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
     threshLbl.frame = NSMakeRect(kPadding, y - 14, 140, 14);
     [root addSubview:threshLbl];
     self.thresholdLabel = threshLbl;
 
-    NSTextField *threshVal = MakeLabel(@"50", ITMonoFont(), ITAccentColor());
+    NSTextField *threshVal = [IllToolTheme makeLabelWithText:@"50" font:[IllToolTheme monoFont] color:[IllToolTheme accentColor]];
     threshVal.frame = NSMakeRect(kPanelWidth - kPadding - 30, y - 14, 30, 14);
     threshVal.alignment = NSTextAlignmentRight;
     [root addSubview:threshVal];
@@ -271,13 +231,13 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
         // Lasso mode
         fprintf(stderr, "[IllTool Panel] Selection mode -> Lasso\n");
         BridgeSetToolMode((BridgeToolMode)0);  // BridgeToolMode::Lasso == 0
-        [self updateStatusText:@"Click to place points, Enter or double-click to select"];
+        [self updateStatusText:kITS_LassoHelp];
         [self updateSmartModeVisible:NO];
     } else {
         // Smart mode
         fprintf(stderr, "[IllTool Panel] Selection mode -> Smart\n");
         BridgeSetToolMode((BridgeToolMode)1);  // BridgeToolMode::Smart == 1
-        [self updateStatusText:@"Click a path to select related"];
+        [self updateStatusText:kITS_SmartHelp];
         [self updateSmartModeVisible:YES];
     }
 }
@@ -331,11 +291,11 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     self.lastPolledCount = count;
 
     self.selectionCount = count;
-    self.countLabel.stringValue = [NSString stringWithFormat:@"%d anchors selected", count];
+    self.countLabel.stringValue = [NSString stringWithFormat:kITS_AnchorsSelected, count];
     if (count > 0) {
-        self.countLabel.textColor = ITAccentColor();
+        self.countLabel.textColor = [IllToolTheme accentColor];
     } else {
-        self.countLabel.textColor = ITDimColor();
+        self.countLabel.textColor = [IllToolTheme secondaryTextColor];
     }
 }
 
@@ -347,7 +307,7 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
 {
     self.selectionCount = count;
     self.lastPolledCount = (int)count;  // sync polling cache with manual updates
-    self.countLabel.stringValue = [NSString stringWithFormat:@"%ld anchors selected", (long)count];
+    self.countLabel.stringValue = [NSString stringWithFormat:kITS_AnchorsSelected, (int)count];
 }
 
 - (void)updateStatusText:(NSString *)text

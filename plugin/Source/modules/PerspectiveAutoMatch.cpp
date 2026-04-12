@@ -104,26 +104,58 @@ void PerspectiveModule::AutoMatchPerspective()
         (double)artBounds.left, (double)artBounds.top,
         (double)artBounds.right, (double)artBounds.bottom);
 
-    // --- Estimate vanishing points using dual approach ---
-    // Method 1: Hough line convergence (traditional)
-    auto houghVPs = ve.EstimateVanishingPoints(2, 50.0, 150.0, 30);
+    // --- Cache coordinate mapping for VP lines overlay ---
+    fAutoMatchArtBounds = artBounds;
+    fAutoMatchImgW = imgW;
+    fAutoMatchImgH = imgH;
 
-    // Method 2: Normal direction clustering (surface-aware)
+    // --- Estimate vanishing points using multi-method approach ---
+    // Method 1: Hough line convergence (traditional)
+    // Request up to 3 VPs so the vertical VP pass can append a 3rd result.
+    bool adaptiveCanny = BridgeGetAdaptiveCanny();
+    bool threePoint = BridgeGet3PointPerspective();
+    auto houghVPs = ve.EstimateVanishingPoints(threePoint ? 3 : 2, 50.0, 150.0, 30, adaptiveCanny);
+
+    // Method 2: Normal direction clustering (surface-aware, gradient-only)
     auto normalVPs = ve.EstimateVPsFromNormals(2);
 
-    // Method 3: Surface type analysis for confidence weighting
+    // Method 3: ML-guided VP estimation (Metric3D normals + line intersection)
+    // Only available when depth model is Metric3D (model==1) and loaded
+    std::vector<VisionEngine::VanishingPointEstimate> mlVPs;
+    if (BridgeGetDepthModel() == 1 && BridgeGetHasMetricDepth()) {
+        mlVPs = ve.EstimateVPsFromMLNormals(pathCStr.c_str(), 2);
+        fprintf(stderr, "[IllTool PerspModule] ML normals found %d VPs\n", (int)mlVPs.size());
+    }
+
+    // Method 4: Surface type analysis for confidence weighting
     auto surfaceHint = ve.InferSurfaceType(0, 0, imgW, imgH);
     fprintf(stderr, "[IllTool PerspModule] AutoMatchPerspective: surface=%d conf=%.2f angle=%.1f°\n",
             (int)surfaceHint.type, surfaceHint.confidence,
             surfaceHint.gradientAngle * 180.0 / M_PI);
-    fprintf(stderr, "[IllTool PerspModule] AutoMatchPerspective: Hough found %d VPs, Normals found %d VPs\n",
-            (int)houghVPs.size(), (int)normalVPs.size());
+    fprintf(stderr, "[IllTool PerspModule] AutoMatchPerspective: Hough=%d Normal=%d ML=%d VPs\n",
+            (int)houghVPs.size(), (int)normalVPs.size(), (int)mlVPs.size());
 
-    // Combine: prefer Hough VPs (more precise position), but use normal VPs as fallback
-    // or to validate Hough results. Weight by surface confidence.
+    // Combine: ML VPs are preferred (plane-segmented line intersection is most accurate),
+    // then Hough, then gradient-only normals as fallback.
     std::vector<VisionEngine::VanishingPointEstimate> vps;
 
-    if (houghVPs.size() >= 2) {
+    if (mlVPs.size() >= 2) {
+        // ML normals gave good results — use them, boost if Hough agrees
+        vps = mlVPs;
+        for (auto& vp : vps) {
+            for (auto& hvp : houghVPs) {
+                double angleDiff = std::abs(vp.dominantAngle - hvp.dominantAngle);
+                if (angleDiff > M_PI) angleDiff = 2.0 * M_PI - angleDiff;
+                if (angleDiff < M_PI / 12.0) {
+                    vp.confidence = std::min(1.0, vp.confidence * 1.3);
+                    fprintf(stderr, "[IllTool PerspModule] ML VP angle %.1f° confirmed by Hough (boosted)\n",
+                            vp.dominantAngle * 180.0 / M_PI);
+                    break;
+                }
+            }
+        }
+        fprintf(stderr, "[IllTool PerspModule] Using ML-normals VPs (preferred)\n");
+    } else if (houghVPs.size() >= 2) {
         // Hough found enough — use them, boost confidence if normals agree
         vps = houghVPs;
         for (auto& vp : vps) {
@@ -139,18 +171,23 @@ void PerspectiveModule::AutoMatchPerspective()
                 }
             }
         }
+    } else if (mlVPs.size() == 1 && houghVPs.size() >= 1) {
+        // Combine: best ML VP + best Hough VP
+        vps.push_back(mlVPs[0]);
+        vps.push_back(houghVPs[0]);
+        fprintf(stderr, "[IllTool PerspModule] Combining 1 ML + 1 Hough VP\n");
     } else if (normalVPs.size() >= 2) {
-        // Hough failed but normals found planes — use normal-derived VPs
+        // Hough and ML both failed — use gradient-derived VPs
         vps = normalVPs;
-        fprintf(stderr, "[IllTool PerspModule] Using normal-derived VPs (Hough insufficient)\n");
+        fprintf(stderr, "[IllTool PerspModule] Using normal-derived VPs (Hough+ML insufficient)\n");
     } else if (houghVPs.size() == 1 && normalVPs.size() >= 1) {
         // Combine: one from each
         vps.push_back(houghVPs[0]);
         vps.push_back(normalVPs[0]);
         fprintf(stderr, "[IllTool PerspModule] Combining 1 Hough + 1 Normal VP\n");
     } else {
-        fprintf(stderr, "[IllTool PerspModule] AutoMatchPerspective: insufficient VPs (Hough=%d Normal=%d)\n",
-                (int)houghVPs.size(), (int)normalVPs.size());
+        fprintf(stderr, "[IllTool PerspModule] AutoMatchPerspective: insufficient VPs (Hough=%d Normal=%d ML=%d)\n",
+                (int)houghVPs.size(), (int)normalVPs.size(), (int)mlVPs.size());
         return;
     }
 
@@ -158,6 +195,46 @@ void PerspectiveModule::AutoMatchPerspective()
         fprintf(stderr, "[IllTool PerspModule] AutoMatchPerspective: only %d VP(s) after combining, need 2\n",
                 (int)vps.size());
         return;
+    }
+
+    // --- Capture detected Hough lines for confidence overlay ---
+    // Always capture lines so the toggle can be enabled after auto-match.
+    fDetectedLines.clear();
+    {
+        // Re-run Canny + Hough to get the raw lines (lightweight, image already loaded)
+        auto edges = ve.CannyEdges(adaptiveCanny ? 30.0 : 50.0,
+                                   adaptiveCanny ? 90.0 : 150.0);
+        auto rawLines = ve.DetectLines(edges, 1.0, M_PI / 180.0, 30);
+
+        // Cap to top 200 by vote count (already sorted descending)
+        if (rawLines.size() > 200) rawLines.resize(200);
+
+        // Assign each line to nearest VP cluster by comparing theta to VP dominant angles
+        for (auto& hl : rawLines) {
+            DetectedLine dl;
+            dl.rho   = hl.rho;
+            dl.theta = hl.theta;
+            dl.votes = hl.votes;
+            dl.cluster = -1;
+
+            // Find closest VP by angle difference
+            double bestDiff = 1e20;
+            for (int vi = 0; vi < (int)vps.size() && vi < 3; vi++) {
+                double diff = std::abs(hl.theta - vps[vi].dominantAngle);
+                if (diff > M_PI * 0.5) diff = M_PI - diff;  // wrap around
+                if (diff < bestDiff) {
+                    bestDiff = diff;
+                    dl.cluster = vi;
+                }
+            }
+
+            // Only include lines within 15 degrees of a VP cluster
+            if (bestDiff < M_PI / 12.0) {
+                fDetectedLines.push_back(dl);
+            }
+        }
+        fprintf(stderr, "[IllTool PerspModule] AutoMatchPerspective: captured %d lines for VP overlay\n",
+                (int)fDetectedLines.size());
     }
 
     // --- Convert VP pixel coordinates to artwork coordinates ---
@@ -251,6 +328,36 @@ void PerspectiveModule::AutoMatchPerspective()
             fGrid.horizonY);
     fprintf(stderr, "[IllTool PerspModule] AutoMatchPerspective: VP1 conf=%.2f (%d lines), VP2 conf=%.2f (%d lines)\n",
             vps[0].confidence, vps[0].lineCount, vps[1].confidence, vps[1].lineCount);
+
+    // --- 3-point perspective: place vertical VP if detected and enabled ---
+    if (threePoint && vps.size() >= 3 && !fGrid.verticalVP.active) {
+        double vp3ArtX, vp3ArtY;
+        pixToArt(vps[2].x, vps[2].y, vp3ArtX, vp3ArtY);
+
+        // VP3 handle: vertical line from center toward the vertical VP
+        double dir3X = vp3ArtX - centerArtX;
+        double dir3Y = vp3ArtY - centerArtY;
+        double len3 = std::sqrt(dir3X * dir3X + dir3Y * dir3Y);
+        if (len3 > 1e-6) {
+            double h2_3x = centerArtX + dir3X * 0.3;
+            double h2_3y = centerArtY + dir3Y * 0.3;
+
+            fGrid.verticalVP.handle1.h = (AIReal)centerArtX;
+            fGrid.verticalVP.handle1.v = (AIReal)centerArtY;
+            fGrid.verticalVP.handle2.h = (AIReal)h2_3x;
+            fGrid.verticalVP.handle2.v = (AIReal)h2_3y;
+            fGrid.verticalVP.active = true;
+            BridgeSetPerspectiveLine(2, centerArtX, centerArtY, h2_3x, h2_3y);
+
+            fGrid.Recompute();
+            InvalidateFullView();
+
+            fprintf(stderr, "[IllTool PerspModule] AutoMatchPerspective: VP3 (vertical) at art=(%.1f, %.1f) conf=%.2f lines=%d\n",
+                    vp3ArtX, vp3ArtY, vps[2].confidence, vps[2].lineCount);
+        } else {
+            fprintf(stderr, "[IllTool PerspModule] AutoMatchPerspective: VP3 too close to center, skipped\n");
+        }
+    }
 }
 
 //========================================================================================

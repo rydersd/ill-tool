@@ -14,6 +14,7 @@
 #include "CleanupModule.h"
 #include "IllToolPlugin.h"
 #include "IllToolSuites.h"
+#include "IllToolTokens.h"
 #include "ShapeUtils.h"
 #include "PerspectiveModule.h"
 #include "LearningEngine.h"

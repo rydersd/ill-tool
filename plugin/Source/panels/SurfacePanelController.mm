@@ -8,13 +8,12 @@
 //========================================================================================
 
 #import "SurfacePanelController.h"
+#import "IllToolTheme.h"
+#import "IllToolStrings.h"
 #include "IllToolPlugin.h"
 #import "HttpBridge.h"
 #import <cstdio>
 
-// Theme constants and helpers inherited from TransformPanelController.mm
-// (compiled in same translation unit via IllToolPanels.mm includes)
-static NSColor* ITGreenColor()    { return [NSColor colorWithRed:0.40 green:0.80 blue:0.40 alpha:1.0]; }
 // kSliderH defined in TracePanelController.mm (same translation unit)
 
 //========================================================================================
@@ -58,30 +57,30 @@ static NSColor* ITGreenColor()    { return [NSColor colorWithRed:0.40 green:0.80
     SurfaceFlippedView *root = [[SurfaceFlippedView alloc] initWithFrame:
                                 NSMakeRect(0, 0, kPanelWidth, 240)];
     root.wantsLayer = YES;
-    root.layer.backgroundColor = ITBGColor().CGColor;
+    root.layer.backgroundColor = [IllToolTheme panelBackground].CGColor;
 
     // Section title
-    NSTextField *title = MakeLabel(@"Surface Extraction", ITLabelFont(), ITAccentColor());
+    NSTextField *title = [IllToolTheme makeLabelWithText:kITS_SurfaceExtraction font:[IllToolTheme labelFont] color:[IllToolTheme accentColor]];
     title.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kRowHeight);
     title.font = [NSFont boldSystemFontOfSize:12];
     [root addSubview:title];
     y += kRowHeight + 4;
 
     // Extract mode toggle button
-    self.extractToggle = [NSButton checkboxWithTitle:@"Click-to-Extract Mode"
+    self.extractToggle = [NSButton checkboxWithTitle:kITS_ClickToExtract
                                              target:self
                                              action:@selector(extractToggled:)];
     self.extractToggle.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kRowHeight);
-    [self.extractToggle setFont:ITLabelFont()];
+    [self.extractToggle setFont:[IllToolTheme labelFont]];
     [root addSubview:self.extractToggle];
     y += kRowHeight + 8;
 
     // Sensitivity slider
-    NSTextField *sensTitleLabel = MakeLabel(@"Sensitivity:", ITLabelFont(), ITTextColor());
+    NSTextField *sensTitleLabel = [IllToolTheme makeLabelWithText:kITS_SensitivityLabel font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
     sensTitleLabel.frame = NSMakeRect(kPadding, y, 80, kRowHeight);
     [root addSubview:sensTitleLabel];
 
-    self.sensitivityLabel = MakeLabel(@"50%", ITLabelFont(), ITDimColor());
+    self.sensitivityLabel = [IllToolTheme makeLabelWithText:@"50%" font:[IllToolTheme labelFont] color:[IllToolTheme secondaryTextColor]];
     self.sensitivityLabel.frame = NSMakeRect(kPanelWidth - kPadding - 40, y, 40, kRowHeight);
     self.sensitivityLabel.alignment = NSTextAlignmentRight;
     [root addSubview:self.sensitivityLabel];
@@ -98,13 +97,13 @@ static NSColor* ITGreenColor()    { return [NSColor colorWithRed:0.40 green:0.80
     y += kSliderH + 12;
 
     // Surface type display
-    self.surfaceTypeLabel = MakeLabel(@"Surface: ---", ITLabelFont(), ITGreenColor());
+    self.surfaceTypeLabel = [IllToolTheme makeLabelWithText:kITS_SurfaceDefault font:[IllToolTheme labelFont] color:[IllToolTheme greenColor]];
     self.surfaceTypeLabel.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kRowHeight);
     [root addSubview:self.surfaceTypeLabel];
     y += kRowHeight + 4;
 
     // Status label
-    self.statusLabel = MakeLabel(@"Enable extract mode, then click on reference", ITLabelFont(), ITDimColor());
+    self.statusLabel = [IllToolTheme makeLabelWithText:kITS_SurfaceExtractHelp font:[IllToolTheme labelFont] color:[IllToolTheme secondaryTextColor]];
     self.statusLabel.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kRowHeight * 2);
     self.statusLabel.maximumNumberOfLines = 2;
     [root addSubview:self.statusLabel];

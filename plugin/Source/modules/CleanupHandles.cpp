@@ -607,13 +607,10 @@ void CleanupModule::DrawBoundingBoxOverlay(AIAnnotatorMessage* message)
     edgeColor.green = (ai::uint16)(0.70 * 65535);
     edgeColor.blue  = (ai::uint16)(0.85 * 65535);
 
-    AIRGBColor handleFill;
-    handleFill.red   = (ai::uint16)(1.0 * 65535);
-    handleFill.green = (ai::uint16)(1.0 * 65535);
-    handleFill.blue  = (ai::uint16)(1.0 * 65535);
+    AIRGBColor handleFill    = ITK_COLOR_HANDLE_FILL();
+    AIRGBColor handleStroke  = edgeColor;
 
-    AIRGBColor handleStroke = edgeColor;
-
+    // Active = orange, Hover = light blue (keeping existing visual appearance)
     AIRGBColor activeHandleFill;
     activeHandleFill.red   = (ai::uint16)(1.0 * 65535);
     activeHandleFill.green = (ai::uint16)(0.6 * 65535);
@@ -856,11 +853,8 @@ void CleanupModule::DrawPathAnchorHandles(AIAnnotatorMessage* message)
     err = sAIPath->GetPathSegments(fPreviewPath, 0, segCount, segs.data());
     if (err != kNoErr) return;
 
-    // Handle colors — same stroke as bbox, white fill (active = orange)
-    AIRGBColor handleFill;
-    handleFill.red   = (ai::uint16)(1.0 * 65535);
-    handleFill.green = (ai::uint16)(1.0 * 65535);
-    handleFill.blue  = (ai::uint16)(1.0 * 65535);
+    // Handle colors — white fill, dark stroke (active = orange)
+    AIRGBColor handleFill    = ITK_COLOR_HANDLE_FILL();
 
     AIRGBColor handleStroke;
     handleStroke.red   = (ai::uint16)(0.15 * 65535);
@@ -877,7 +871,7 @@ void CleanupModule::DrawPathAnchorHandles(AIAnnotatorMessage* message)
     handleLineColor.green = (ai::uint16)(0.5 * 65535);
     handleLineColor.blue  = (ai::uint16)(0.5 * 65535);
 
-    int handleSize = 5;  // half-size of square — matches bbox circle radius
+    int handleSize = (int)ITK_SIZE_ANCHOR;  // half-size of square — matches bbox circle radius
 
     sAIAnnotatorDrawer->SetOpacity(drawer, 0.9);
     sAIAnnotatorDrawer->SetLineWidth(drawer, 1.0);

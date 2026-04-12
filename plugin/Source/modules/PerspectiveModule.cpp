@@ -17,6 +17,7 @@
 #include "CleanupModule.h"
 #include "IllToolPlugin.h"
 #include "IllToolSuites.h"
+#include "IllToolTokens.h"
 #include "HttpBridge.h"
 #include "VisionEngine.h"
 
@@ -611,6 +612,7 @@ void PerspectiveModule::ClearGrid()
     BridgeSetPerspectiveLocked(false);
     fNextLineIndex = 0;
     fPlacementMode = false;
+    fDetectedLines.clear();
     fprintf(stderr, "[IllTool PerspModule] Grid cleared\n");
     InvalidateFullView();
 }

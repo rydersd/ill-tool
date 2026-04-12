@@ -419,9 +419,7 @@ static void DrawHandleCircle(AIAnnotatorDrawer* drawer, AIPoint center, int radi
     r.bottom = center.v + radius;
 
     // White fill + colored outline — matches cleanup bbox handle style
-    AIRGBColor white;
-    white.red = white.green = white.blue = 65535;
-    sAIAnnotatorDrawer->SetColor(drawer, white);
+    sAIAnnotatorDrawer->SetColor(drawer, ITK_COLOR_HANDLE_FILL());
     sAIAnnotatorDrawer->DrawEllipse(drawer, r, true);
     sAIAnnotatorDrawer->SetColor(drawer, color);
     sAIAnnotatorDrawer->SetLineWidth(drawer, 1.5);
@@ -445,9 +443,7 @@ static void DrawOutlinedLine(AIAnnotatorDrawer* drawer, AIPoint p1, AIPoint p2,
                               const AIRGBColor& color, AIReal colorWidth, AIReal opacity)
 {
     // White outline (wider, behind)
-    AIRGBColor white;
-    white.red = white.green = white.blue = 65535;
-    sAIAnnotatorDrawer->SetColor(drawer, white);
+    sAIAnnotatorDrawer->SetColor(drawer, ITK_COLOR_HANDLE_FILL());
     sAIAnnotatorDrawer->SetOpacity(drawer, opacity * 0.7);
     sAIAnnotatorDrawer->SetLineWidth(drawer, colorWidth + 2.0);
     sAIAnnotatorDrawer->DrawLine(drawer, p1, p2);
@@ -479,31 +475,12 @@ void PerspectiveModule::DrawPerspectiveOverlay(AIAnnotatorMessage* message)
 
     AIAnnotatorDrawer* drawer = message->drawer;
 
-    // Per-line colors matching the panel legend
-    AIRGBColor vp1Color;        // VP1 (left): red
-    vp1Color.red   = (ai::uint16)(0.90 * 65535);
-    vp1Color.green = (ai::uint16)(0.30 * 65535);
-    vp1Color.blue  = (ai::uint16)(0.30 * 65535);
-
-    AIRGBColor vp2Color;        // VP2 (right): green
-    vp2Color.red   = (ai::uint16)(0.30 * 65535);
-    vp2Color.green = (ai::uint16)(0.80 * 65535);
-    vp2Color.blue  = (ai::uint16)(0.30 * 65535);
-
-    AIRGBColor vp3Color;        // VP3 (vertical): blue
-    vp3Color.red   = (ai::uint16)(0.35 * 65535);
-    vp3Color.green = (ai::uint16)(0.55 * 65535);
-    vp3Color.blue  = (ai::uint16)(0.95 * 65535);
-
-    AIRGBColor horizonColor;    // horizon line: orange
-    horizonColor.red   = (ai::uint16)(1.0 * 65535);
-    horizonColor.green = (ai::uint16)(0.5 * 65535);
-    horizonColor.blue  = 0;
-
-    AIRGBColor gridColor;       // grid lines: cyan
-    gridColor.red   = 0;
-    gridColor.green = (ai::uint16)(0.7 * 65535);
-    gridColor.blue  = (ai::uint16)(0.9 * 65535);
+    // Per-line colors matching the panel legend (from design tokens)
+    AIRGBColor vp1Color     = ITK_COLOR_VP1();       // VP1 (left): red
+    AIRGBColor vp2Color     = ITK_COLOR_VP2();       // VP2 (right): green
+    AIRGBColor vp3Color     = ITK_COLOR_VP3();       // VP3 (vertical): blue
+    AIRGBColor horizonColor = ITK_COLOR_HORIZON();   // horizon line: orange
+    AIRGBColor gridColor    = ITK_COLOR_GRID();      // grid lines: cyan
 
     // --- Draw horizon line (white outline + colored dashed line) ---
     {
@@ -523,9 +500,7 @@ void PerspectiveModule::DrawPerspectiveOverlay(AIAnnotatorMessage* message)
             AIFloat dashArray[] = {6.0f, 4.0f};
 
             // White outline pass (wider, behind)
-            AIRGBColor white;
-            white.red = white.green = white.blue = 65535;
-            sAIAnnotatorDrawer->SetColor(drawer, white);
+            sAIAnnotatorDrawer->SetColor(drawer, ITK_COLOR_HANDLE_FILL());
             sAIAnnotatorDrawer->SetOpacity(drawer, 0.4);
             sAIAnnotatorDrawer->SetLineWidth(drawer, 3.5);
             sAIAnnotatorDrawer->SetLineDashedEx(drawer, dashArray, 2);
@@ -608,9 +583,7 @@ void PerspectiveModule::DrawPerspectiveOverlay(AIAnnotatorMessage* message)
         AIPoint vExtA, vExtB;
         if (sAIDocumentView->ArtworkPointToViewPoint(NULL, &extA, &vExtA) == kNoErr) {
             // White outline pass
-            AIRGBColor white;
-            white.red = white.green = white.blue = 65535;
-            sAIAnnotatorDrawer->SetColor(drawer, white);
+            sAIAnnotatorDrawer->SetColor(drawer, ITK_COLOR_HANDLE_FILL());
             sAIAnnotatorDrawer->SetOpacity(drawer, 0.25);
             sAIAnnotatorDrawer->SetLineWidth(drawer, 3.0);
             sAIAnnotatorDrawer->SetLineDashedEx(drawer, dashArray, 2);
@@ -618,15 +591,13 @@ void PerspectiveModule::DrawPerspectiveOverlay(AIAnnotatorMessage* message)
             // Colored extension line on top
             sAIAnnotatorDrawer->SetColor(drawer, extColor);
             sAIAnnotatorDrawer->SetOpacity(drawer, 0.4);
-            sAIAnnotatorDrawer->SetLineWidth(drawer, 1.0);
+            sAIAnnotatorDrawer->SetLineWidth(drawer, ITK_WIDTH_SECONDARY);
             sAIAnnotatorDrawer->SetLineDashedEx(drawer, dashArray, 2);
             sAIAnnotatorDrawer->DrawLine(drawer, vExtA, vh1);
         }
         if (sAIDocumentView->ArtworkPointToViewPoint(NULL, &extB, &vExtB) == kNoErr) {
             // White outline pass
-            AIRGBColor white;
-            white.red = white.green = white.blue = 65535;
-            sAIAnnotatorDrawer->SetColor(drawer, white);
+            sAIAnnotatorDrawer->SetColor(drawer, ITK_COLOR_HANDLE_FILL());
             sAIAnnotatorDrawer->SetOpacity(drawer, 0.25);
             sAIAnnotatorDrawer->SetLineWidth(drawer, 3.0);
             sAIAnnotatorDrawer->SetLineDashedEx(drawer, dashArray, 2);
@@ -634,7 +605,7 @@ void PerspectiveModule::DrawPerspectiveOverlay(AIAnnotatorMessage* message)
             // Colored extension line on top
             sAIAnnotatorDrawer->SetColor(drawer, extColor);
             sAIAnnotatorDrawer->SetOpacity(drawer, 0.4);
-            sAIAnnotatorDrawer->SetLineWidth(drawer, 1.0);
+            sAIAnnotatorDrawer->SetLineWidth(drawer, ITK_WIDTH_SECONDARY);
             sAIAnnotatorDrawer->SetLineDashedEx(drawer, dashArray, 2);
             sAIAnnotatorDrawer->DrawLine(drawer, vExtB, vh2);
         }
@@ -650,7 +621,7 @@ void PerspectiveModule::DrawPerspectiveOverlay(AIAnnotatorMessage* message)
         AIPoint viewPt;
         if (sAIDocumentView->ArtworkPointToViewPoint(NULL, &artVP, &viewPt) != kNoErr) return;
 
-        int crossSize = 8;
+        int crossSize = (int)ITK_SIZE_VP_MARKER;
         sAIAnnotatorDrawer->SetColor(drawer, color);
         sAIAnnotatorDrawer->SetOpacity(drawer, 0.7);
         sAIAnnotatorDrawer->SetLineWidth(drawer, 2.0);
@@ -692,7 +663,7 @@ void PerspectiveModule::DrawPerspectiveOverlay(AIAnnotatorMessage* message)
     if (fGrid.valid) {
         sAIAnnotatorDrawer->SetColor(drawer, gridColor);
         sAIAnnotatorDrawer->SetOpacity(drawer, 0.3);
-        sAIAnnotatorDrawer->SetLineWidth(drawer, 0.5);
+        sAIAnnotatorDrawer->SetLineWidth(drawer, ITK_WIDTH_GRID);
 
         int density = fGrid.gridDensity;
 
@@ -759,6 +730,78 @@ void PerspectiveModule::DrawPerspectiveOverlay(AIAnnotatorMessage* message)
                     sAIAnnotatorDrawer->DrawLine(drawer, vFrom, vTo);
                 }
             }
+        }
+    }
+
+    // --- Draw detected Hough lines (VP confidence visualization) ---
+    if (BridgeGetShowVPLines() && !fDetectedLines.empty() &&
+        fAutoMatchImgW > 0 && fAutoMatchImgH > 0)
+    {
+        // Find max votes for opacity scaling
+        int maxVotes = 1;
+        for (auto& dl : fDetectedLines) {
+            if (dl.votes > maxVotes) maxVotes = dl.votes;
+        }
+
+        // Coordinate mapping: pixel -> artwork (same as AutoMatch)
+        double artW = (double)(fAutoMatchArtBounds.right - fAutoMatchArtBounds.left);
+        double artH = (double)(fAutoMatchArtBounds.top - fAutoMatchArtBounds.bottom);
+        double scaleX = artW / (double)fAutoMatchImgW;
+        double scaleY = artH / (double)fAutoMatchImgH;
+
+        auto pixToArt = [&](double px, double py, AIRealPoint& out) {
+            out.h = (AIReal)((double)fAutoMatchArtBounds.left + px * scaleX);
+            out.v = (AIReal)((double)fAutoMatchArtBounds.top  - py * scaleY);
+        };
+
+        // Cluster colors: VP1=blue, VP2=red, VP3=green
+        AIRGBColor clusterColors[3];
+        clusterColors[0] = {0, 0, 65535};         // VP1: blue
+        clusterColors[1] = {65535, 0, 0};          // VP2: red
+        clusterColors[2] = {0, 52428, 0};          // VP3: green
+
+        sAIAnnotatorDrawer->SetLineDashedEx(drawer, nullptr, 0);
+
+        double extLen = 2000.0;  // line extension in pixel space
+
+        for (auto& dl : fDetectedLines) {
+            if (dl.cluster < 0 || dl.cluster > 2) continue;
+
+            // Convert Hough (rho, theta) to two pixel-space endpoints
+            double cosT = std::cos(dl.theta);
+            double sinT = std::sin(dl.theta);
+            double x0 = dl.rho * cosT;
+            double y0 = dl.rho * sinT;
+
+            double px1 = x0 + extLen * (-sinT);
+            double py1 = y0 + extLen * (cosT);
+            double px2 = x0 - extLen * (-sinT);
+            double py2 = y0 - extLen * (cosT);
+
+            // Clamp endpoints to image bounds (sufficient for visualization)
+            px1 = std::max(0.0, std::min((double)fAutoMatchImgW, px1));
+            py1 = std::max(0.0, std::min((double)fAutoMatchImgH, py1));
+            px2 = std::max(0.0, std::min((double)fAutoMatchImgW, px2));
+            py2 = std::max(0.0, std::min((double)fAutoMatchImgH, py2));
+
+            // Convert pixel endpoints to artwork coordinates
+            AIRealPoint artP1, artP2;
+            pixToArt(px1, py1, artP1);
+            pixToArt(px2, py2, artP2);
+
+            // Convert artwork to view coordinates
+            AIPoint vP1, vP2;
+            if (sAIDocumentView->ArtworkPointToViewPoint(NULL, &artP1, &vP1) != kNoErr) continue;
+            if (sAIDocumentView->ArtworkPointToViewPoint(NULL, &artP2, &vP2) != kNoErr) continue;
+
+            // Opacity proportional to votes
+            double opacity = std::min(1.0, (double)dl.votes / (double)maxVotes);
+            opacity = std::max(0.15, opacity * 0.7);  // floor at 15%, scale to 70% max
+
+            sAIAnnotatorDrawer->SetColor(drawer, clusterColors[dl.cluster]);
+            sAIAnnotatorDrawer->SetOpacity(drawer, (AIReal)opacity);
+            sAIAnnotatorDrawer->SetLineWidth(drawer, 1.0);
+            sAIAnnotatorDrawer->DrawLine(drawer, vP1, vP2);
         }
     }
 
