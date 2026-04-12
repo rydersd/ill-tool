@@ -1,7 +1,9 @@
 # Wiki Index
-> Auto-maintained. Last updated: 2026-04-09. Articles: 39. Words: ~90K.
+> Auto-maintained. Last updated: 2026-04-11. Articles: 41. Words: ~95K.
 
 ## Recent
+- 2026-04-11: [Blender Freestyle Pipeline](concepts/blender-freestyle-pipeline.md) — Ground-truth render passes from Blender replace ML inference for Freestyle cleanup. Camera, depth, normals, object IDs — all exact. Tags: blender, freestyle, pipeline, render-passes
+- 2026-04-11: [SIGGRAPH Research for IllTool](references/research-siggraph-vectorization-2024.md) — Curated SIGGRAPH/TOG papers (2020-2025) for vectorization, depth, sketch cleanup, differentiable rendering. Tags: siggraph, research, ml
 - 2026-04-09: [Session 2026-04-09](concepts/session-2026-04-09.md) — Massive session: native undo, trace pipeline, MCP integration, normal-VP, refactor, 4 adversarial reviews. Tags: undo, trace, mcp, refactor
 - 2026-04-07: [IllTool PRD](concepts/illtool-prd.md) — Complete product requirements: trace → classify → simplify → perspective → shade. P0-P2 priorities, UX specs, what exists vs missing. Tags: prd, requirements, workflow
 - 2026-04-07: [CEP → C++ Port Audit](concepts/cep-to-cpp-port-audit.md) — Function-by-function audit: 7 correct, 10 partial, 2 wrong, 7 missing. AverageSelection completely wrong (centroid collapse vs PCA+classify+refit). Tags: audit, port, cep, c++

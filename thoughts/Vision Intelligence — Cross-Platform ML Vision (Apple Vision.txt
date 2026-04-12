@@ -1,0 +1,352 @@
+Vision Intelligence — Cross-Platform ML Vision (Apple Vision + ONNX/CUDA)
+Context
+IllTool's tracing pipeline relies on external tools: vtracer via popen() for SVG contours, Python backends for normal maps, and a hand-rolled C++ VisionEngine for Canny/Hough/contour operations. There is no Apple Vision framework or ML inference integration — the existing VisionEngine.h/.cpp is pure C++ with no platform-specific ML.
+
+The goal: add GPU-accelerated instance segmentation (click-to-select subjects), native contour detection, and body/face/hand pose extraction. Must work on macOS (Apple Silicon + Intel) AND Windows (NVIDIA CUDA). On macOS, prefer Apple Vision (zero config, no model downloads). On Windows, use ONNX Runtime with CUDA/DirectML.
+
+Architecture — Dual Backend Behind Common Interface
+                  VisionIntelligence.h
+              (C-callable common interface)
+                    │           │
+         ┌──────────┘           └──────────┐
+         ▼                                 ▼
+  AppleVisionBridge.mm              OnnxVisionBridge.cpp
+  (macOS only)                      (cross-platform)
+  ┌────────────────┐               ┌─────────────────────┐
+  │ Vision.framework│               │ ONNX Runtime C API  │
+  │ - VNContours    │               │ ┌─────┬────────┐   │
+  │ - VNInstanceMask│               │ │CoreML│ CUDA   │   │
+  │ - VNBodyPose    │               │ │(mac) │(NVIDIA)│   │
+  │ - VNFaceLandmark│               │ └─────┴────────┘   │
+  └────────────────┘               │ Models:              │
+                                   │ - SAM 2 (segment)    │
+                                   │ - RTMO (pose)        │
+                                   │ - MediaPipe (face)   │
+                                   └─────────────────────┘
+
+Runtime selection (in VisionIntelligence.cpp):
+  macOS + Apple Silicon → AppleVisionBridge (preferred)
+  macOS + Intel         → AppleVisionBridge for CPU ops,
+                          OnnxVisionBridge for Neural Engine ops
+  Windows               → OnnxVisionBridge (CUDA or DirectML)
+
+The consumer code (TraceModule, panels) only calls VisionIntelligence.h — never touches backends directly.
+
+Common Interface — VisionIntelligence.h
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// --- Capabilities ---
+typedef enum {
+    VI_BACKEND_NONE        = 0,
+    VI_BACKEND_APPLE_VISION = 1,  // macOS Vision.framework
+    VI_BACKEND_ONNX_CUDA   = 2,  // ONNX Runtime + CUDA
+    VI_BACKEND_ONNX_COREML = 3,  // ONNX Runtime + CoreML
+    VI_BACKEND_ONNX_DIRECTML = 4, // ONNX Runtime + DirectML
+    VI_BACKEND_ONNX_CPU    = 5,  // ONNX Runtime CPU fallback
+} VIBackend;
+
+VIBackend VIGetActiveBackend();
+bool VIHasNeuralEngine();        // Apple Silicon or CUDA GPU available
+bool VIHasInstanceSegmentation(); // SAM or VNInstanceMask available
+bool VIHasPoseDetection();       // RTMO or VNBodyPose available
+bool VIHasDepthEstimation();     // Depth Anything V2 ONNX loaded
+
+// --- Contour Detection ---
+typedef struct {
+    double* points;     // interleaved x,y (normalized 0-1)
+    int pointCount;
+    bool closed;
+} VIContour;
+
+int VIDetectContours(
+    const char* imagePath,
+    float contrastAdjustment,  // 0.0-3.0
+    float contrastPivot,       // 0.0-1.0
+    bool detectDarkOnLight,
+    VIContour** outContours
+);
+void VIFreeContours(VIContour* contours, int count);
+
+// --- Instance Segmentation (SAM 2 / VNInstanceMask) ---
+typedef struct {
+    unsigned char* mask;   // grayscale (0/255), width*height
+    int width, height;
+    int instanceIndex;
+    float score;           // confidence 0-1
+} VIInstanceMask;
+
+int VIDetectInstances(
+    const char* imagePath,
+    VIInstanceMask** outMasks
+);
+void VIFreeInstanceMasks(VIInstanceMask* masks, int count);
+
+// Click-to-select: get mask for instance at (x,y) normalized coords
+int VISelectInstanceAtPoint(
+    const char* imagePath,
+    float x, float y,           // click point (normalized 0-1)
+    VIInstanceMask** outMask    // single mask for the selected instance
+);
+
+// --- Monocular Depth Estimation ---
+// Returns normalized depth map (0.0=near, 1.0=far), width*height floats
+bool VIEstimateDepth(
+    const char* imagePath,
+    float** outDepthMap,        // caller frees with VIFreeDepthMap
+    int* outWidth, int* outHeight
+);
+void VIFreeDepthMap(float* depthMap);
+
+// --- Body Pose ---
+typedef struct {
+    const char* jointName;   // e.g. "left_shoulder"
+    float x, y;              // normalized 0-1
+    float confidence;
+} VIJoint;
+
+int VIDetectBodyPose(const char* imagePath, VIJoint** outJoints);
+void VIFreeJoints(VIJoint* joints, int count);
+
+// --- Face Landmarks ---
+typedef struct { float x, y; } VIFacePoint;
+
+int VIDetectFaceLandmarks(
+    const char* imagePath,
+    VIFacePoint** outPoints  // 73 (Apple) or 468 (MediaPipe)
+);
+void VIFreeFacePoints(VIFacePoint* points, int count);
+
+// --- Hand Pose ---
+int VIDetectHandPose(const char* imagePath, VIJoint** outJoints);
+
+// --- Lifecycle ---
+bool VIInitialize();   // load models, init runtime
+void VIShutdown();     // release resources
+
+#ifdef __cplusplus
+}
+#endif
+
+Phase 1: Apple Vision Backend — Contour Detection
+Why first: VNDetectContoursRequest works on ALL Macs (macOS 11+), returns CGPath vector data directly, no model downloads, no ONNX dependency. Ships immediately.
+
+New files
+plugin/Source/VisionIntelligence.h — common C interface (above)
+
+plugin/Source/AppleVisionBridge.h/.mm — macOS implementation:
+
+#import <Vision/Vision.h>
+VIDetectContours -> VNDetectContoursRequest -> iterate topLevelContours -> extract normalizedPath CGPath points
+VIGetActiveBackend -> VI_BACKEND_APPLE_VISION
+VIHasNeuralEngine -> #ifdef __aarch64__
+Runtime @available(macOS 11.0, *) checks
+plugin/Source/VisionIntelligence.cpp — dispatcher:
+
+On macOS: #include "AppleVisionBridge.mm" or link separately
+On Windows: #include "OnnxVisionBridge.cpp" (Phase 2)
+Routes all VI* calls to the active backend
+TraceModule changes
+New private method: void ExecuteAppleContours()
+In HandleOp: op.strParam == "apple_contours" -> ExecuteAppleContours()
+Flow:
+FindImagePath() -> get placed image
+Read params from bridge state
+VIDetectContours()
+Convert normalized (0-1) points -> artboard coords via fArtLeft/Top/Right/Bottom (same mapping as TransformSVGPoint)
+Create AIPathSegment arrays -> sAIPath->SetPathSegments() (same as CreatePathsFromSVG)
+HttpBridge additions
+New OpType entries for vision operations
+Atomic state for contour params (contrast, pivot, dark-on-light)
+Panel additions (TracePanelController.mm)
+New accordion: "Apple Contours (Native)" — contrast slider, pivot slider, dark-on-light checkbox, Run button
+Grayed out if !VIGetActiveBackend()
+Build integration
+#include "AppleVisionBridge.mm" in IllToolPanels.mm (Obj-C++ TU, follows unity-build pattern)
+Link Vision.framework in Xcode
+Phase 2: ONNX Runtime Backend — Windows/CUDA Support
+New files
+plugin/Source/OnnxVisionBridge.h/.cpp — cross-platform implementation:
+
+Links ONNX Runtime C API (onnxruntime_c_api.h)
+Execution provider selection at init:
+// Try CUDA first (NVIDIA), then DirectML (AMD/Intel), then CPU
+if (OrtSessionOptionsAppendExecutionProvider_CUDA(opts, ...) == OK) backend = CUDA;
+else if (OrtSessionOptionsAppendExecutionProvider_DML(opts, ...) == OK) backend = DirectML;
+else backend = CPU;
+
+ONNX Models (shipped in plugin bundle)
+Task	Model	Size	Source
+Instance segmentation	SAM 2 (sam2-hiera-tiny)	~40MB	Meta ONNX export
+Depth estimation	Depth Anything V2 (small)	~25MB	Depth Anything V2
+Body pose	RTMO-s	~12MB	RTMO ONNX
+Face landmarks	MediaPipe Face Mesh	~3MB	MediaPipe ONNX export
+Hand pose	MediaPipe Hands	~5MB	MediaPipe ONNX export
+Total: ~85MB bundled in plugin resources.
+
+Contour detection — no ONNX needed
+The existing VisionEngine::FindContours() (pure C++) already works cross-platform. On Windows, VIDetectContours delegates to the existing VisionEngine rather than an ONNX model. Apple's VNDetectContoursRequest is a macOS optimization, not a required feature.
+
+Build integration
+ONNX Runtime distributed as dynamic library (onnxruntime.dll / libonnxruntime.dylib)
+Shipped in plugin bundle alongside ONNX model files
+Conditional compilation: #ifdef ILLTOOL_HAS_ONNX
+Phase 2.5: Monocular Depth -> Automatic Layer Decomposition
+Both platforms via ONNX (Depth Anything V2). No Apple Vision equivalent — always uses ONNX Runtime regardless of platform. ~25MB model, <1s on GPU.
+
+Why this is the radical feature
+Layer separation is the most tedious manual step in reference-based illustration. No tool automates it. Depth Anything V2 produces a per-pixel depth map from a single photograph, which we quantize into discrete layers and trace separately.
+
+How it compounds with existing modules
+PerspectiveModule: Depth gradients corroborate VP placement. Steep depth falloff perpendicular to a detected VP confirms it's real. EstimateVanishingPoints() (VisionEngine.h:251) already produces VP candidates — depth ranks them by geometric consistency.
+DecomposeModule: Depth layers are another decomposition axis. Paths in the same depth band auto-group via the same DrawOverlay colored-overlay pattern (DecomposeModule.cpp:283).
+SurfaceModule: Depth discontinuities mark object boundaries. A sudden depth jump means "different surface" — eliminates ambiguity in InferSurfaceType() at object edges.
+Instance segmentation (Phase 3): Separates what (subject identity), depth separates where (spatial position). Combined: "the character in the foreground" vs "the character in the background" on different layers automatically.
+VisionIntelligence additions
+VIEstimateDepth() — always routes to OnnxVisionBridge (no Apple Vision equivalent)
+
+TraceModule additions
+New method: void ExecuteDepthDecompose()
+Flow:
+FindImagePath() -> get placed image
+VIEstimateDepth() -> normalized depth buffer (0.0=near, 1.0=far)
+Histogram-cluster depth values into N bands (user slider, default 3-5)
+Use Otsu's method or simple k-means on 1D depth histogram
+For each depth band:
+a. Create binary mask (pixels within depth range)
+b. Apply mask to original image (zero outside)
+c. Write masked image to temp
+d. Run VIDetectContours() on masked image
+e. Create named AI layer ("FG", "MG-1", "MG-2", "BG")
+f. Place contours on the corresponding layer
+Optionally: feed depth-derived layer boundaries to PerspectiveModule for VP ranking
+DrawOverlay extension
+When depth preview is active, draw depth map as color-coded overlay (red=near -> blue=far)
+Each depth band drawn in its assigned color
+Same annotator pattern as DecomposeModule cluster overlays
+Panel additions
+New accordion: "Depth Layers" with:
+"Analyze Depth" button -> runs depth estimation + shows overlay
+Layer count slider (2-8, default 4)
+"Decompose & Trace" button -> runs the full pipeline
+Depth overlay opacity slider
+Works on all platforms (always ONNX)
+Connection to Phase 4 (Masked Contour Tracing)
+Depth masks feed into the same masked-contour pipeline as instance masks. The user can:
+
+Select a depth layer (e.g., "foreground only")
+Run contour tracing within that layer
+Get clean vectors of just the foreground elements
+Phase 3: Per-Instance Subject Masks (Add/Subtract)
+macOS: VNGenerateForegroundInstanceMaskRequest (macOS 14+, Apple Silicon)
+Windows: SAM 2 via ONNX Runtime + CUDA
+
+VisionIntelligence additions
+VIDetectInstances() — returns per-instance masks
+VISelectInstanceAtPoint() — click-to-select (SAM's point prompt / Apple Vision instance lookup)
+TraceModule additions
+void PreviewInstanceMasks() — runs detection, stores per-instance data as member state
+void ToggleInstance(int index) — add/subtract from composite
+DrawOverlay extension: colored semi-transparent overlays per instance (same pattern as DecomposeModule::DrawOverlay which uses sAIAnnotatorDrawer->SetColor/SetOpacity/DrawLine)
+Click handling: HandleMouseDown hit-tests click coordinate against instance masks
+Panel additions
+New accordion: "Subject Cutout" — Detect button, instance checkboxes, Trace Selection button
+Grayed out on Intel Mac without ONNX fallback / on Windows without CUDA
+Phase 4: Masked Contour Tracing (the compound feature)
+Click a subject -> isolate -> vectorize just that subject. No other tool does this in one workflow.
+
+Implementation (~20 lines of glue)
+In ExecuteAppleContours(), if instance mask composite is active:
+
+Load original image via stb_image
+Apply composite mask (zero pixels outside mask)
+Write masked image to temp file
+Run VIDetectContours() on masked image
+Result: clean vector contours of just the selected subject(s)
+Works identically on both backends — mask comes from SAM (Windows) or VNInstanceMask (macOS), contours come from VisionEngine::FindContours (Windows) or VNDetectContours (macOS).
+
+Phase 5: Body Pose + Face Landmarks
+macOS: VNDetectHumanBodyPoseRequest (17 keypoints), VNDetectFaceLandmarksRequest (73 points)
+Windows: RTMO ONNX (17+ keypoints), MediaPipe Face Mesh ONNX (468 points)
+
+TraceModule additions
+void ExecuteDetectPose() — calls VIDetectBodyPose() + optionally VIDetectFaceLandmarks()
+Stores keypoints in std::vector<std::pair<double,double>> fPoseJoints
+DrawOverlay: skeleton lines between COCO joint pairs (shoulder->elbow->wrist, etc.)
+"Commit Skeleton": creates Illustrator paths on a "Skeleton" layer
+Panel additions
+New accordion: "Pose Detection" — Detect Pose button, Include Face checkbox, Commit as Guides button
+Phase 6: Hardware Detection + Graceful Degradation
+VIInitialize() flow
+macOS:
+  Apple Silicon? -> VI_BACKEND_APPLE_VISION (full features)
+  Intel + ONNX?  -> VI_BACKEND_ONNX_COREML (instance seg via SAM)
+  Intel, no ONNX -> VI_BACKEND_APPLE_VISION (contours+pose only, no instance seg)
+
+Windows:
+  CUDA available? -> VI_BACKEND_ONNX_CUDA
+  DirectML?       -> VI_BACKEND_ONNX_DIRECTML
+  Neither?        -> VI_BACKEND_ONNX_CPU (slow but works)
+
+Panel UI
+Query VIHasInstanceSegmentation(), VIHasPoseDetection() at panel init
+Gray out unavailable features with descriptive tooltip ("Requires NVIDIA GPU" or "Requires Apple Silicon")
+Contour detection always available (falls back to C++ VisionEngine)
+Files to Create / Modify
+File	Action	Phase	Description
+plugin/Source/VisionIntelligence.h	CREATE	1	Common C interface for all ML vision ops
+plugin/Source/VisionIntelligence.cpp	CREATE	1	Backend dispatcher
+plugin/Source/AppleVisionBridge.h	CREATE	1	macOS Apple Vision declarations
+plugin/Source/AppleVisionBridge.mm	CREATE	1	macOS Apple Vision implementation
+plugin/Source/OnnxVisionBridge.h	CREATE	2	ONNX Runtime declarations
+plugin/Source/OnnxVisionBridge.cpp	CREATE	2	ONNX Runtime implementation (CUDA/DirectML/CoreML)
+plugin/Source/modules/TraceModule.h	MODIFY	1	New method decls, pose/mask member state
+plugin/Source/modules/TraceModule.cpp	MODIFY	1	ExecuteAppleContours(), pose, instance mask methods, DrawOverlay
+plugin/Source/HttpBridge.h	MODIFY	1	New OpType entries, bridge state
+plugin/Source/HttpBridge.cpp	MODIFY	1	New atomic state vars
+plugin/Source/panels/TracePanelController.mm	MODIFY	1	3 new accordion sections
+plugin/Source/IllToolPanels.mm	MODIFY	1	#include "AppleVisionBridge.mm"
+plugin/Source/IllToolPlugin.cpp	MODIFY	1	VIInitialize() at startup, VIShutdown() at teardown
+plugin/models/	CREATE	2	ONNX model files (SAM2, RTMO, MediaPipe)
+Implementation Order
+Phase 1 ──── VisionIntelligence.h (interface)
+          ├── AppleVisionBridge.mm (contours)
+          ├── HttpBridge additions
+          ├── TraceModule.ExecuteAppleContours()
+          └── TracePanelController (contours accordion)
+               │
+Phase 2 ──── OnnxVisionBridge.cpp + ONNX models
+          ├── CUDA/DirectML/CoreML provider selection
+          └── VIDetectContours -> VisionEngine fallback (Windows)
+               │
+Phase 2.5 ── Depth Anything V2 ONNX model
+          ├── VIEstimateDepth() in OnnxVisionBridge
+          ├── TraceModule.ExecuteDepthDecompose()
+          ├── Histogram clustering -> depth band masks
+          └── TracePanelController (Depth Layers accordion)
+               │
+Phase 3 ──── Instance masks (both backends)
+          ├── TraceModule preview/toggle/commit
+          └── TracePanelController (Subject Cutout accordion)
+               │
+Phase 4 ──── Masked contour tracing (glue: mask + contours)
+          └── Depth masks also feed into this pipeline
+               │
+Phase 5 ──── Body pose + face landmarks (both backends)
+          └── TracePanelController (Pose Detection accordion)
+               │
+Phase 6 ──── Hardware gating + panel gray-out
+
+Verification
+Apple Contours (macOS): Place line art -> Ill Trace -> "Apple Contours" -> Run -> vector paths on artboard
+ONNX Contours (Windows): Same workflow -> falls back to VisionEngine::FindContours -> paths created
+Depth Decomposition: Place scene photo -> "Analyze Depth" -> verify color-coded depth overlay -> adjust layer count -> "Decompose & Trace" -> verify separate AI layers ("FG", "MG-1", "BG") each with depth-appropriate contours
+Depth + Perspective: After depth analysis, verify VP ranking improves — VPs consistent with depth gradients should rank higher in EstimateVanishingPoints()
+Instance Masks (macOS): Place multi-subject photo -> "Detect Subjects" -> colored overlays -> click to toggle -> "Trace Selection" -> paths within mask only
+Instance Masks (Windows/CUDA): Same workflow via SAM 2 ONNX
+Masked Contour Tracing: Select subject -> run contours -> verify contours only inside subject. Also: select depth layer -> run contours -> verify depth-bounded output
+Body Pose: Place person photo -> "Detect Pose" -> skeleton overlay -> "Commit" -> construction lines on layer
+Intel Mac degradation: Neural Engine features grayed out, contours + pose + depth still work
+Windows no-GPU: All features work (slow) via ONNX CPU fallback
+Performance: < 2s on M-series / NVIDIA RTX for all operations on 2000px images

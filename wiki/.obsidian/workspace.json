@@ -177,6 +177,12 @@
   },
   "active": "918ec29a2b1e930c",
   "lastOpenFiles": [
+    "concepts/blender-freestyle-pipeline.md",
+    "references/research-siggraph-vectorization-2024.md",
+    "concepts/session-2026-04-09.md",
+    "concepts/cleanup-interaction-model.md",
+    "concepts/illtool-prd.md",
+    "concepts/cep-to-cpp-port-audit.md",
     "concepts/plugin-adversarial-review-round3.md",
     "concepts/perspective-grid-foundation.md",
     "concepts/blend-tool-implementation.md",
@@ -197,12 +203,6 @@
     "concepts/expanded-normal-renderings.md",
     "concepts/adversarial-review-findings.md",
     "references/spatial-ai-research-2026.md",
-    "references/constructive-drawing-methods.md",
-    "references/adding-tools-guide.md",
-    "references/mech-extraction-notes.md",
-    "references/form-understanding-without-reconstruction-2026.md",
-    "references/blog-teaching-ai-to-see.md",
-    "references",
-    "index.md"
+    "references"
   ]
 }
