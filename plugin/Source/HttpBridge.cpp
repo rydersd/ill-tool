@@ -449,6 +449,18 @@ static std::atomic<bool>  gSnapToPerspective{true}; // snap cleanup output to pe
 void BridgeSetSnapToPerspective(bool snap) { gSnapToPerspective.store(snap); }
 bool BridgeGetSnapToPerspective()          { return gSnapToPerspective.load(); }
 
+static std::atomic<bool>  gAdaptiveCanny{false}; // use Otsu-derived Canny thresholds for VP estimation
+void BridgeSetAdaptiveCanny(bool adaptive) { gAdaptiveCanny.store(adaptive); }
+bool BridgeGetAdaptiveCanny()              { return gAdaptiveCanny.load(); }
+
+static std::atomic<bool>  gShowVPLines{false};   // show detected Hough lines color-coded by VP cluster
+void BridgeSetShowVPLines(bool show) { gShowVPLines.store(show); }
+bool BridgeGetShowVPLines()           { return gShowVPLines.load(); }
+
+static std::atomic<bool>  g3PointPerspective{false}; // enable 3-point (vertical) VP detection
+void BridgeSet3PointPerspective(bool enable) { g3PointPerspective.store(enable); }
+bool BridgeGet3PointPerspective()            { return g3PointPerspective.load(); }
+
 void BridgeSetMirrorAxis(int axis)        { gMirrorAxis.store(axis); }
 int  BridgeGetMirrorAxis()                { return gMirrorAxis.load(); }
 void BridgeSetMirrorReplace(bool replace) { gMirrorReplace.store(replace); }
@@ -898,6 +910,14 @@ int  BridgeGetDepthLayerCount()                  { return gDepthLayerCount.load(
 void BridgeSetHasDepthEstimation(bool has)       { gHasDepthEstimation.store(has); }
 bool BridgeGetHasDepthEstimation()               { return gHasDepthEstimation.load(); }
 
+static std::atomic<int>  gDepthModel{0};   // 0=DA V2 (relative), 1=Metric3D v2 (metric)
+void BridgeSetDepthModel(int model)              { gDepthModel.store(model); }
+int  BridgeGetDepthModel()                       { return gDepthModel.load(); }
+
+static std::atomic<bool> gHasMetricDepth{false};
+void BridgeSetHasMetricDepth(bool has)           { gHasMetricDepth.store(has); }
+bool BridgeGetHasMetricDepth()                   { return gHasMetricDepth.load(); }
+
 static std::atomic<int>  gCutoutClickThreshold{30};
 void BridgeSetCutoutClickThreshold(int v) { gCutoutClickThreshold.store(v); }
 int  BridgeGetCutoutClickThreshold()      { return gCutoutClickThreshold.load(); }
@@ -908,6 +928,32 @@ bool BridgeConsumeToolActivationRequest()         {
     bool expected = true;
     return gToolActivationRequested.compare_exchange_strong(expected, false);
 }
+
+// Prior tool number — saved before auto-activating IllTool Handle, restored on cutout clear
+static std::atomic<int> gPriorToolNumber{0};
+
+void BridgeSetPriorToolNumber(int toolNum) { gPriorToolNumber.store(toolNum); }
+int  BridgeGetPriorToolNumber()            { return gPriorToolNumber.load(); }
+
+//----------------------------------------------------------------------------------------
+//  Preprocess Preview state — raw PNG data for annotator overlay
+//----------------------------------------------------------------------------------------
+
+static std::atomic<bool>          gPreprocessPreviewActive{false};
+static std::mutex                 gPreprocessPreviewMutex;
+static std::vector<unsigned char> gPreprocessPreviewData;
+
+void BridgeSetPreprocessPreviewData(const std::vector<unsigned char>& data) {
+    std::lock_guard<std::mutex> lock(gPreprocessPreviewMutex);
+    gPreprocessPreviewData = data;
+}
+std::vector<unsigned char> BridgeGetPreprocessPreviewData() {
+    std::lock_guard<std::mutex> lock(gPreprocessPreviewMutex);
+    return gPreprocessPreviewData;
+}
+
+void BridgeSetPreprocessPreviewActive(bool active) { gPreprocessPreviewActive.store(active); }
+bool BridgeGetPreprocessPreviewActive()            { return gPreprocessPreviewActive.load(); }
 
 //----------------------------------------------------------------------------------------
 //  MCP Synchronous Request/Response mechanism
@@ -1055,6 +1101,45 @@ bool StartHttpBridge(int port)
 
     fprintf(stderr, "[IllTool] HTTP bridge started on 127.0.0.1:%d\n", port);
     return true;
+}
+
+//----------------------------------------------------------------------------------------
+//  Symmetry Correction state (Stage 23)
+//----------------------------------------------------------------------------------------
+
+static std::atomic<float> gSymmetryAxisX{0.5f};     // 0.0-1.0 normalized
+static std::atomic<int>   gSymmetrySide{0};          // 0=left, 1=right
+static std::atomic<float> gSymmetryBlendPct{1.0f};   // 0.5-3.0% of image width
+static std::atomic<bool>  gSymmetryActive{false};
+
+static std::mutex         gSymmetryPathMutex;
+static std::string        gSymmetryPreviewPath;
+static std::string        gSymmetryOutputPath;
+
+void BridgeSetSymmetryAxisX(float x)   { gSymmetryAxisX.store(x); }
+float BridgeGetSymmetryAxisX()         { return gSymmetryAxisX.load(); }
+void BridgeSetSymmetrySide(int side)   { gSymmetrySide.store(side); }
+int  BridgeGetSymmetrySide()           { return gSymmetrySide.load(); }
+void BridgeSetSymmetryBlendPct(float p){ gSymmetryBlendPct.store(p); }
+float BridgeGetSymmetryBlendPct()      { return gSymmetryBlendPct.load(); }
+void BridgeSetSymmetryActive(bool a)   { gSymmetryActive.store(a); }
+bool BridgeGetSymmetryActive()         { return gSymmetryActive.load(); }
+
+void BridgeSetSymmetryPreviewPath(const std::string& path) {
+    std::lock_guard<std::mutex> lock(gSymmetryPathMutex);
+    gSymmetryPreviewPath = path;
+}
+std::string BridgeGetSymmetryPreviewPath() {
+    std::lock_guard<std::mutex> lock(gSymmetryPathMutex);
+    return gSymmetryPreviewPath;
+}
+void BridgeSetSymmetryOutputPath(const std::string& path) {
+    std::lock_guard<std::mutex> lock(gSymmetryPathMutex);
+    gSymmetryOutputPath = path;
+}
+std::string BridgeGetSymmetryOutputPath() {
+    std::lock_guard<std::mutex> lock(gSymmetryPathMutex);
+    return gSymmetryOutputPath;
 }
 
 //----------------------------------------------------------------------------------------

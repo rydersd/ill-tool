@@ -243,15 +243,18 @@ public:
     /** Estimate vanishing points from line convergence in the loaded image.
         Runs Canny + Hough, clusters lines by angle, intersects pairs within
         each cluster, and takes the median intersection point.
-        @param maxVPs        Maximum number of VPs to return (default 2).
-        @param cannyLow      Canny lower threshold.
-        @param cannyHigh     Canny upper threshold.
-        @param houghThreshold Minimum Hough accumulator votes.
+        @param maxVPs              Maximum number of VPs to return (default 2).
+        @param cannyLow            Canny lower threshold (used when adaptiveThresholds is false).
+        @param cannyHigh           Canny upper threshold (used when adaptiveThresholds is false).
+        @param houghThreshold      Minimum Hough accumulator votes.
+        @param adaptiveThresholds  When true, compute Otsu threshold from the grayscale
+                                   image and derive Canny thresholds as 0.33*otsu / otsu.
         @return Vector of VPs sorted by confidence (largest cluster first). */
     std::vector<VanishingPointEstimate> EstimateVanishingPoints(
         int maxVPs = 2,
         double cannyLow = 50.0, double cannyHigh = 150.0,
-        int houghThreshold = 30);
+        int houghThreshold = 30,
+        bool adaptiveThresholds = false);
 
     //------------------------------------------------------------------------------------
     //  Surface type inference
@@ -339,6 +342,18 @@ public:
         @param maxVPs  Maximum number of VPs to return.
         @return Vector of VanishingPointEstimate derived from normal clusters. */
     std::vector<VanishingPointEstimate> EstimateVPsFromNormals(int maxVPs = 2);
+
+    /** Estimate vanishing points using Metric3D ML normals for plane segmentation,
+        combined with Hough line intersection for accurate VP localization.
+        Uses ONNX bridge to get per-pixel surface normals, clusters into plane
+        families, then runs edge/line detection within each plane mask.
+        VP position comes from median line intersection (robust), weighted
+        by plane size and edge density.
+        @param imagePath  Absolute file path (needed for ONNX inference).
+        @param maxVPs     Maximum number of VPs to return (default 2).
+        @return Vector of VanishingPointEstimate, or empty if ML normals unavailable. */
+    std::vector<VanishingPointEstimate> EstimateVPsFromMLNormals(const char* imagePath,
+                                                                  int maxVPs = 2);
 
     /** Set the artwork-to-pixel coordinate mapping.
         Called after loading an image and determining where it's placed on the artboard. */

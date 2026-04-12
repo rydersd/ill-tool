@@ -12,6 +12,7 @@
 #define __HTTPBRIDGE_H__
 
 #include <string>
+#include <vector>
 #include <condition_variable>
 
 /** Start the HTTP bridge server on the given port.
@@ -126,7 +127,14 @@ enum class OpType : int {
     LayerAutoAssign,
     LayerLLMLookup,
     LayerSelectNode,     // click-to-select: set current layer or select art
-    LayerGroupSelected   // Cmd+G: group selected items
+    LayerGroupSelected,  // Cmd+G: group selected items
+    // Preprocess Preview — render preprocessing chain as annotator overlay
+    TracePreprocessPreview,  // generate preprocess preview PNG and show as overlay
+    // Stage 23: Symmetry Correction
+    SymmetryPreview,     // generate symmetry preview PNG for overlay
+    CommitSymmetry,      // commit symmetry correction to placed art
+    // Restore the prior tool after cutout preview is cleared/committed
+    RestorePriorTool
 };
 
 /** A queued operation with parameters. Pushed by panels/HTTP, popped by timer. */
@@ -467,6 +475,21 @@ float BridgeGetPasteScale();
 void BridgeSetSnapToPerspective(bool snap);
 bool BridgeGetSnapToPerspective();
 
+/** Adaptive Canny toggle — when true, VP estimation uses Otsu-derived thresholds
+    instead of fixed 50/150. Thread-safe. */
+void BridgeSetAdaptiveCanny(bool adaptive);
+bool BridgeGetAdaptiveCanny();
+
+/** Show detected Hough lines toggle — when true, overlay draws the lines that
+    contributed to each VP, color-coded by cluster. Thread-safe. */
+void BridgeSetShowVPLines(bool show);
+bool BridgeGetShowVPLines();
+
+/** 3-point perspective toggle — when true, auto-match will detect and place a
+    vertical VP (VP3) from near-vertical lines. Thread-safe. */
+void BridgeSet3PointPerspective(bool enable);
+bool BridgeGet3PointPerspective();
+
 /** Request mirror in perspective. Thread-safe. */
 void BridgeRequestMirrorPerspective(int axis, bool replace);
 
@@ -800,6 +823,14 @@ int  BridgeGetDepthLayerCount();
 void BridgeSetHasDepthEstimation(bool has);
 bool BridgeGetHasDepthEstimation();
 
+/** Set/get depth model selection (0=Depth Anything V2 relative, 1=Metric3D v2 metric). Thread-safe. */
+void BridgeSetDepthModel(int model);
+int  BridgeGetDepthModel();
+
+/** Set/get Metric3D v2 availability (ONNX model loaded). Thread-safe. */
+void BridgeSetHasMetricDepth(bool has);
+bool BridgeGetHasMetricDepth();
+
 /** Set/get cutout click threshold (brightness tolerance for flood fill). Thread-safe. */
 void BridgeSetCutoutClickThreshold(int val);
 int  BridgeGetCutoutClickThreshold();
@@ -807,5 +838,51 @@ int  BridgeGetCutoutClickThreshold();
 /** Request that the IllTool Handle tool be activated (for click routing). Thread-safe. */
 void BridgeRequestToolActivation();
 bool BridgeConsumeToolActivationRequest();
+
+/** Save/restore the prior tool number (before IllTool Handle auto-activation). Thread-safe.
+    Stores by number (not handle) because native tool handles may be NULL. */
+void BridgeSetPriorToolNumber(int toolNum);
+int  BridgeGetPriorToolNumber();
+
+//----------------------------------------------------------------------------------------
+//  Preprocess Preview state — stores preprocessed image data for annotator overlay
+//----------------------------------------------------------------------------------------
+
+/** Set/get preprocess preview PNG data (raw PNG bytes for annotator DrawPNGImage).
+    Written by GeneratePreprocessPreview(), read by DrawOverlay(). Thread-safe. */
+void BridgeSetPreprocessPreviewData(const std::vector<unsigned char>& data);
+std::vector<unsigned char> BridgeGetPreprocessPreviewData();
+
+/** Set/get preprocess preview active flag. Thread-safe. */
+void BridgeSetPreprocessPreviewActive(bool active);
+bool BridgeGetPreprocessPreviewActive();
+
+//----------------------------------------------------------------------------------------
+//  Symmetry Correction state (Stage 23) — midline axis + mirror side
+//----------------------------------------------------------------------------------------
+
+/** Set/get symmetry axis X position (0.0-1.0 normalized within image). Thread-safe. */
+void BridgeSetSymmetryAxisX(float normalizedX);
+float BridgeGetSymmetryAxisX();
+
+/** Set/get symmetry side selection (0=left is good, 1=right is good). Thread-safe. */
+void BridgeSetSymmetrySide(int side);
+int  BridgeGetSymmetrySide();
+
+/** Set/get symmetry blend width as percentage of image width (0.5-3.0). Thread-safe. */
+void BridgeSetSymmetryBlendPct(float pct);
+float BridgeGetSymmetryBlendPct();
+
+/** Set/get symmetry overlay active flag. Thread-safe. */
+void BridgeSetSymmetryActive(bool active);
+bool BridgeGetSymmetryActive();
+
+/** Set/get symmetry preview PNG path (written by async worker). Thread-safe. */
+void BridgeSetSymmetryPreviewPath(const std::string& path);
+std::string BridgeGetSymmetryPreviewPath();
+
+/** Set/get symmetry output PNG path (written by async worker). Thread-safe. */
+void BridgeSetSymmetryOutputPath(const std::string& path);
+std::string BridgeGetSymmetryOutputPath();
 
 #endif // __HTTPBRIDGE_H__

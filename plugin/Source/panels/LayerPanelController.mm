@@ -14,6 +14,7 @@
 
 #import "LayerPanelController.h"
 #import "IllToolTheme.h"
+#import "IllToolStrings.h"
 #import "HttpBridge.h"
 #import <cstdio>
 #import <cmath>
@@ -50,6 +51,11 @@ static NSString * const kLayerNodePBType = @"com.illtool.layernode";
         _name     = @"";
     }
     return self;
+}
+- (void)dealloc {
+    [_children release];
+    [_name release];
+    [super dealloc];
 }
 @end
 
@@ -276,8 +282,29 @@ static NSString * const kLayerNodePBType = @"com.illtool.layernode";
 
 - (void)dealloc
 {
+    // Timers are not retained by us (scheduledTimerWithTimeInterval: returns
+    // autoreleased; the run loop holds the only strong reference).
+    // Invalidate to remove from run loop and break the target reference.
     [_pollTimer invalidate];
     _pollTimer = nil;
+
+    [_dragHoverTimer invalidate];
+    _dragHoverTimer = nil;
+
+    // Release alloc'd ivars (views created via alloc/init)
+    [_outlineView release];
+    [_scrollView release];
+    [_presetPopup release];
+    // _statusLabel is autoreleased (from makeLabelWithText:), retained only by superview
+
+    [_swipedNodeIDs release];
+    [_treeData release];
+    [_expandedNodeIDs release];
+
+    // Release root view last — it is the superview that retains statusLabel,
+    // buttons, and other autoreleased subviews
+    [_rootViewBacking release];
+
     [super dealloc];
 }
 
@@ -320,7 +347,7 @@ static NSString * const kLayerNodePBType = @"com.illtool.layernode";
     //  Title — compact, right at top
     //------------------------------------------------------------------
     y -= 20;
-    NSTextField *title = [IllToolTheme makeLabelWithText:@"Ill Layers"
+    NSTextField *title = [IllToolTheme makeLabelWithText:kITS_IllLayers
                                                    font:[IllToolTheme titleFont]
                                                   color:[IllToolTheme accentColor]];
     title.frame = NSMakeRect(pad, y, panelW - 2 * pad, 16);
@@ -336,8 +363,8 @@ static NSString * const kLayerNodePBType = @"com.illtool.layernode";
     NSPopUpButton *presetPopup = [[NSPopUpButton alloc]
         initWithFrame:NSMakeRect(pad, y, 100, kRowHeight) pullsDown:NO];
     presetPopup.font = [IllToolTheme smallFont];
-    [presetPopup addItemWithTitle:@"No Preset"];
-    [presetPopup addItemWithTitle:@"Save Preset..."];
+    [presetPopup addItemWithTitle:kITS_NoPreset];
+    [presetPopup addItemWithTitle:kITS_SavePresetDots];
     presetPopup.target = self;
     presetPopup.action = @selector(onPresetSelected:);
     [root addSubview:presetPopup];
@@ -345,7 +372,7 @@ static NSString * const kLayerNodePBType = @"com.illtool.layernode";
 
     // Organize button (right side)
     CGFloat orgW = 64;
-    NSButton *orgBtn = [IllToolTheme makeButtonWithTitle:@"Organize"
+    NSButton *orgBtn = [IllToolTheme makeButtonWithTitle:kITS_Organize
                                                  target:self
                                                  action:@selector(onAutoOrganize:)];
     orgBtn.frame = NSMakeRect(panelW - pad - orgW, y, orgW, kRowHeight);
@@ -394,7 +421,7 @@ static NSString * const kLayerNodePBType = @"com.illtool.layernode";
         NSTableViewDraggingDestinationFeedbackStyleSourceList;
 
     // Single column — fills the width
-    NSTableColumn *col = [[NSTableColumn alloc] initWithIdentifier:@"main"];
+    NSTableColumn *col = [[[NSTableColumn alloc] initWithIdentifier:@"main"] autorelease];
     col.width = panelW - 20;
     col.resizingMask = NSTableColumnAutoresizingMask;
     [outlineView addTableColumn:col];
@@ -481,7 +508,11 @@ static NSString * const kLayerNodePBType = @"com.illtool.layernode";
         }
 
         // Build LayerNode tree from the parsed JSON
-        NSMutableArray<LayerNode *> *newTree = [NSMutableArray new];
+        // newTree is +1 from alloc.  dispatch_async copies the block to the
+        // heap, which retains captured objects (+1 → +2).  After the block
+        // runs, the block releases its reference (→ +1).  The surviving +1
+        // is transferred to _treeData via direct ivar assignment below.
+        NSMutableArray<LayerNode *> *newTree = [[NSMutableArray alloc] init];
         for (NSDictionary *nodeDict in jsonArray) {
             [newTree addObject:[self parseNodeFromDict:nodeDict]];
         }
@@ -493,7 +524,8 @@ static NSString * const kLayerNodePBType = @"com.illtool.layernode";
                 [self saveExpansionState];
             }
 
-            self->_treeData = newTree;
+            [self->_treeData release];
+            self->_treeData = newTree;  // transfer ownership (+1 from alloc)
             [self->_outlineView reloadData];
 
             if (self->_firstLoad) {
@@ -527,7 +559,7 @@ static NSString * const kLayerNodePBType = @"com.illtool.layernode";
 
 - (LayerNode *)parseNodeFromDict:(NSDictionary *)dict
 {
-    LayerNode *node = [[LayerNode alloc] init];
+    LayerNode *node = [[[LayerNode alloc] init] autorelease];
     node.nodeID     = [dict[@"id"] intValue];
     node.nodeType   = [dict[@"type"] intValue];
     node.name       = dict[@"name"] ?: @"";
@@ -587,7 +619,7 @@ static NSString * const kLayerNodePBType = @"com.illtool.layernode";
     LayerNode *node = (LayerNode *)item;
     CGFloat cellW = outlineView.frame.size.width;
 
-    NSView *cellView = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, cellW, kRowHeight)];
+    NSView *cellView = [[[NSView alloc] initWithFrame:NSMakeRect(0, 0, cellW, kRowHeight)] autorelease];
 
     CGFloat x = 0;
 
@@ -666,8 +698,8 @@ static NSString * const kLayerNodePBType = @"com.illtool.layernode";
     //  Color dot (layers only, nodeType == 0)
     //------------------------------------------------------------------
     if (node.nodeType == 0) {
-        NSView *dot = [[NSView alloc]
-            initWithFrame:NSMakeRect(cellW - 22, 7, 8, 8)];
+        NSView *dot = [[[NSView alloc]
+            initWithFrame:NSMakeRect(cellW - 22, 7, 8, 8)] autorelease];
         dot.wantsLayer = YES;
         dot.layer.backgroundColor = [NSColor colorWithRed:node.colorR
                                                     green:node.colorG
@@ -797,7 +829,7 @@ static NSString * const kLayerNodePBType = @"com.illtool.layernode";
 {
     PluginOp op;
     op.type    = OpType::LayerCreate;
-    op.strParam = "New Layer";
+    op.strParam = std::string([kITS_NewLayer UTF8String]);
     BridgeEnqueueOp(op);
     fprintf(stderr, "[LayerPanel] Add layer\n");
 }
@@ -816,21 +848,26 @@ static NSString * const kLayerNodePBType = @"com.illtool.layernode";
     NSIndexSet *selectedRows = _outlineView.selectedRowIndexes;
     if (selectedRows.count < 1) return;
 
-    // First, select them all in Illustrator (multi-select)
+    // First, select them all in Illustrator (multi-select).
+    // The first SelectNode clears existing selection (addToSelection=false),
+    // subsequent ones add to it (addToSelection=true).
+    __block BOOL isFirst = YES;
     [selectedRows enumerateIndexesUsingBlock:^(NSUInteger idx, BOOL *stop) {
         LayerNode *node = [self->_outlineView itemAtRow:idx];
         if (node && node.nodeType != 3) {
             PluginOp selOp;
             selOp.type = OpType::LayerSelectNode;
             selOp.intParam = node.nodeID;
+            selOp.boolParam1 = !isFirst;  // addToSelection for 2nd+ items
             BridgeEnqueueOp(selOp);
+            isFirst = NO;
         }
     }];
 
     // Then group them
     PluginOp op;
     op.type = OpType::LayerGroupSelected;
-    op.strParam = "Group";
+    op.strParam = std::string([kITS_Group UTF8String]);
     BridgeEnqueueOp(op);
     fprintf(stderr, "[LayerPanel] Group %lu selected items\n", (unsigned long)selectedRows.count);
 }
@@ -937,17 +974,17 @@ static NSString * const kLayerNodePBType = @"com.illtool.layernode";
 {
     NSString *selected = sender.titleOfSelectedItem;
 
-    if ([selected isEqualToString:@"Save Preset..."]) {
+    if ([selected isEqualToString:kITS_SavePresetDots]) {
         // Show save dialog
-        NSAlert *alert = [[NSAlert alloc] init];
-        alert.messageText = @"Save Layer Preset";
-        alert.informativeText = @"Enter preset name:";
-        [alert addButtonWithTitle:@"Save"];
-        [alert addButtonWithTitle:@"Cancel"];
+        NSAlert *alert = [[[NSAlert alloc] init] autorelease];
+        alert.messageText = kITS_SaveLayerPreset;
+        alert.informativeText = kITS_EnterPresetName;
+        [alert addButtonWithTitle:kITS_Save];
+        [alert addButtonWithTitle:kITS_Cancel];
 
-        NSTextField *input = [[NSTextField alloc]
-            initWithFrame:NSMakeRect(0, 0, 200, 24)];
-        input.stringValue = @"My Preset";
+        NSTextField *input = [[[NSTextField alloc]
+            initWithFrame:NSMakeRect(0, 0, 200, 24)] autorelease];
+        input.stringValue = kITS_MyPreset;
         alert.accessoryView = input;
 
         if ([alert runModal] == NSAlertFirstButtonReturn) {
@@ -964,7 +1001,7 @@ static NSString * const kLayerNodePBType = @"com.illtool.layernode";
         return;
     }
 
-    if (![selected isEqualToString:@"No Preset"]) {
+    if (![selected isEqualToString:kITS_NoPreset]) {
         PluginOp op;
         op.type    = OpType::LayerPresetLoad;
         op.strParam = std::string([selected UTF8String]);
@@ -984,7 +1021,7 @@ static NSString * const kLayerNodePBType = @"com.illtool.layernode";
     LayerNode *node = (LayerNode *)item;
     if (node.nodeType == 3) return nil;  // can't drag collapsed placeholder
 
-    NSPasteboardItem *pbItem = [[NSPasteboardItem alloc] init];
+    NSPasteboardItem *pbItem = [[[NSPasteboardItem alloc] init] autorelease];
     [pbItem setString:[NSString stringWithFormat:@"%d", node.nodeID]
               forType:kLayerNodePBType];
     return pbItem;
@@ -1174,7 +1211,7 @@ static NSString * const kLayerNodePBType = @"com.illtool.layernode";
         layerCount++;
         objectCount += [self countObjects:node];
     }
-    _statusLabel.stringValue = [NSString stringWithFormat:@"%d layers, %d objects",
+    _statusLabel.stringValue = [NSString stringWithFormat:kITS_LayerCountFmt,
                                 layerCount, objectCount];
 }
 

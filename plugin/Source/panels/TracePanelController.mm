@@ -3,9 +3,11 @@
 //  IllTool — Ill Trace Panel Controller (Objective-C++)
 //
 //  Programmatic Cocoa layout for tracing raster images via multiple MCP backends.
-//  Each backend is its own accordion section with disclosure triangle, Run button,
-//  and per-model parameter sliders.
-//  Scrollable — content can exceed panel height.
+//  Two tabs: "Image" (operations that process/produce images) and "Vectors"
+//  (operations that produce AI paths).
+//  Each backend is its own accordion section with NSBezelStyleDisclosure triangle,
+//  Run button, and per-model parameter sliders.
+//  Scrollable — each tab has its own scroll view.
 //  No XIB — all NSViews built in code.
 //  NO animation — instant show/hide + relayout.
 //
@@ -13,6 +15,7 @@
 
 #import "TracePanelController.h"
 #import "IllToolTheme.h"
+#import "IllToolStrings.h"
 #include "IllToolPlugin.h"
 #import "HttpBridge.h"
 #import <cstdio>
@@ -39,13 +42,18 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
 //========================================================================================
 
 @interface TraceModelSection : NSObject
-@property (nonatomic, strong) NSButton   *disclosureButton;  // triangle + title (always visible)
+@property (nonatomic, strong) NSButton   *disclosureButton;  // NSBezelStyleDisclosure triangle
+@property (nonatomic, strong) NSTextField *titleLabel;       // section title label (next to triangle)
 @property (nonatomic, strong) NSButton   *runButton;         // [Run] button (always visible)
 @property (nonatomic, strong) NSProgressIndicator *progressBar; // replaces Run button while tracing
 @property (nonatomic, strong) NSView     *paramContainer;    // holds sliders (visible when expanded)
 @property (nonatomic, assign) BOOL        expanded;
 @property (nonatomic, assign) CGFloat     paramHeight;       // computed height of param container
 @property (nonatomic, copy)   NSString   *backendName;       // e.g. "vtracer", "opencv"
+@property (nonatomic, assign) NSInteger   tabIndex;          // 0=Image, 1=Vectors
+@property (nonatomic, strong) NSButton   *resetButton;       // [Reset] — restores defaults
+@property (nonatomic, copy)   void(^resetHandler)(void);     // per-section reset callback
+@property (nonatomic, copy)   CGFloat(^paramBuilderBlock)(NSView *container, CGFloat contentW, TracePanelController *ctrl);
 @end
 
 @implementation TraceModelSection
@@ -57,14 +65,28 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
 
 @interface TracePanelController ()
 
-@property (nonatomic, strong) NSScrollView *scrollView;
-@property (nonatomic, strong) TraceFlippedView *contentView;
+// Root container that holds the title, output mode, and tab view
+@property (nonatomic, strong) TraceFlippedView *rootContainer;
 
-// 16 model sections (0-11 existing + 12 Subject Cutout + 13 Apple Contours + 14 Pose Detection + 15 Depth Layers)
+// Tab view with "Image" and "Vectors" tabs
+@property (nonatomic, strong) NSTabView *tabView;
+
+// Per-tab scroll views and content views
+@property (nonatomic, strong) NSScrollView *imageScrollView;
+@property (nonatomic, strong) TraceFlippedView *imageContentView;
+@property (nonatomic, strong) NSScrollView *vectorsScrollView;
+@property (nonatomic, strong) TraceFlippedView *vectorsContentView;
+
+// All 16 model sections (indexed by original tag: 0-15)
 @property (nonatomic, strong) NSMutableArray<TraceModelSection*> *sections;
 
-// Status label at the bottom
-@property (nonatomic, strong) NSTextField *statusLabel;
+// Per-tab section index arrays (indices into self.sections)
+@property (nonatomic, strong) NSMutableArray<NSNumber*> *imageSectionIndices;
+@property (nonatomic, strong) NSMutableArray<NSNumber*> *vectorsSectionIndices;
+
+// Status label at the bottom of each tab
+@property (nonatomic, strong) NSTextField *imageStatusLabel;
+@property (nonatomic, strong) NSTextField *vectorsStatusLabel;
 @property (nonatomic, strong) NSTimer *statusTimer;
 @property (nonatomic, assign) BOOL hardwareGatingApplied;
 
@@ -112,6 +134,9 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
 @property (nonatomic, strong) NSSlider *vtracerCornerSlider;
 @property (nonatomic, strong) NSTextField *vtracerCornerValueLabel;
 @property (nonatomic, strong) NSPopUpButton *vtracerModePopup;
+
+// Preprocess Preview button (vtracer section)
+@property (nonatomic, strong) NSButton *preprocessPreviewButton;
 
 @property (nonatomic, strong) NSSlider *opencvThresholdSlider;
 @property (nonatomic, strong) NSTextField *opencvThresholdValueLabel;
@@ -212,6 +237,8 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
     if (!self) return nil;
 
     self.sections = [NSMutableArray array];
+    self.imageSectionIndices = [NSMutableArray array];
+    self.vectorsSectionIndices = [NSMutableArray array];
 
     // Set defaults for member properties
     self.vtracerCornerThreshold = 60;
@@ -235,144 +262,251 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
     self.contourpathTolerance = 1.0;
     self.contournestDepth = 3;
 
-    // Create the scroll view wrapper
-    self.scrollView = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, kPanelWidth, 660)];
-    self.scrollView.hasVerticalScroller = YES;
-    self.scrollView.hasHorizontalScroller = NO;
-    self.scrollView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-    self.scrollView.drawsBackground = YES;
-    self.scrollView.backgroundColor = [IllToolTheme panelBackground];
-    self.scrollView.borderType = NSNoBorder;
-
-    // Content view inside the scroll view
-    self.contentView = [[TraceFlippedView alloc] initWithFrame:NSMakeRect(0, 0, kPanelWidth, 1200)];
-    self.contentView.wantsLayer = YES;
-    self.contentView.layer.backgroundColor = [IllToolTheme panelBackground].CGColor;
-    self.scrollView.documentView = self.contentView;
-
     CGFloat contentW = kPanelWidth - 2*kPadding;
 
+    // --- Root container (holds title, output mode, and tab view) ---
+    self.rootContainer = [[TraceFlippedView alloc] initWithFrame:NSMakeRect(0, 0, kPanelWidth, 660)];
+    self.rootContainer.wantsLayer = YES;
+    self.rootContainer.layer.backgroundColor = [IllToolTheme panelBackground].CGColor;
+    self.rootContainer.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+
     // --- Panel title ---
-    NSTextField *title = [IllToolTheme makeLabelWithText:@"Ill Trace" font:[IllToolTheme labelFont] color:[IllToolTheme accentColor]];
+    NSTextField *title = [IllToolTheme makeLabelWithText:kITS_IllTrace font:[IllToolTheme labelFont] color:[IllToolTheme accentColor]];
     title.frame = NSMakeRect(kPadding, kPadding, contentW, kRowHeight);
     title.font = [NSFont boldSystemFontOfSize:12];
-    [self.contentView addSubview:title];
+    [self.rootContainer addSubview:title];
 
     // --- Output mode segmented control (Outline | Fill | Centerline) ---
-    self.outputModeControl = [NSSegmentedControl segmentedControlWithLabels:@[@"Outline", @"Fill", @"Centerline"]
+    // Created here; positioned inside the Vectors tab content during tab setup.
+    // Doesn't apply to Image tab — only vector trace backends care about outline/fill.
+    self.outputModeControl = [NSSegmentedControl segmentedControlWithLabels:@[kITS_Outline, kITS_Fill, kITS_Centerline]
                                                               trackingMode:NSSegmentSwitchTrackingSelectOne
                                                                     target:self
                                                                     action:@selector(outputModeChanged:)];
     self.outputModeControl.selectedSegment = 1;  // default: Fill
-    self.outputModeControl.frame = NSMakeRect(kPadding, kPadding + kRowHeight + 4, contentW, 22);
     self.outputModeControl.font = [NSFont systemFontOfSize:10];
     self.outputModeControl.toolTip = @"Outline: black strokes only. Fill: colored regions. Centerline: single-pixel center of drawn strokes.";
-    [self.contentView addSubview:self.outputModeControl];
+
+    // --- Tab view (Image / Vectors) — starts right below the title ---
+    CGFloat tabY = kPadding + kRowHeight + 4;
+    CGFloat tabH = 660 - tabY;
+    self.tabView = [[NSTabView alloc] initWithFrame:NSMakeRect(0, tabY, kPanelWidth, tabH)];
+    self.tabView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    self.tabView.font = [NSFont systemFontOfSize:11];
+
+    // Image tab
+    NSTabViewItem *imageTab = [[NSTabViewItem alloc] initWithIdentifier:@"image"];
+    imageTab.label = kITS_Image;
+    [self.tabView addTabViewItem:imageTab];
+
+    // Vectors tab
+    NSTabViewItem *vectorsTab = [[NSTabViewItem alloc] initWithIdentifier:@"vectors"];
+    vectorsTab.label = kITS_Vectors;
+    [self.tabView addTabViewItem:vectorsTab];
+
+    [self.rootContainer addSubview:self.tabView];
+
+    // --- Per-tab scroll views ---
+    NSRect tabContentRect = [self.tabView contentRect];
+
+    // Image tab scroll view
+    self.imageScrollView = [[NSScrollView alloc] initWithFrame:tabContentRect];
+    self.imageScrollView.hasVerticalScroller = YES;
+    self.imageScrollView.hasHorizontalScroller = NO;
+    self.imageScrollView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    self.imageScrollView.drawsBackground = YES;
+    self.imageScrollView.backgroundColor = [IllToolTheme panelBackground];
+    self.imageScrollView.borderType = NSNoBorder;
+
+    self.imageContentView = [[TraceFlippedView alloc] initWithFrame:NSMakeRect(0, 0, tabContentRect.size.width, 800)];
+    self.imageContentView.wantsLayer = YES;
+    self.imageContentView.layer.backgroundColor = [IllToolTheme panelBackground].CGColor;
+    self.imageScrollView.documentView = self.imageContentView;
+    [imageTab setView:self.imageScrollView];
+    [imageTab release];
+
+    // Vectors tab scroll view
+    self.vectorsScrollView = [[NSScrollView alloc] initWithFrame:tabContentRect];
+    self.vectorsScrollView.hasVerticalScroller = YES;
+    self.vectorsScrollView.hasHorizontalScroller = NO;
+    self.vectorsScrollView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    self.vectorsScrollView.drawsBackground = YES;
+    self.vectorsScrollView.backgroundColor = [IllToolTheme panelBackground];
+    self.vectorsScrollView.borderType = NSNoBorder;
+
+    self.vectorsContentView = [[TraceFlippedView alloc] initWithFrame:NSMakeRect(0, 0, tabContentRect.size.width, 1200)];
+    self.vectorsContentView.wantsLayer = YES;
+    self.vectorsContentView.layer.backgroundColor = [IllToolTheme panelBackground].CGColor;
+    self.vectorsScrollView.documentView = self.vectorsContentView;
+    [vectorsTab setView:self.vectorsScrollView];
+    [vectorsTab release];
 
     // ==========================================
-    //  Build 12 model sections
+    //  Build all 16 model sections
+    //  Image tab (tabIndex=0): Subject Cutout, Depth Layers, Normal Reference,
+    //                          Form Edge, DiffVG, Analyze Ref
+    //  Vectors tab (tabIndex=1): vtracer, Apple Contours, OpenCV, StarVector,
+    //                            CartoonSeg, Contour Scanner, Contour Path,
+    //                            Contour Labeler, Contour Nesting, Pose Detection
     // ==========================================
+
+    // --- Vectors tab sections ---
 
     // 0: vtracer
-    [self addModelSection:@"vtracer (clean SVG)" backend:@"vtracer" tag:0
+    [self addModelSection:@"vtracer (clean SVG)" backend:@"vtracer" tag:0 tabIndex:1
            paramBuilder:^(NSView *container, CGFloat cw, TracePanelController *ctrl) {
         return [ctrl buildVtracerParams:container width:cw];
     }];
 
     // 1: OpenCV Contours
-    [self addModelSection:@"OpenCV Contours" backend:@"opencv" tag:1
+    [self addModelSection:@"OpenCV Contours" backend:@"opencv" tag:1 tabIndex:1
            paramBuilder:^(NSView *container, CGFloat cw, TracePanelController *ctrl) {
         return [ctrl buildOpenCVParams:container width:cw];
     }];
 
     // 2: StarVector (ML) — no params
-    [self addModelSection:@"StarVector (ML)" backend:@"starvector" tag:2
+    [self addModelSection:@"StarVector (ML)" backend:@"starvector" tag:2 tabIndex:1
            paramBuilder:^(NSView *container, CGFloat cw, TracePanelController *ctrl) {
         return (CGFloat)0.0;
     }];
 
     // 3: DiffVG Correction
-    [self addModelSection:@"DiffVG Correction" backend:@"diffvg" tag:3
+    [self addModelSection:@"DiffVG Correction" backend:@"diffvg" tag:3 tabIndex:0
            paramBuilder:^(NSView *container, CGFloat cw, TracePanelController *ctrl) {
         return [ctrl buildDiffVGParams:container width:cw];
     }];
 
     // 4: CartoonSeg
-    [self addModelSection:@"CartoonSeg" backend:@"cartoonseg" tag:4
+    [self addModelSection:@"CartoonSeg" backend:@"cartoonseg" tag:4 tabIndex:1
            paramBuilder:^(NSView *container, CGFloat cw, TracePanelController *ctrl) {
         return [ctrl buildCartoonSegParams:container width:cw];
     }];
 
     // 5: Normal Reference
-    [self addModelSection:@"Normal Reference" backend:@"normal_ref" tag:5
+    [self addModelSection:@"Normal Reference" backend:@"normal_ref" tag:5 tabIndex:0
            paramBuilder:^(NSView *container, CGFloat cw, TracePanelController *ctrl) {
         return [ctrl buildNormalRefParams:container width:cw];
     }];
 
     // 6: Form Edge Extract
-    [self addModelSection:@"Form Edge Extract" backend:@"form_edge" tag:6
+    [self addModelSection:@"Form Edge Extract" backend:@"form_edge" tag:6 tabIndex:0
            paramBuilder:^(NSView *container, CGFloat cw, TracePanelController *ctrl) {
         return [ctrl buildFormEdgeParams:container width:cw];
     }];
 
     // 7: Analyze Reference — no params
-    [self addModelSection:@"Analyze Reference" backend:@"analyze_ref" tag:7
+    [self addModelSection:@"Analyze Reference" backend:@"analyze_ref" tag:7 tabIndex:0
            paramBuilder:^(NSView *container, CGFloat cw, TracePanelController *ctrl) {
         return (CGFloat)0.0;
     }];
 
     // 8: Contour Scanner
-    [self addModelSection:@"Contour Scanner" backend:@"contour_scan" tag:8
+    [self addModelSection:@"Contour Scanner" backend:@"contour_scan" tag:8 tabIndex:1
            paramBuilder:^(NSView *container, CGFloat cw, TracePanelController *ctrl) {
         return [ctrl buildContourScanParams:container width:cw];
     }];
 
     // 9: Contour to Path
-    [self addModelSection:@"Contour to Path" backend:@"contour_path" tag:9
+    [self addModelSection:@"Contour to Path" backend:@"contour_path" tag:9 tabIndex:1
            paramBuilder:^(NSView *container, CGFloat cw, TracePanelController *ctrl) {
         return [ctrl buildContourPathParams:container width:cw];
     }];
 
     // 10: Contour Labeler — no params
-    [self addModelSection:@"Contour Labeler" backend:@"contour_label" tag:10
+    [self addModelSection:@"Contour Labeler" backend:@"contour_label" tag:10 tabIndex:1
            paramBuilder:^(NSView *container, CGFloat cw, TracePanelController *ctrl) {
         return (CGFloat)0.0;
     }];
 
     // 11: Contour Nesting
-    [self addModelSection:@"Contour Nesting" backend:@"contour_nest" tag:11
+    [self addModelSection:@"Contour Nesting" backend:@"contour_nest" tag:11 tabIndex:1
            paramBuilder:^(NSView *container, CGFloat cw, TracePanelController *ctrl) {
         return [ctrl buildContourNestParams:container width:cw];
     }];
 
-    // 12: Subject Cutout (macOS Vision framework)
+    // 12: Subject Cutout (macOS Vision framework) — Image tab
     [self addCutoutSection];
 
     // 13: Apple Contours (Native Vision framework contour detection)
-    [self addModelSection:@"Apple Contours (Native)" backend:@"apple_contours" tag:13
+    [self addModelSection:@"Apple Contours (Native)" backend:@"apple_contours" tag:13 tabIndex:1
            paramBuilder:^(NSView *container, CGFloat cw, TracePanelController *ctrl) {
         return [ctrl buildAppleContoursParams:container width:cw];
     }];
 
     // 14: Pose Detection (body/face/hand keypoints via Vision framework)
-    [self addModelSection:@"Pose Detection" backend:@"detect_pose" tag:14
+    [self addModelSection:@"Pose Detection" backend:@"detect_pose" tag:14 tabIndex:1
            paramBuilder:^(NSView *container, CGFloat cw, TracePanelController *ctrl) {
         return [ctrl buildPoseParams:container width:cw];
     }];
 
-    // 15: Depth Layers (ONNX Depth Anything V2)
-    [self addModelSection:@"Depth Layers (AI)" backend:@"depth_decompose" tag:15
+    // 15: Depth Layers (ONNX Depth Anything V2) — Image tab
+    [self addModelSection:@"Depth Layers (AI)" backend:@"depth_decompose" tag:15 tabIndex:0
            paramBuilder:^(NSView *container, CGFloat cw, TracePanelController *ctrl) {
         return [ctrl buildDepthParams:container width:cw];
     }];
 
-    // --- Status label at the bottom ---
-    self.statusLabel = [IllToolTheme makeLabelWithText:@"Expand a model, adjust params, click Run" font:[IllToolTheme labelFont] color:[IllToolTheme secondaryTextColor]];
-    self.statusLabel.maximumNumberOfLines = 3;
-    [self.contentView addSubview:self.statusLabel];
+    // 16: Symmetry Correction — Image tab
+    [self addModelSection:@"Symmetry Correction" backend:@"symmetry" tag:16 tabIndex:0
+           paramBuilder:^(NSView *container, CGFloat cw, TracePanelController *ctrl) {
+        return [ctrl buildSymmetryParams:container width:cw];
+    }];
 
-    // Perform initial layout
-    [self relayoutContent];
+    // Hide generic Run button for symmetry (uses own Preview/Apply/Reset)
+    if (self.sections.count > 16) {
+        TraceModelSection *symSec = self.sections[16];
+        symSec.runButton.hidden = YES;
+    }
+
+    // Per-backend action labels — make the button verb describe the actual action
+    // (replaces generic "Run" with action-specific labels)
+    auto setActionTitle = ^(NSInteger idx, NSString *title) {
+        if (self.sections.count > (NSUInteger)idx) {
+            TraceModelSection *s = self.sections[idx];
+            if (s && s.runButton) s.runButton.title = title;
+        }
+    };
+    setActionTitle(0,  kITS_Trace);      // vtracer
+    setActionTitle(1,  kITS_Trace);      // OpenCV Contours
+    setActionTitle(2,  kITS_Trace);      // StarVector
+    setActionTitle(3,  kITS_Correct);    // DiffVG
+    setActionTitle(4,  kITS_Segment);    // CartoonSeg
+    setActionTitle(5,  kITS_Create);     // Normal Reference
+    setActionTitle(6,  kITS_Extract);    // Form Edge Extract
+    setActionTitle(7,  kITS_Analyze);    // Analyze Reference
+    setActionTitle(8,  kITS_Scan);       // Contour Scanner
+    setActionTitle(9,  kITS_Convert);    // Contour to Path
+    setActionTitle(10, kITS_Label);      // Contour Labeler
+    setActionTitle(11, kITS_Nest);       // Contour Nesting
+    // index 12 = cutout (own buttons)
+    setActionTitle(13, kITS_Trace);      // Apple Contours
+    setActionTitle(14, kITS_Detect);     // Pose Detection
+    setActionTitle(15, kITS_Separate);   // Depth Layers
+    // index 16 = symmetry (own buttons, runButton hidden)
+
+    // --- Override display order within each tab ---
+    // Image tab: Subject Cutout(12), Symmetry(16), Depth Layers(15), Normal Reference(5),
+    //            Form Edge(6), DiffVG(3), Analyze Ref(7)
+    [self.imageSectionIndices removeAllObjects];
+    [self.imageSectionIndices addObjectsFromArray:@[@12, @16, @15, @5, @6, @3, @7]];
+
+    // Vectors tab: vtracer(0), Apple Contours(13), OpenCV(1), StarVector(2),
+    //              CartoonSeg(4), Contour Scanner(8), Contour Path(9),
+    //              Contour Labeler(10), Contour Nesting(11), Pose Detection(14)
+    [self.vectorsSectionIndices removeAllObjects];
+    [self.vectorsSectionIndices addObjectsFromArray:@[@0, @13, @1, @2, @4, @8, @9, @10, @11, @14]];
+
+    // --- Status labels at the bottom of each tab ---
+    self.imageStatusLabel = [IllToolTheme makeLabelWithText:kITS_TraceDefaultHelp font:[IllToolTheme labelFont] color:[IllToolTheme secondaryTextColor]];
+    self.imageStatusLabel.maximumNumberOfLines = 3;
+    [self.imageContentView addSubview:self.imageStatusLabel];
+
+    self.vectorsStatusLabel = [IllToolTheme makeLabelWithText:kITS_TraceDefaultHelp font:[IllToolTheme labelFont] color:[IllToolTheme secondaryTextColor]];
+    self.vectorsStatusLabel.maximumNumberOfLines = 3;
+    [self.vectorsContentView addSubview:self.vectorsStatusLabel];
+
+    // Perform initial layout for both tabs
+    [self relayoutTab:0];
+    [self relayoutTab:1];
 
     // Status polling timer
     self.statusTimer = [NSTimer scheduledTimerWithTimeInterval:0.5
@@ -393,116 +527,163 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
 
 - (NSView *)rootView
 {
-    return self.scrollView;
+    return self.rootContainer;
 }
 
 //----------------------------------------------------------------------------------------
 //  addModelSection — creates disclosure + run button + param container for one backend
+//  tabIndex: 0=Image tab, 1=Vectors tab
 //----------------------------------------------------------------------------------------
 
 - (void)addModelSection:(NSString *)displayTitle
                 backend:(NSString *)backendName
                     tag:(NSInteger)tag
+               tabIndex:(NSInteger)tabIndex
            paramBuilder:(CGFloat(^)(NSView *container, CGFloat contentW, TracePanelController *ctrl))builder
 {
     CGFloat contentW = kPanelWidth - 2*kPadding;
 
+    // Pick the correct content view based on tab
+    TraceFlippedView *targetContentView = (tabIndex == 0) ? self.imageContentView : self.vectorsContentView;
+
     TraceModelSection *sec = [[TraceModelSection alloc] init];
     sec.backendName = backendName;
-    sec.expanded = (tag == 0); // first section expanded by default
+    sec.expanded = NO;  // all sections collapsed by default
+    sec.tabIndex = tabIndex;
 
-    // Disclosure button (triangle + title)
-    sec.disclosureButton = [self makeDisclosureButton:displayTitle tag:tag expanded:sec.expanded];
-    [self.contentView addSubview:sec.disclosureButton];
+    // Disclosure triangle (NSBezelStyleDisclosure — standard macOS look)
+    sec.disclosureButton = [self makeDisclosureButton:displayTitle tag:tag expanded:NO];
+    [targetContentView addSubview:sec.disclosureButton];
 
-    // Run button
-    sec.runButton = [NSButton buttonWithTitle:@"Run" target:self action:@selector(runModelClicked:)];
-    sec.runButton.font = [NSFont systemFontOfSize:10];
+    // Title label (next to the disclosure triangle)
+    sec.titleLabel = [IllToolTheme makeLabelWithText:displayTitle
+                                                font:[IllToolTheme labelFont]
+                                               color:[IllToolTheme textColor]];
+    [targetContentView addSubview:sec.titleLabel];
+
+    // Parameter container
+    sec.paramContainer = [[TraceFlippedView alloc] initWithFrame:NSZeroRect];
+    [targetContentView addSubview:sec.paramContainer];
+
+    // Remember the builder so Reset can rebuild sliders against refreshed bridge state
+    sec.paramBuilderBlock = builder;
+
+    // Build parameters inside the container
+    CGFloat paramH = builder(sec.paramContainer, contentW - 16, self); // 16 = indent
+
+    // Run button — lives INSIDE the accordion (paramContainer) to avoid header truncation
+    // for long labels like "Separate". Main action button, large bottom row.
+    sec.runButton = [NSButton buttonWithTitle:kITS_Run target:self action:@selector(runModelClicked:)];
+    sec.runButton.font = [NSFont systemFontOfSize:11];
     sec.runButton.bezelStyle = NSBezelStyleSmallSquare;
     sec.runButton.tag = tag;
-    [self.contentView addSubview:sec.runButton];
+    [sec.paramContainer addSubview:sec.runButton];
 
-    // Progress bar (hidden by default, shown during trace)
+    // Progress bar (hidden by default, shown during action). Same frame as runButton.
     sec.progressBar = [[NSProgressIndicator alloc] initWithFrame:NSZeroRect];
     sec.progressBar.style = NSProgressIndicatorStyleBar;
     sec.progressBar.indeterminate = YES;
     sec.progressBar.hidden = YES;
-    [self.contentView addSubview:sec.progressBar];
+    [sec.paramContainer addSubview:sec.progressBar];
 
-    // Parameter container
-    sec.paramContainer = [[TraceFlippedView alloc] initWithFrame:NSZeroRect];
-    [self.contentView addSubview:sec.paramContainer];
+    // Reset button — narrow, left-aligned in action row, restores defaults.
+    sec.resetButton = [NSButton buttonWithTitle:@"Reset" target:self action:@selector(resetSectionClicked:)];
+    sec.resetButton.font = [NSFont systemFontOfSize:10];
+    sec.resetButton.bezelStyle = NSBezelStyleSmallSquare;
+    sec.resetButton.tag = tag;
+    sec.resetButton.toolTip = @"Restore default values for this backend";
+    [sec.paramContainer addSubview:sec.resetButton];
 
-    // Build parameters inside the container
-    CGFloat paramH = builder(sec.paramContainer, contentW - 16, self); // 16 = indent
-    sec.paramHeight = paramH;
-
-    if (!sec.expanded) {
-        sec.paramContainer.hidden = YES;
-    }
+    // Reserve space at the bottom of the container for the action + reset row.
+    sec.paramHeight = paramH + 28.0;  // 22 button + 6 padding
+    sec.paramContainer.hidden = YES;  // collapsed by default
 
     [self.sections addObject:sec];
+
+    // Track which tab this section belongs to
+    NSInteger sectionIndex = (NSInteger)self.sections.count - 1;
+    if (tabIndex == 0) {
+        [self.imageSectionIndices addObject:@(sectionIndex)];
+    } else {
+        [self.vectorsSectionIndices addObject:@(sectionIndex)];
+    }
 }
 
 //----------------------------------------------------------------------------------------
-//  Disclosure button factory
+//  Disclosure button factory — uses NSBezelStyleDisclosure for standard macOS triangles
 //----------------------------------------------------------------------------------------
 
 - (NSButton *)makeDisclosureButton:(NSString *)title tag:(NSInteger)tag expanded:(BOOL)expanded
 {
-    NSButton *header = [[NSButton alloc] initWithFrame:NSZeroRect];
-    header.bordered = NO;
-    header.buttonType = NSButtonTypeMomentaryLight;
-    header.target = self;
-    header.action = @selector(sectionToggled:);
-    header.tag = tag;
+    NSButton *disclosure = [[NSButton alloc] initWithFrame:NSMakeRect(0, 0, 13, 13)];
+    disclosure.bezelStyle = NSBezelStyleDisclosure;
+    disclosure.buttonType = NSButtonTypeOnOff;
+    disclosure.title = @"";
+    disclosure.state = expanded ? NSControlStateValueOn : NSControlStateValueOff;
+    disclosure.target = self;
+    disclosure.action = @selector(sectionToggled:);
+    disclosure.tag = tag;
 
-    NSString *prefix = expanded ? @"\u25BC " : @"\u25B6 ";
-    NSString *fullTitle = [NSString stringWithFormat:@"%@%@", prefix, title];
-    NSMutableAttributedString *attrTitle = [[NSMutableAttributedString alloc]
-        initWithString:fullTitle];
-    [attrTitle addAttribute:NSForegroundColorAttributeName
-                      value:[IllToolTheme textColor]
-                      range:NSMakeRange(0, attrTitle.length)];
-    [attrTitle addAttribute:NSFontAttributeName
-                      value:[IllToolTheme labelFont]
-                      range:NSMakeRange(0, attrTitle.length)];
-    header.attributedTitle = attrTitle;
-    header.alignment = NSTextAlignmentLeft;
-    [attrTitle release];
-
-    return [header autorelease];
+    return [disclosure autorelease];
 }
 
 //----------------------------------------------------------------------------------------
-//  Relayout — recalculates y-positions for all sections and the status label
+//  relayoutTab: — recalculates y-positions for all sections in the given tab
+//  tabIndex: 0=Image, 1=Vectors
 //  NO animation. Pure position recalculation.
 //----------------------------------------------------------------------------------------
 
-- (void)relayoutContent
+- (void)relayoutTab:(NSInteger)tabIndex
 {
     CGFloat contentW = kPanelWidth - 2*kPadding;
-    CGFloat y = kPadding + kRowHeight + 6;  // skip past title
+    CGFloat y = kPadding;
 
-    // Position segmented control below title
-    self.outputModeControl.frame = NSMakeRect(kPadding, y, contentW, 22);
-    y += 26;  // segmented control height + spacing
+    NSMutableArray<NSNumber*> *indices = (tabIndex == 0) ? self.imageSectionIndices : self.vectorsSectionIndices;
+    TraceFlippedView *contentView = (tabIndex == 0) ? self.imageContentView : self.vectorsContentView;
+    NSTextField *statusLabel = (tabIndex == 0) ? self.imageStatusLabel : self.vectorsStatusLabel;
 
-    CGFloat runBtnW = 40.0;
-    CGFloat disclosureW = contentW - runBtnW - 4;
+    // Output mode segment (Outline/Fill/Centerline) only applies to vector tracing.
+    // Move it into the Vectors tab content, at the top.
+    if (tabIndex == 1 && self.outputModeControl) {
+        if (self.outputModeControl.superview != contentView) {
+            [self.outputModeControl removeFromSuperview];
+            [contentView addSubview:self.outputModeControl];
+        }
+        self.outputModeControl.frame = NSMakeRect(kPadding, y, contentW, 22);
+        self.outputModeControl.hidden = NO;
+        y += 22 + kPadding;
+    } else if (tabIndex == 0 && self.outputModeControl) {
+        self.outputModeControl.hidden = YES;
+    }
 
-    for (TraceModelSection *sec in self.sections) {
-        // Disclosure button (left side)
-        sec.disclosureButton.frame = NSMakeRect(kPadding, y, disclosureW, 20);
-        // Run button / progress bar (right side, same row)
-        NSRect runFrame = NSMakeRect(kPadding + disclosureW + 4, y, runBtnW, 20);
-        sec.runButton.frame = runFrame;
-        sec.progressBar.frame = runFrame;
-        y += 22;
+    CGFloat rowH = 20.0;           // shared row height for disclosure + label
+    CGFloat discTriW = 13.0;       // NSBezelStyleDisclosure natural width
+    CGFloat titleW = contentW - discTriW - 6;
 
-        // Parameter container (indented)
+    for (NSNumber *idxNum in indices) {
+        NSInteger idx = [idxNum integerValue];
+        TraceModelSection *sec = self.sections[idx];
+
+        // Both disclosure and title share the same row frame so their visual
+        // centers align. The button auto-centers its 13×13 triangle inside.
+        sec.disclosureButton.frame = NSMakeRect(kPadding, y, discTriW, rowH);
+        sec.titleLabel.frame       = NSMakeRect(kPadding + discTriW + 4, y, titleW, rowH);
+        y += rowH + 2;
+
+        // Parameter container (indented) — the action + reset buttons live at the bottom inside.
         if (sec.expanded && sec.paramHeight > 0) {
-            sec.paramContainer.frame = NSMakeRect(kPadding + 8, y, contentW - 8, sec.paramHeight);
+            CGFloat paramW = contentW - 8;
+            sec.paramContainer.frame = NSMakeRect(kPadding + 8, y, paramW, sec.paramHeight);
+
+            // Bottom row: [Reset][===== Action =====]
+            CGFloat resetW = 54.0;
+            CGFloat gap = 4.0;
+            NSRect resetFrame  = NSMakeRect(0, sec.paramHeight - 22.0, resetW, 22.0);
+            NSRect actionFrame = NSMakeRect(resetW + gap, sec.paramHeight - 22.0,
+                                            paramW - resetW - gap, 22.0);
+            sec.resetButton.frame = resetFrame;
+            sec.runButton.frame = actionFrame;
+            sec.progressBar.frame = actionFrame;
             sec.paramContainer.hidden = NO;
             y += sec.paramHeight + 2;
         } else {
@@ -515,11 +696,18 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
     y += 4;
 
     // Status label
-    self.statusLabel.frame = NSMakeRect(kPadding, y, contentW, kRowHeight * 3);
+    statusLabel.frame = NSMakeRect(kPadding, y, contentW, kRowHeight * 3);
     y += kRowHeight * 3 + kPadding;
 
-    // Resize contentView to fit
-    self.contentView.frame = NSMakeRect(0, 0, kPanelWidth, y);
+    // Resize content view to fit
+    contentView.frame = NSMakeRect(0, 0, kPanelWidth, y);
+}
+
+// Convenience: relayout both tabs
+- (void)relayoutContent
+{
+    [self relayoutTab:0];
+    [self relayoutTab:1];
 }
 
 //========================================================================================
@@ -614,85 +802,96 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
 {
     CGFloat y = 2;
 
-    y = [self addSliderRow:container atY:y width:w label:@"Speckle Filter:"
+    // Preprocess Preview button — shows what the trace will see before running
+    self.preprocessPreviewButton = [NSButton buttonWithTitle:kITS_PreviewPreprocess
+                                                     target:self
+                                                     action:@selector(preprocessPreviewClicked:)];
+    self.preprocessPreviewButton.font = [NSFont systemFontOfSize:10];
+    self.preprocessPreviewButton.bezelStyle = NSBezelStyleSmallSquare;
+    self.preprocessPreviewButton.toolTip = @"Show a preview overlay of what the trace algorithm will see (edges, skeleton, etc.) based on current settings. Click again to clear.";
+    self.preprocessPreviewButton.frame = NSMakeRect(0, y, w, 22);
+    [container addSubview:self.preprocessPreviewButton];
+    y += 26;
+
+    y = [self addSliderRow:container atY:y width:w label:kITS_SpeckleFilter
                    tooltip:@"Remove noise clusters smaller than N pixels. Higher = cleaner, fewer details."
                   minValue:1 maxValue:100 defaultValue:4 isFloatDisp:NO
                  outSlider:&_vtracerSpeckleSlider outValueLabel:&_vtracerSpeckleValueLabel
                     action:@selector(vtracerSpeckleChanged:)];
 
-    y = [self addSliderRow:container atY:y width:w label:@"Color Precision:"
+    y = [self addSliderRow:container atY:y width:w label:kITS_ColorPrecision
                    tooltip:@"Color quantization bits. Lower = fewer colors, simpler shapes. Higher = more color fidelity."
                   minValue:1 maxValue:10 defaultValue:6 isFloatDisp:NO
                  outSlider:&_vtracerColorPrecSlider outValueLabel:&_vtracerColorPrecValueLabel
                     action:@selector(vtracerColorPrecChanged:)];
 
-    y = [self addSliderRow:container atY:y width:w label:@"Corner Threshold:"
+    y = [self addSliderRow:container atY:y width:w label:kITS_CornerThreshold
                    tooltip:@"Angle (degrees) to detect sharp turns. Lower = more corners detected. Higher = smoother curves."
                   minValue:0 maxValue:180 defaultValue:60 isFloatDisp:NO
                  outSlider:&_vtracerCornerSlider outValueLabel:&_vtracerCornerValueLabel
                     action:@selector(vtracerCornerChanged:)];
 
-    y = [self addSliderRow:container atY:y width:w label:@"Length Threshold:"
+    y = [self addSliderRow:container atY:y width:w label:kITS_LengthThreshold
                    tooltip:@"Minimum path length to keep. Higher = removes short fragments. Lower = keeps fine details."
                   minValue:0.5 maxValue:50.0 defaultValue:4.0 isFloatDisp:YES
                  outSlider:&_vtracerLengthThreshSlider outValueLabel:&_vtracerLengthThreshValueLabel
                     action:@selector(vtracerLengthThreshChanged:)];
 
-    y = [self addSliderRow:container atY:y width:w label:@"Splice Angle:"
+    y = [self addSliderRow:container atY:y width:w label:kITS_SpliceAngle
                    tooltip:@"Angle (degrees) for joining adjacent paths. Higher = more aggressive joining. Lower = more separate paths."
                   minValue:0 maxValue:180 defaultValue:45 isFloatDisp:NO
                  outSlider:&_vtracerSpliceSlider outValueLabel:&_vtracerSpliceValueLabel
                     action:@selector(vtracerSpliceChanged:)];
 
-    y = [self addSliderRow:container atY:y width:w label:@"Curve Fit Iterations:"
+    y = [self addSliderRow:container atY:y width:w label:kITS_CurveFitIter
                    tooltip:@"Curve fitting passes. Higher = smoother curves, slower. Lower = faster, more angular."
                   minValue:1 maxValue:50 defaultValue:10 isFloatDisp:NO
                  outSlider:&_vtracerMaxIterSlider outValueLabel:&_vtracerMaxIterValueLabel
                     action:@selector(vtracerMaxIterChanged:)];
 
-    y = [self addSliderRow:container atY:y width:w label:@"Layer Difference:"
+    y = [self addSliderRow:container atY:y width:w label:kITS_LayerDifference
                    tooltip:@"Color difference threshold for layer separation. Lower = more layers, finer detail. Higher = fewer layers, simpler."
                   minValue:1 maxValue:128 defaultValue:25 isFloatDisp:NO
                  outSlider:&_vtracerLayerDiffSlider outValueLabel:&_vtracerLayerDiffValueLabel
                     action:@selector(vtracerLayerDiffChanged:)];
 
-    y = [self addPopupRow:container atY:y width:w label:@"Mode:"
+    y = [self addPopupRow:container atY:y width:w label:kITS_ModeLabel
                   tooltip:@"Spline = smooth bezier curves. Polygon = straight-line segments only."
                     items:@[@"spline", @"polygon"] defaultIndex:0
                  outPopup:&_vtracerModePopup action:@selector(vtracerModeChanged:)];
 
     // --- Centerline Settings separator ---
     y += 4;
-    NSTextField *clLabel = [IllToolTheme makeLabelWithText:@"Centerline Settings" font:[IllToolTheme labelFont] color:[IllToolTheme secondaryTextColor]];
+    NSTextField *clLabel = [IllToolTheme makeLabelWithText:kITS_CenterlineSettings font:[IllToolTheme labelFont] color:[IllToolTheme secondaryTextColor]];
     clLabel.frame = NSMakeRect(0, y, w, kParamRowH);
     [container addSubview:clLabel];
     y += kParamRowH + 2;
 
-    y = [self addSliderRow:container atY:y width:w label:@"Canny Low:"
+    y = [self addSliderRow:container atY:y width:w label:kITS_CannyLow
                    tooltip:@"Weak edge threshold. Lower = more edges detected, noisier. Higher = only strong edges."
                   minValue:10 maxValue:200 defaultValue:80 isFloatDisp:NO
                  outSlider:&_cannyLowSlider outValueLabel:&_cannyLowValueLabel
                     action:@selector(cannyLowChanged:)];
 
-    y = [self addSliderRow:container atY:y width:w label:@"Canny High:"
+    y = [self addSliderRow:container atY:y width:w label:kITS_CannyHigh
                    tooltip:@"Strong edge threshold. Sets minimum gradient for definite edges."
                   minValue:50 maxValue:400 defaultValue:200 isFloatDisp:NO
                  outSlider:&_cannyHighSlider outValueLabel:&_cannyHighValueLabel
                     action:@selector(cannyHighChanged:)];
 
-    y = [self addSliderRow:container atY:y width:w label:@"Edge Dilation:"
+    y = [self addSliderRow:container atY:y width:w label:kITS_EdgeDilation
                    tooltip:@"Edge thickening radius before skeletonization. Higher = connects fragmented lines. Lower = preserves detail. (kernel = 2*val+1)"
                   minValue:0 maxValue:5 defaultValue:2 isFloatDisp:NO
                  outSlider:&_dilationRadiusSlider outValueLabel:&_dilationRadiusValueLabel
                     action:@selector(dilationRadiusChanged:)];
 
-    y = [self addSliderRow:container atY:y width:w label:@"Skeleton Threshold:"
+    y = [self addSliderRow:container atY:y width:w label:kITS_SkeletonThreshold
                    tooltip:@"Brightness cutoff for thinning. Lower = more aggressive skeleton. Higher = preserves thicker strokes."
                   minValue:50 maxValue:200 defaultValue:128 isFloatDisp:NO
                  outSlider:&_skeletonThreshSlider outValueLabel:&_skeletonThreshValueLabel
                     action:@selector(skeletonThreshChanged:)];
 
-    y = [self addSliderRow:container atY:y width:w label:@"Normal Strength:"
+    y = [self addSliderRow:container atY:y width:w label:kITS_NormalStrength
                    tooltip:@"Height-to-normal conversion intensity. Higher = more pronounced surface detail. Lower = subtler normals."
                   minValue:0.5 maxValue:10.0 defaultValue:2.0 isFloatDisp:YES
                  outSlider:&_normalStrengthSlider outValueLabel:&_normalStrengthValueLabel
@@ -707,13 +906,13 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
 {
     CGFloat y = 2;
 
-    y = [self addSliderRow:container atY:y width:w label:@"Threshold:"
+    y = [self addSliderRow:container atY:y width:w label:kITS_Threshold
                    tooltip:@"Binarization cutoff (0-255). Pixels above = white, below = black. Affects edge detection."
                   minValue:0 maxValue:255 defaultValue:128 isFloatDisp:NO
                  outSlider:&_opencvThresholdSlider outValueLabel:&_opencvThresholdValueLabel
                     action:@selector(opencvThresholdChanged:)];
 
-    y = [self addSliderRow:container atY:y width:w label:@"Min Area:"
+    y = [self addSliderRow:container atY:y width:w label:kITS_MinArea
                    tooltip:@"Minimum contour area in pixels. Filters out small noise regions. Higher = fewer, larger shapes."
                   minValue:1 maxValue:1000 defaultValue:50 isFloatDisp:NO
                  outSlider:&_opencvMinAreaSlider outValueLabel:&_opencvMinAreaValueLabel
@@ -728,13 +927,13 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
 {
     CGFloat y = 2;
 
-    y = [self addSliderRow:container atY:y width:w label:@"Iterations:"
+    y = [self addSliderRow:container atY:y width:w label:kITS_Iterations
                    tooltip:@"Optimization passes. More iterations = closer match to raster, slower. Fewer = faster, rougher."
                   minValue:10 maxValue:500 defaultValue:100 isFloatDisp:NO
                  outSlider:&_diffvgIterationsSlider outValueLabel:&_diffvgIterationsValueLabel
                     action:@selector(diffvgIterationsChanged:)];
 
-    y = [self addSliderRow:container atY:y width:w label:@"Learning Rate:"
+    y = [self addSliderRow:container atY:y width:w label:kITS_LearningRate
                    tooltip:@"Step size per optimization pass. Higher = faster convergence but may overshoot. Lower = stable but slower."
                   minValue:0.01 maxValue:1.0 defaultValue:0.01 isFloatDisp:YES
                  outSlider:&_diffvgLRSlider outValueLabel:&_diffvgLRValueLabel
@@ -749,7 +948,7 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
 {
     CGFloat y = 2;
 
-    y = [self addSliderRow:container atY:y width:w label:@"Confidence:"
+    y = [self addSliderRow:container atY:y width:w label:kITS_Confidence
                    tooltip:@"Segmentation confidence threshold. Higher = fewer but more certain regions. Lower = more regions, may include noise."
                   minValue:0.1 maxValue:1.0 defaultValue:0.5 isFloatDisp:YES
                  outSlider:&_cartoonsegConfSlider outValueLabel:&_cartoonsegConfValueLabel
@@ -764,25 +963,25 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
 {
     CGFloat y = 2;
 
-    y = [self addSliderRow:container atY:y width:w label:@"K Planes:"
+    y = [self addSliderRow:container atY:y width:w label:kITS_KPlanes
                    tooltip:@"Number of normal-map planes to extract. More planes = finer surface detail. Fewer = broader forms."
                   minValue:2 maxValue:16 defaultValue:6 isFloatDisp:NO
                  outSlider:&_normalrefKPlanesSlider outValueLabel:&_normalrefKPlanesValueLabel
                     action:@selector(normalrefKPlanesChanged:)];
 
-    y = [self addSliderRow:container atY:y width:w label:@"Pre-Blur Sigma:"
+    y = [self addSliderRow:container atY:y width:w label:kITS_PreBlurSigma
                    tooltip:@"Smooth noise before computing normals. Higher = softer normals, less noise. 0 = no blur."
                   minValue:0.0 maxValue:5.0 defaultValue:1.5 isFloatDisp:YES
                  outSlider:&_normalrefBlurSlider outValueLabel:&_normalrefBlurValueLabel
                     action:@selector(normalrefBlurChanged:)];
 
-    y = [self addSliderRow:container atY:y width:w label:@"Clustering Stride:"
+    y = [self addSliderRow:container atY:y width:w label:kITS_ClusteringStride
                    tooltip:@"Sample every Nth pixel for clustering. Lower = more accurate, slower. Higher = faster, rougher."
                   minValue:1 maxValue:10 defaultValue:4 isFloatDisp:NO
                  outSlider:&_normalrefKMeansStrideSlider outValueLabel:&_normalrefKMeansStrideValueLabel
                     action:@selector(normalrefKMeansStrideChanged:)];
 
-    y = [self addSliderRow:container atY:y width:w label:@"Clustering Iterations:"
+    y = [self addSliderRow:container atY:y width:w label:kITS_ClusteringIter
                    tooltip:@"Convergence passes for surface clustering. Higher = better grouping, slower."
                   minValue:5 maxValue:50 defaultValue:20 isFloatDisp:NO
                  outSlider:&_normalrefKMeansIterSlider outValueLabel:&_normalrefKMeansIterValueLabel
@@ -797,13 +996,13 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
 {
     CGFloat y = 2;
 
-    y = [self addSliderRow:container atY:y width:w label:@"Num Thresholds:"
+    y = [self addSliderRow:container atY:y width:w label:kITS_NumThresholds
                    tooltip:@"Number of luminance thresholds for edge detection. More = finer form contours. Fewer = bolder edges."
                   minValue:3 maxValue:20 defaultValue:10 isFloatDisp:NO
                  outSlider:&_formedgeNumThreshSlider outValueLabel:&_formedgeNumThreshValueLabel
                     action:@selector(formedgeNumThreshChanged:)];
 
-    y = [self addSliderRow:container atY:y width:w label:@"Blur Sigma:"
+    y = [self addSliderRow:container atY:y width:w label:kITS_BlurSigma
                    tooltip:@"Gaussian blur radius before edge detection. Higher = smoother, fewer noisy edges. Lower = sharper, more detail."
                   minValue:0.5 maxValue:5.0 defaultValue:1.0 isFloatDisp:YES
                  outSlider:&_formedgeBlurSlider outValueLabel:&_formedgeBlurValueLabel
@@ -818,13 +1017,13 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
 {
     CGFloat y = 2;
 
-    y = [self addSliderRow:container atY:y width:w label:@"Step Size:"
+    y = [self addSliderRow:container atY:y width:w label:kITS_StepSize
                    tooltip:@"Pixel step between scan lines. Smaller = more contours found, slower. Larger = fewer contours, faster."
                   minValue:1 maxValue:20 defaultValue:5 isFloatDisp:NO
                  outSlider:&_contourscanStepSlider outValueLabel:&_contourscanStepValueLabel
                     action:@selector(contourscanStepChanged:)];
 
-    y = [self addSliderRow:container atY:y width:w label:@"Color Threshold:"
+    y = [self addSliderRow:container atY:y width:w label:kITS_ColorThreshold
                    tooltip:@"Color difference to separate contour regions. Lower = more sensitive, more regions. Higher = fewer, broader regions."
                   minValue:0 maxValue:100 defaultValue:30 isFloatDisp:NO
                  outSlider:&_contourscanColorSlider outValueLabel:&_contourscanColorValueLabel
@@ -839,7 +1038,7 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
 {
     CGFloat y = 2;
 
-    y = [self addSliderRow:container atY:y width:w label:@"Tolerance:"
+    y = [self addSliderRow:container atY:y width:w label:kITS_ToleranceLabel
                    tooltip:@"Path simplification tolerance. Higher = fewer anchor points, smoother. Lower = more points, closer to original."
                   minValue:0.1 maxValue:10.0 defaultValue:1.0 isFloatDisp:YES
                  outSlider:&_contourpathToleranceSlider outValueLabel:&_contourpathToleranceValueLabel
@@ -854,7 +1053,7 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
 {
     CGFloat y = 2;
 
-    y = [self addSliderRow:container atY:y width:w label:@"Depth:"
+    y = [self addSliderRow:container atY:y width:w label:kITS_Depth
                    tooltip:@"Maximum nesting depth to analyze. Higher = deeper parent-child hierarchy. Lower = flatter structure."
                   minValue:1 maxValue:10 defaultValue:3 isFloatDisp:NO
                  outSlider:&_contournestDepthSlider outValueLabel:&_contournestDepthValueLabel
@@ -875,27 +1074,12 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
     TraceModelSection *sec = self.sections[idx];
     sec.expanded = !sec.expanded;
 
-    // Update the disclosure triangle in the button title
-    NSString *currentTitle = sender.title;
-    // Strip the first 2 characters (triangle + space) to get the section name
-    NSString *sectionName = (currentTitle.length > 2) ? [currentTitle substringFromIndex:2] : currentTitle;
-    NSString *prefix = sec.expanded ? @"\u25BC " : @"\u25B6 ";
-    NSString *newTitle = [NSString stringWithFormat:@"%@%@", prefix, sectionName];
-
-    NSMutableAttributedString *attrTitle = [[NSMutableAttributedString alloc]
-        initWithString:newTitle];
-    [attrTitle addAttribute:NSForegroundColorAttributeName
-                      value:[IllToolTheme textColor]
-                      range:NSMakeRange(0, attrTitle.length)];
-    [attrTitle addAttribute:NSFontAttributeName
-                      value:[IllToolTheme labelFont]
-                      range:NSMakeRange(0, attrTitle.length)];
-    sender.attributedTitle = attrTitle;
-    [attrTitle release];
+    // Update the disclosure triangle state (NSBezelStyleDisclosure handles visual rotation)
+    sender.state = sec.expanded ? NSControlStateValueOn : NSControlStateValueOff;
 
     // Instant show/hide + reposition. NO animation.
     sec.paramContainer.hidden = !sec.expanded;
-    [self relayoutContent];
+    [self relayoutTab:sec.tabIndex];
 
     fprintf(stderr, "[TracePanel] Section %d (%s) %s\n",
             (int)idx, [sec.backendName UTF8String],
@@ -921,8 +1105,96 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
 
     BridgeRequestTrace(backendStr);
 
-    self.statusLabel.stringValue = [NSString stringWithFormat:@"Running %@...", sec.backendName];
+    NSString *runMsg = [NSString stringWithFormat:@"Running %@...", sec.backendName];
+    self.imageStatusLabel.stringValue = runMsg;
+    self.vectorsStatusLabel.stringValue = runMsg;
     fprintf(stderr, "[TracePanel] Run clicked: backend=%s\n", backendStr.c_str());
+}
+
+//========================================================================================
+//  resetSectionClicked — restore default parameter values for one backend
+//========================================================================================
+
+- (void)resetSectionClicked:(NSButton *)sender
+{
+    NSInteger idx = sender.tag;
+    if (idx < 0 || idx >= (NSInteger)self.sections.count) return;
+
+    TraceModelSection *sec = self.sections[idx];
+    NSString *backend = sec.backendName;
+    fprintf(stderr, "[TracePanel] Reset clicked: backend=%s\n", [backend UTF8String]);
+
+    // vtracer / opencv / starvector share the main trace params
+    if ([backend isEqualToString:@"vtracer"] ||
+        [backend isEqualToString:@"opencv"]  ||
+        [backend isEqualToString:@"starvector"]) {
+        BridgeSetTraceSpeckle(4);
+        BridgeSetTraceColorPrecision(6);
+        BridgeSetTraceLengthThresh(4.0);
+        BridgeSetTraceSpliceThresh(45);
+        BridgeSetTraceMaxIter(10);
+        BridgeSetTraceLayerDiff(16);
+        BridgeSetTraceOutputMode(1);  // fill
+        BridgeSetTraceCannyLow(50.0);
+        BridgeSetTraceCannyHigh(150.0);
+        BridgeSetTraceDilationRadius(1);
+        BridgeSetTraceSkeletonThresh(128);
+    }
+    else if ([backend isEqualToString:@"cutout"]) {
+        BridgeSetCutoutSmoothness(50);
+        BridgeSetCutoutClickThreshold(30);
+    }
+    else if ([backend isEqualToString:@"normal_ref"]) {
+        BridgeSetTraceNormalStrength(1.0);
+        BridgeSetTraceNormalBlur(0.0);
+        BridgeSetTraceKPlanes(3);
+    }
+    else if ([backend isEqualToString:@"depth_decompose"]) {
+        BridgeSetDepthLayerCount(3);
+    }
+    else if ([backend isEqualToString:@"apple_contours"]) {
+        BridgeSetTraceContourContrast(0.5);
+        BridgeSetTraceContourPivot(0.5);
+        BridgeSetTraceContourDarkOnLight(true);
+    }
+    else {
+        fprintf(stderr, "[TracePanel] Reset: no defaults registered for %s\n",
+                [backend UTF8String]);
+        return;
+    }
+
+    // Rebuild the parameter UI so sliders reflect the new bridge state.
+    [self rebuildParamsForSection:sec];
+    fprintf(stderr, "[TracePanel] Reset complete for %s\n", [backend UTF8String]);
+}
+
+//========================================================================================
+//  rebuildParamsForSection — remove and re-add param sliders for a section
+//========================================================================================
+
+- (void)rebuildParamsForSection:(TraceModelSection *)sec
+{
+    if (!sec.paramBuilderBlock) {
+        [self relayoutTab:sec.tabIndex];
+        return;
+    }
+
+    // Remove all subviews except the action row (runButton, progressBar, resetButton)
+    NSMutableArray *toRemove = [NSMutableArray array];
+    for (NSView *sv in sec.paramContainer.subviews) {
+        if (sv != sec.runButton && sv != sec.progressBar && sv != sec.resetButton) {
+            [toRemove addObject:sv];
+        }
+    }
+    for (NSView *sv in toRemove) [sv removeFromSuperview];
+
+    // Re-run builder against refreshed bridge state (defaults were just set).
+    // Builder returns new paramHeight; reserve action row at bottom as before.
+    CGFloat contentW = kPanelWidth - 2*kPadding;
+    CGFloat paramH = sec.paramBuilderBlock(sec.paramContainer, contentW - 16, self);
+    sec.paramHeight = paramH + 28.0;
+
+    [self relayoutTab:sec.tabIndex];
 }
 
 //========================================================================================
@@ -981,6 +1253,28 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
 - (void)vtracerModeChanged:(id)sender
 {
     self.vtracerMode = (int)self.vtracerModePopup.indexOfSelectedItem;
+}
+
+//========================================================================================
+//  Preprocess Preview — enqueue op to generate and show overlay
+//========================================================================================
+
+- (void)preprocessPreviewClicked:(id)sender
+{
+    PluginOp op;
+    op.type = OpType::TracePreprocessPreview;
+    BridgeEnqueueOp(op);
+
+    // Toggle button title to indicate state
+    bool isActive = BridgeGetPreprocessPreviewActive();
+    if (isActive) {
+        // Will be clearing — update title proactively
+        self.preprocessPreviewButton.title = kITS_PreviewPreprocess;
+    } else {
+        self.preprocessPreviewButton.title = kITS_ClearPreview;
+    }
+    fprintf(stderr, "[TracePanel] Preprocess preview clicked (currently %s)\n",
+            isActive ? "active → clear" : "inactive → generate");
 }
 
 //========================================================================================
@@ -1204,7 +1498,9 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
 
     std::string status = BridgeGetTraceStatus();
     if (!status.empty()) {
-        self.statusLabel.stringValue = [NSString stringWithUTF8String:status.c_str()];
+        NSString *statusStr = [NSString stringWithUTF8String:status.c_str()];
+        self.imageStatusLabel.stringValue = statusStr;
+        self.vectorsStatusLabel.stringValue = statusStr;
 
         // Check if trace completed — status contains "Traced:" or "failed" or "error"
         // Restore Run buttons from progress bars
@@ -1214,16 +1510,23 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
                      status.find("references") != std::string::npos ||
                      status.find("No image") != std::string::npos ||
                      status.find("preview:") != std::string::npos ||
+                     status.find("instance(s)") != std::string::npos ||
                      status.find("committed:") != std::string::npos ||
                      status.find("Cutout complete") != std::string::npos ||
                      status.find("Cutout committed") != std::string::npos ||
                      status.find("Apple Contours:") != std::string::npos ||
                      status.find("No contours") != std::string::npos ||
                      status.find("Depth decomposition") != std::string::npos ||
-                     status.find("Depth estimation failed") != std::string::npos);
+                     status.find("Depth estimation failed") != std::string::npos ||
+                     status.find("Preview (") != std::string::npos ||
+                     status.find("Preview cleared") != std::string::npos);
         if (done) {
             for (TraceModelSection *sec in self.sections) {
-                if (sec.runButton.hidden) {
+                // Cutout and symmetry have their own action buttons (Preview/Cut Out,
+                // Preview/Apply/Reset). Their generic runButton must stay hidden.
+                BOOL hasCustomButtons = ([sec.backendName isEqualToString:@"cutout"] ||
+                                         [sec.backendName isEqualToString:@"symmetry"]);
+                if (sec.runButton.hidden && !hasCustomButtons) {
                     [sec.progressBar stopAnimation:nil];
                     sec.progressBar.hidden = YES;
                     sec.runButton.hidden = NO;
@@ -1235,11 +1538,18 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
             self.cutoutProgressBar.hidden = YES;
 
             if (BridgeGetCutoutPreviewActive()) {
-                self.cutoutPreviewButton.title = @"Clear";
+                self.cutoutPreviewButton.title = kITS_Clear;
                 self.cutoutCommitButton.enabled = YES;
             } else {
-                self.cutoutPreviewButton.title = @"Preview";
+                self.cutoutPreviewButton.title = kITS_Preview;
                 self.cutoutCommitButton.enabled = NO;
+            }
+
+            // Update preprocess preview button title
+            if (BridgeGetPreprocessPreviewActive()) {
+                self.preprocessPreviewButton.title = kITS_ClearPreview;
+            } else {
+                self.preprocessPreviewButton.title = kITS_PreviewPreprocess;
             }
 
             // Rebuild instance checkboxes if count changed
@@ -1263,29 +1573,36 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
     TraceModelSection *sec = [[TraceModelSection alloc] init];
     sec.backendName = @"cutout";
     sec.expanded = NO;
+    sec.tabIndex = 0;  // Image tab
 
-    // Disclosure button
+    // Disclosure triangle (NSBezelStyleDisclosure)
     sec.disclosureButton = [self makeDisclosureButton:@"Subject Cutout" tag:12 expanded:NO];
-    [self.contentView addSubview:sec.disclosureButton];
+    [self.imageContentView addSubview:sec.disclosureButton];
+
+    // Title label (next to the disclosure triangle)
+    sec.titleLabel = [IllToolTheme makeLabelWithText:kITS_SubjectCutout
+                                                font:[IllToolTheme labelFont]
+                                               color:[IllToolTheme textColor]];
+    [self.imageContentView addSubview:sec.titleLabel];
 
     // Run button — hidden for cutout (Preview/Commit used instead)
-    sec.runButton = [NSButton buttonWithTitle:@"Run" target:self action:@selector(runModelClicked:)];
+    sec.runButton = [NSButton buttonWithTitle:kITS_Run target:self action:@selector(runModelClicked:)];
     sec.runButton.font = [NSFont systemFontOfSize:10];
     sec.runButton.bezelStyle = NSBezelStyleSmallSquare;
     sec.runButton.tag = 12;
     sec.runButton.hidden = YES;
-    [self.contentView addSubview:sec.runButton];
+    [self.imageContentView addSubview:sec.runButton];
 
     // Progress bar (section-level, also hidden for cutout)
     sec.progressBar = [[NSProgressIndicator alloc] initWithFrame:NSZeroRect];
     sec.progressBar.style = NSProgressIndicatorStyleBar;
     sec.progressBar.indeterminate = YES;
     sec.progressBar.hidden = YES;
-    [self.contentView addSubview:sec.progressBar];
+    [self.imageContentView addSubview:sec.progressBar];
 
     // Parameter container
     sec.paramContainer = [[TraceFlippedView alloc] initWithFrame:NSZeroRect];
-    [self.contentView addSubview:sec.paramContainer];
+    [self.imageContentView addSubview:sec.paramContainer];
 
     // Build cutout-specific controls
     CGFloat cw = contentW - 16;  // indent to match other sections
@@ -1294,7 +1611,7 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
     // Row 1: Preview + Commit buttons side by side
     CGFloat btnW = (cw - 6) / 2.0;
 
-    self.cutoutPreviewButton = [NSButton buttonWithTitle:@"Preview"
+    self.cutoutPreviewButton = [NSButton buttonWithTitle:kITS_Preview
                                                  target:self
                                                  action:@selector(cutoutPreviewClicked:)];
     self.cutoutPreviewButton.font = [NSFont systemFontOfSize:10];
@@ -1304,14 +1621,14 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
         @"Run Vision framework subject segmentation and show silhouette preview overlay";
     [sec.paramContainer addSubview:self.cutoutPreviewButton];
 
-    self.cutoutCommitButton = [NSButton buttonWithTitle:@"Commit"
+    self.cutoutCommitButton = [NSButton buttonWithTitle:kITS_CutOut
                                                 target:self
                                                 action:@selector(cutoutCommitClicked:)];
     self.cutoutCommitButton.font = [NSFont systemFontOfSize:10];
     self.cutoutCommitButton.bezelStyle = NSBezelStyleSmallSquare;
     self.cutoutCommitButton.frame = NSMakeRect(btnW + 6, y, btnW, 22);
     self.cutoutCommitButton.enabled = NO;
-    self.cutoutCommitButton.toolTip = @"Create actual paths from preview on the Cut Lines layer";
+    self.cutoutCommitButton.toolTip = @"Replace image with transparent cutout + create cut line outline";
     [sec.paramContainer addSubview:self.cutoutCommitButton];
 
     y += 26;
@@ -1326,7 +1643,7 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
     y += 16;
 
     // Row 2: Smoothness label + value
-    NSTextField *smoothLabel = [IllToolTheme makeLabelWithText:@"Smoothness"
+    NSTextField *smoothLabel = [IllToolTheme makeLabelWithText:kITS_Smoothness
                                                          font:[IllToolTheme labelFont]
                                                         color:[IllToolTheme secondaryTextColor]];
     smoothLabel.frame = NSMakeRect(0, y, cw * 0.5, kParamRowH);
@@ -1356,7 +1673,7 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
     y += kSliderH + kParamGap;
 
     // Row 4: Click Threshold label + value
-    NSTextField *threshLabel = [IllToolTheme makeLabelWithText:@"Click Threshold"
+    NSTextField *threshLabel = [IllToolTheme makeLabelWithText:kITS_ClickThreshold
                                                          font:[IllToolTheme labelFont]
                                                         color:[IllToolTheme secondaryTextColor]];
     threshLabel.frame = NSMakeRect(0, y, cw * 0.6, kParamRowH);
@@ -1416,6 +1733,10 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
     // See updateHardwareGating below.
 
     [self.sections addObject:sec];
+
+    // Track in Image tab
+    NSInteger sectionIndex = (NSInteger)self.sections.count - 1;
+    [self.imageSectionIndices addObject:@(sectionIndex)];
 }
 
 //----------------------------------------------------------------------------------------
@@ -1431,36 +1752,53 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
         BridgeSetCutoutPreviewActive(false);
         BridgeSetCutoutPreviewPaths("");
         BridgeSetCutoutInstanceCount(0);
-        self.cutoutPreviewButton.title = @"Preview";
+        self.cutoutPreviewButton.title = kITS_Preview;
         self.cutoutCommitButton.enabled = NO;
+
+        // Reset instance checkboxes and tracked count
+        [self rebuildCutoutInstanceCheckboxes:0];
+        self.cutoutLastKnownInstanceCount = 0;
+
+        // Force annotator redraw to remove the preview overlay
+        PluginOp op;
+        op.type = OpType::InvalidateOverlay;
+        BridgeEnqueueOp(op);
+
+        // Restore the tool that was active before cutout preview started
+        PluginOp restoreOp;
+        restoreOp.type = OpType::RestorePriorTool;
+        BridgeEnqueueOp(restoreOp);
+
         BridgeSetTraceStatus("Cutout preview cleared");
         fprintf(stderr, "[TracePanel] Cutout preview toggled OFF\n");
         return;
     }
 
     // Toggle ON — run Vision subject segmentation + vtracer
-    self.cutoutPreviewButton.title = @"Clear";
+    self.cutoutPreviewButton.title = kITS_Clear;
     self.cutoutProgressBar.hidden = NO;
     [self.cutoutProgressBar startAnimation:nil];
 
     BridgeRequestTrace("cutout");
 
-    self.statusLabel.stringValue = @"Extracting subject...";
+    self.imageStatusLabel.stringValue = kITS_ExtractingSubject;
+    self.vectorsStatusLabel.stringValue = kITS_ExtractingSubject;
     fprintf(stderr, "[TracePanel] Cutout preview requested\n");
 }
 
 - (void)cutoutCommitClicked:(NSButton *)sender
 {
     if (!BridgeGetCutoutPreviewActive()) {
-        self.statusLabel.stringValue = @"No preview to commit — click Preview first";
+        self.imageStatusLabel.stringValue = kITS_NoPreviewToCommit;
         return;
     }
 
     BridgeRequestTrace("cutout_commit");
 
-    self.cutoutPreviewButton.title = @"Preview";
+    self.cutoutPreviewButton.title = kITS_Preview;
     self.cutoutCommitButton.enabled = NO;
-    self.statusLabel.stringValue = @"Creating cut paths...";
+    self.imageStatusLabel.stringValue = kITS_CreatingCutPaths;
+    self.vectorsStatusLabel.stringValue = kITS_CreatingCutPaths;
     fprintf(stderr, "[TracePanel] Cutout commit requested\n");
 }
 
@@ -1558,7 +1896,7 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
     if (BridgeGetCutoutPreviewActive()) {
         self.cutoutProgressBar.hidden = NO;
         [self.cutoutProgressBar startAnimation:nil];
-        self.statusLabel.stringValue = @"Recompositing instances...";
+        self.imageStatusLabel.stringValue = kITS_RecompositingInst;
         BridgeRequestTrace("cutout_recomposite");
     }
 }
@@ -1591,8 +1929,8 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
     // Update section height
     sec.paramHeight = containerBottom + kParamRowH;
 
-    // Trigger full panel relayout
-    [self relayoutContent];
+    // Trigger Image tab relayout (cutout is on Image tab)
+    [self relayoutTab:0];
 }
 
 //========================================================================================
@@ -1605,7 +1943,7 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
 
     // Contrast slider (0.0-3.0, default 1.5)
     y = [self addSliderRow:container atY:y width:w
-                     label:@"Contrast"
+                     label:kITS_Contrast
                    tooltip:@"Edge contrast amplification. Higher = stronger edges detected."
                   minValue:0.0 maxValue:3.0 defaultValue:1.5
                isFloatDisp:YES
@@ -1615,7 +1953,7 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
 
     // Pivot slider (0.0-1.0, default 0.5)
     y = [self addSliderRow:container atY:y width:w
-                     label:@"Pivot"
+                     label:kITS_Pivot
                    tooltip:@"Contrast pivot point. Adjusts which brightness level is the edge boundary."
                   minValue:0.0 maxValue:1.0 defaultValue:0.5
                isFloatDisp:YES
@@ -1624,7 +1962,7 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
                     action:@selector(appleContourPivotChanged:)];
 
     // Dark on Light checkbox (default YES)
-    self.appleContourDarkOnLightCheckbox = [NSButton checkboxWithTitle:@"Dark on Light"
+    self.appleContourDarkOnLightCheckbox = [NSButton checkboxWithTitle:kITS_DarkOnLight
                                                                target:self
                                                                action:@selector(appleContourDarkOnLightChanged:)];
     self.appleContourDarkOnLightCheckbox.frame = NSMakeRect(0, y, w, kParamRowH);
@@ -1635,7 +1973,7 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
 
     // Style the checkbox text to match the panel theme
     NSMutableAttributedString *cbTitle = [[NSMutableAttributedString alloc]
-        initWithString:@"Dark on Light"];
+        initWithString:kITS_DarkOnLight];
     [cbTitle addAttribute:NSForegroundColorAttributeName
                     value:[IllToolTheme textColor]
                     range:NSMakeRange(0, cbTitle.length)];
@@ -1690,7 +2028,7 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
     CGFloat y = 0;
 
     // Checkbox: Include Face Landmarks
-    self.poseIncludeFaceCheckbox = [NSButton checkboxWithTitle:@"Include Face Landmarks"
+    self.poseIncludeFaceCheckbox = [NSButton checkboxWithTitle:kITS_IncludeFace
                                                         target:self
                                                         action:@selector(poseIncludeFaceChanged:)];
     self.poseIncludeFaceCheckbox.font = [NSFont systemFontOfSize:10];
@@ -1702,7 +2040,7 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
     y += 22;
 
     // Checkbox: Include Hand Pose
-    self.poseIncludeHandsCheckbox = [NSButton checkboxWithTitle:@"Include Hand Pose"
+    self.poseIncludeHandsCheckbox = [NSButton checkboxWithTitle:kITS_IncludeHands
                                                          target:self
                                                          action:@selector(poseIncludeHandsChanged:)];
     self.poseIncludeHandsCheckbox.font = [NSFont systemFontOfSize:10];
@@ -1755,7 +2093,7 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
     CGFloat y = 0;
 
     // Layer Count label
-    NSTextField *layerCountLabel = [IllToolTheme makeLabelWithText:@"Layer Count"
+    NSTextField *layerCountLabel = [IllToolTheme makeLabelWithText:kITS_LayerCount
                                                              font:[NSFont systemFontOfSize:10]
                                                             color:[IllToolTheme textColor]];
     layerCountLabel.frame = NSMakeRect(0, y, cw * 0.45, kParamRowH);
@@ -1808,6 +2146,178 @@ static const CGFloat kParamGap    = 4.0;    // gap between param rows
     BridgeSetDepthLayerCount(val);
     self.depthLayerCountValueLabel.stringValue = [NSString stringWithFormat:@"%d", val];
     fprintf(stderr, "[TracePanel] Depth layer count: %d\n", val);
+}
+
+//========================================================================================
+//  Section 16: Symmetry Correction — buildSymmetryParams
+//========================================================================================
+
+- (CGFloat)buildSymmetryParams:(NSView *)container width:(CGFloat)cw
+{
+    CGFloat y = 0;
+
+    // Toggle: Symmetry active (shows midline overlay)
+    NSButton *toggleBtn = [NSButton checkboxWithTitle:kITS_ShowMidline
+                                              target:self
+                                              action:@selector(symmetryToggleChanged:)];
+    toggleBtn.frame = NSMakeRect(0, y, cw, kParamRowH);
+    toggleBtn.tag = 160;
+    [container addSubview:toggleBtn];
+    y += kParamRowH + kParamGap;
+
+    // Side selection: Left / Right segmented control
+    NSTextField *sideLabel = [IllToolTheme makeLabelWithText:kITS_GoodSide
+                                                       font:[NSFont systemFontOfSize:10]
+                                                      color:[IllToolTheme textColor]];
+    sideLabel.frame = NSMakeRect(0, y, cw * 0.35, kParamRowH);
+    [container addSubview:sideLabel];
+
+    NSSegmentedControl *sideSeg = [NSSegmentedControl segmentedControlWithLabels:@[kITS_Left, kITS_Right]
+                                                                   trackingMode:NSSegmentSwitchTrackingSelectOne
+                                                                         target:self
+                                                                         action:@selector(symmetrySideChanged:)];
+    sideSeg.frame = NSMakeRect(cw * 0.40, y, cw * 0.55, kParamRowH);
+    sideSeg.selectedSegment = 0;
+    sideSeg.tag = 161;
+    [container addSubview:sideSeg];
+    y += kParamRowH + kParamGap;
+
+    // Blend width slider (0.5 - 3.0 %)
+    NSTextField *blendLabel = [IllToolTheme makeLabelWithText:kITS_BlendLabel
+                                                        font:[NSFont systemFontOfSize:10]
+                                                       color:[IllToolTheme textColor]];
+    blendLabel.frame = NSMakeRect(0, y, cw * 0.35, kParamRowH);
+    [container addSubview:blendLabel];
+
+    NSTextField *blendValue = [IllToolTheme makeLabelWithText:@"1.0%"
+                                                        font:[NSFont monospacedDigitSystemFontOfSize:10 weight:NSFontWeightRegular]
+                                                       color:[IllToolTheme textColor]];
+    blendValue.frame = NSMakeRect(cw - 40, y, 40, kParamRowH);
+    blendValue.alignment = NSTextAlignmentRight;
+    blendValue.tag = 162;
+    [container addSubview:blendValue];
+    y += kParamRowH;
+
+    NSSlider *blendSlider = [[NSSlider alloc] initWithFrame:NSMakeRect(0, y, cw, kSliderH)];
+    blendSlider.minValue = 0.5;
+    blendSlider.maxValue = 3.0;
+    blendSlider.doubleValue = 1.0;
+    blendSlider.target = self;
+    blendSlider.action = @selector(symmetryBlendChanged:);
+    blendSlider.tag = 163;
+    blendSlider.toolTip = @"Seam blend width as percentage of image width";
+    [container addSubview:blendSlider];
+    [blendSlider release];
+    y += kSliderH + kParamGap;
+
+    // Preview + Apply + Reset buttons (3-column)
+    CGFloat btnW3 = (cw - 8) / 3.0;
+
+    NSButton *previewBtn = [IllToolTheme makeButtonWithTitle:kITS_Preview
+                                                     target:self
+                                                     action:@selector(symmetryPreviewClicked:)];
+    previewBtn.frame = NSMakeRect(0, y, btnW3, kParamRowH);
+    previewBtn.tag = 164;
+    [container addSubview:previewBtn];
+
+    NSButton *applyBtn = [IllToolTheme makeButtonWithTitle:kITS_Apply
+                                                   target:self
+                                                   action:@selector(symmetryApplyClicked:)];
+    applyBtn.frame = NSMakeRect(btnW3 + 4, y, btnW3, kParamRowH);
+    applyBtn.tag = 165;
+    [container addSubview:applyBtn];
+
+    NSButton *resetBtn = [IllToolTheme makeButtonWithTitle:kITS_Reset
+                                                   target:self
+                                                   action:@selector(symmetryResetClicked:)];
+    resetBtn.frame = NSMakeRect(2 * (btnW3 + 4), y, btnW3, kParamRowH);
+    resetBtn.tag = 166;
+    [container addSubview:resetBtn];
+
+    y += kParamRowH + kParamGap;
+
+    // Description
+    NSTextField *descLabel = [IllToolTheme makeLabelWithText:
+        @"Mirror one side of a reference image to fix near-symmetry. Drag the midline overlay to position."
+                                                       font:[NSFont systemFontOfSize:9]
+                                                      color:[IllToolTheme secondaryTextColor]];
+    descLabel.frame = NSMakeRect(0, y, cw, kParamRowH * 2);
+    descLabel.maximumNumberOfLines = 3;
+    [container addSubview:descLabel];
+    y += kParamRowH * 2;
+
+    return y;
+}
+
+- (void)symmetryToggleChanged:(id)sender
+{
+    BOOL active = [(NSButton *)sender state] == NSControlStateValueOn;
+    BridgeSetSymmetryActive(active);
+    if (active) {
+        BridgeSetSymmetryAxisX(0.5f);  // center
+    }
+    BridgeEnqueueOp({OpType::InvalidateOverlay});
+    fprintf(stderr, "[TracePanel] Symmetry: %s\n", active ? "ON" : "OFF");
+}
+
+- (void)symmetrySideChanged:(id)sender
+{
+    NSInteger seg = [(NSSegmentedControl *)sender selectedSegment];
+    BridgeSetSymmetrySide((int)seg);
+    fprintf(stderr, "[TracePanel] Symmetry side: %s\n", seg == 0 ? "left" : "right");
+}
+
+- (void)symmetryBlendChanged:(id)sender
+{
+    double pct = [(NSSlider *)sender doubleValue];
+    BridgeSetSymmetryBlendPct((float)pct);
+    // Update the value label
+    NSView *container = [(NSSlider *)sender superview];
+    NSTextField *valueLabel = [container viewWithTag:162];
+    if (valueLabel) {
+        valueLabel.stringValue = [NSString stringWithFormat:@"%.1f%%", pct];
+    }
+    fprintf(stderr, "[TracePanel] Symmetry blend: %.1f%%\n", pct);
+}
+
+- (void)symmetryPreviewClicked:(id)sender
+{
+    BridgeEnqueueOp({OpType::SymmetryPreview});
+    fprintf(stderr, "[TracePanel] Symmetry preview requested\n");
+}
+
+- (void)symmetryApplyClicked:(id)sender
+{
+    BridgeEnqueueOp({OpType::CommitSymmetry});
+    fprintf(stderr, "[TracePanel] Symmetry apply requested\n");
+}
+
+- (void)symmetryResetClicked:(id)sender
+{
+    // Clear all symmetry state
+    BridgeSetSymmetryActive(false);
+    BridgeSetSymmetryAxisX(0.5f);
+    BridgeSetSymmetrySide(0);
+    BridgeSetSymmetryBlendPct(1.0f);
+    BridgeSetSymmetryPreviewPath("");
+    BridgeSetSymmetryOutputPath("");
+
+    // Reset UI controls
+    NSView *container = [(NSButton *)sender superview];
+    for (NSView *sub in container.subviews) {
+        if (sub.tag == 160 && [sub isKindOfClass:[NSButton class]])
+            [(NSButton *)sub setState:NSControlStateValueOff];
+        if (sub.tag == 161 && [sub isKindOfClass:[NSSegmentedControl class]])
+            [(NSSegmentedControl *)sub setSelectedSegment:0];
+        if (sub.tag == 163 && [sub isKindOfClass:[NSSlider class]])
+            [(NSSlider *)sub setDoubleValue:1.0];
+        if (sub.tag == 162 && [sub isKindOfClass:[NSTextField class]])
+            [(NSTextField *)sub setStringValue:@"1.0%"];
+    }
+
+    // Force overlay redraw to remove midline + preview
+    BridgeEnqueueOp({OpType::InvalidateOverlay});
+    fprintf(stderr, "[TracePanel] Symmetry reset\n");
 }
 
 @end

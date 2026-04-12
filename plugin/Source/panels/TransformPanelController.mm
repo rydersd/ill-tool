@@ -9,6 +9,7 @@
 
 #import "TransformPanelController.h"
 #import "IllToolTheme.h"
+#import "IllToolStrings.h"
 #include "IllToolPlugin.h"
 #import "HttpBridge.h"
 #import <cstdio>
@@ -132,7 +133,7 @@ static NSTextField* MakeInputField(NSString *placeholder, CGFloat width)
     //  Title
     //==================================================================================
 
-    NSTextField *title = [IllToolTheme makeLabelWithText:@"Transform All" font:[NSFont boldSystemFontOfSize:12] color:[IllToolTheme textColor]];
+    NSTextField *title = [IllToolTheme makeLabelWithText:kITS_TransformAll font:[NSFont boldSystemFontOfSize:12] color:[IllToolTheme textColor]];
     title.frame = NSMakeRect(kPadding, y, contentW, 16);
     [root addSubview:title];
     y += 22;
@@ -151,11 +152,11 @@ static NSTextField* MakeInputField(NSString *placeholder, CGFloat width)
     //  Mode toggle: Absolute / Relative
     //==================================================================================
 
-    NSTextField *modeLbl = [IllToolTheme makeLabelWithText:@"Mode" font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
+    NSTextField *modeLbl = [IllToolTheme makeLabelWithText:kITS_Mode font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
     modeLbl.frame = NSMakeRect(kPadding, y, 40, 16);
     [root addSubview:modeLbl];
 
-    NSSegmentedControl *modeSeg = [NSSegmentedControl segmentedControlWithLabels:@[@"Absolute", @"Relative"]
+    NSSegmentedControl *modeSeg = [NSSegmentedControl segmentedControlWithLabels:@[kITS_Absolute, kITS_Relative]
         trackingMode:NSSegmentSwitchTrackingSelectOne
         target:self action:@selector(onModeChanged:)];
     modeSeg.frame = NSMakeRect(kPadding + 44, y - 2, contentW - 44, kRowHeight);
@@ -174,7 +175,7 @@ static NSTextField* MakeInputField(NSString *placeholder, CGFloat width)
     CGFloat fieldW = contentW - labelW - unitW - 8;
 
     // Width
-    NSTextField *widthLbl = [IllToolTheme makeLabelWithText:@"Width:" font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
+    NSTextField *widthLbl = [IllToolTheme makeLabelWithText:kITS_Width font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
     widthLbl.frame = NSMakeRect(kPadding, y + 2, labelW, 16);
     [root addSubview:widthLbl];
 
@@ -192,7 +193,7 @@ static NSTextField* MakeInputField(NSString *placeholder, CGFloat width)
     y += kRowHeight + 4;
 
     // Height
-    NSTextField *heightLbl = [IllToolTheme makeLabelWithText:@"Height:" font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
+    NSTextField *heightLbl = [IllToolTheme makeLabelWithText:kITS_Height font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
     heightLbl.frame = NSMakeRect(kPadding, y + 2, labelW, 16);
     [root addSubview:heightLbl];
 
@@ -210,7 +211,7 @@ static NSTextField* MakeInputField(NSString *placeholder, CGFloat width)
     y += kRowHeight + 4;
 
     // Rotation
-    NSTextField *rotLbl = [IllToolTheme makeLabelWithText:@"Rotation:" font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
+    NSTextField *rotLbl = [IllToolTheme makeLabelWithText:kITS_Rotation font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
     rotLbl.frame = NSMakeRect(kPadding, y + 2, labelW, 16);
     [root addSubview:rotLbl];
 
@@ -241,12 +242,12 @@ static NSTextField* MakeInputField(NSString *placeholder, CGFloat width)
     //  Random checkbox
     //==================================================================================
 
-    NSButton *randomCB = [NSButton checkboxWithTitle:@"Random (\u00B120% variance)"
+    NSButton *randomCB = [NSButton checkboxWithTitle:kITS_RandomVariance
                                               target:self action:@selector(onRandomToggled:)];
     randomCB.font = [IllToolTheme labelFont];
     // Checkbox text color (MRC-compatible attributed title)
     NSMutableAttributedString *cbTitle = [[NSMutableAttributedString alloc]
-        initWithString:@"Random (\u00B120% variance)"];
+        initWithString:kITS_RandomVariance];
     [cbTitle addAttribute:NSForegroundColorAttributeName
                     value:[IllToolTheme textColor]
                     range:NSMakeRange(0, cbTitle.length)];
@@ -262,11 +263,11 @@ static NSTextField* MakeInputField(NSString *placeholder, CGFloat width)
     y += 18 + 4;
 
     // Aspect ratio lock checkbox
-    NSButton *aspectCB = [NSButton checkboxWithTitle:@"Lock Aspect Ratio"
+    NSButton *aspectCB = [NSButton checkboxWithTitle:kITS_LockAspectRatio
                                               target:self action:@selector(onAspectLockToggled:)];
     aspectCB.font = [IllToolTheme labelFont];
     NSMutableAttributedString *aspectTitle = [[NSMutableAttributedString alloc]
-        initWithString:@"Lock Aspect Ratio"];
+        initWithString:kITS_LockAspectRatio];
     [aspectTitle addAttribute:NSForegroundColorAttributeName
                         value:[IllToolTheme textColor]
                         range:NSMakeRange(0, aspectTitle.length)];
@@ -294,7 +295,7 @@ static NSTextField* MakeInputField(NSString *placeholder, CGFloat width)
     //  Selection count
     //==================================================================================
 
-    NSTextField *selLbl = [IllToolTheme makeLabelWithText:@"Selected: 0 anchors" font:[IllToolTheme monoFont] color:[IllToolTheme secondaryTextColor]];
+    NSTextField *selLbl = [IllToolTheme makeLabelWithText:[NSString stringWithFormat:kITS_SelectedAnchors, (long)0, "s"] font:[IllToolTheme monoFont] color:[IllToolTheme secondaryTextColor]];
     selLbl.frame = NSMakeRect(kPadding, y, contentW, 14);
     [root addSubview:selLbl];
     self.selectionCountLabel = selLbl;
@@ -304,7 +305,7 @@ static NSTextField* MakeInputField(NSString *placeholder, CGFloat width)
     //  Apply button
     //==================================================================================
 
-    NSButton *applyBtn = [NSButton buttonWithTitle:@"Apply" target:self action:@selector(onApply:)];
+    NSButton *applyBtn = [NSButton buttonWithTitle:kITS_Transform target:self action:@selector(onApply:)];
     applyBtn.font = [NSFont boldSystemFontOfSize:12];
     applyBtn.bezelStyle = NSBezelStyleSmallSquare;
     applyBtn.frame = NSMakeRect(kPadding, y, contentW, 30);
@@ -313,13 +314,13 @@ static NSTextField* MakeInputField(NSString *placeholder, CGFloat width)
     applyBtn.layer.cornerRadius = 3.0;
     // White text on accent background
     NSMutableAttributedString *applyTitle = [[NSMutableAttributedString alloc]
-        initWithString:@"Apply"];
+        initWithString:kITS_Transform];
     [applyTitle addAttribute:NSForegroundColorAttributeName
                        value:[NSColor whiteColor]
-                       range:NSMakeRange(0, 5)];
+                       range:NSMakeRange(0, [kITS_Transform length])];
     [applyTitle addAttribute:NSFontAttributeName
                        value:[NSFont boldSystemFontOfSize:12]
-                       range:NSMakeRange(0, 5)];
+                       range:NSMakeRange(0, [kITS_Transform length])];
     applyBtn.attributedTitle = applyTitle;
     [applyTitle release];
     [root addSubview:applyBtn];

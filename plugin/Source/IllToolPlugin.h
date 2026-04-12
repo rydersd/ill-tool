@@ -95,6 +95,12 @@ private:
     /** Handle for illustrator shutdown notifier. */
     AINotifierHandle        fShutdownApplicationNotifier;
 
+    /** Handle for effective tool changed notifier (space-to-pan cursor restore). */
+    AINotifierHandle        fEffectiveToolChangedNotifier;
+
+    /** Handle for document changed notifier (clear per-doc state on switch). */
+    AINotifierHandle        fDocumentChangedNotifier;
+
     /** Pointer to IllToolAnnotator object. */
     IllToolAnnotator*       fAnnotator;
 

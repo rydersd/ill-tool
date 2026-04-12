@@ -71,8 +71,8 @@ bool LayerModule::HandleOp(const PluginOp& op)
             LoadPreset(op.strParam);
             return true;
         case OpType::LayerSelectNode:
-            fprintf(stderr, "[LayerModule] SelectNode node=%d\n", op.intParam);
-            SelectNode(op.intParam);
+            fprintf(stderr, "[LayerModule] SelectNode node=%d addToSel=%d\n", op.intParam, op.boolParam1);
+            SelectNode(op.intParam, op.boolParam1);
             return true;
         case OpType::LayerGroupSelected:
             fprintf(stderr, "[LayerModule] GroupSelected name=%s\n", op.strParam.c_str());
@@ -463,6 +463,91 @@ void LayerModule::DeleteNode(int nodeID)
 
 void LayerModule::ReorderNode(int srcID, int dstID, bool insertBefore)
 {
+    // Root-level drop: dstID=0 means the UI dropped the node at the top level
+    if (dstID == 0) {
+        // Check if source is a layer — move it to top of layer stack
+        auto srcLayerIt = fLayerHandleMap.find(srcID);
+        if (srcLayerIt != fLayerHandleMap.end()) {
+            AILayerHandle newLayer = nullptr;
+            ASErr err = sAILayer->InsertLayer(nullptr, kPlaceAboveAll, &newLayer);
+            if (err != kNoErr || !newLayer) {
+                fprintf(stderr, "[LayerModule] Root reorder InsertLayer failed: %d\n", (int)err);
+                return;
+            }
+
+            // Copy properties from source to new layer
+            ai::UnicodeString title;
+            sAILayer->GetLayerTitle(srcLayerIt->second, title);
+            sAILayer->SetLayerTitle(newLayer, title);
+
+            AIBoolean vis = true, edit = true;
+            sAILayer->GetLayerVisible(srcLayerIt->second, &vis);
+            sAILayer->GetLayerEditable(srcLayerIt->second, &edit);
+            sAILayer->SetLayerVisible(newLayer, vis);
+            sAILayer->SetLayerEditable(newLayer, edit);
+
+            AIRGBColor color;
+            if (sAILayer->GetLayerColor(srcLayerIt->second, &color) == kNoErr) {
+                sAILayer->SetLayerColor(newLayer, color);
+            }
+
+            // Move all art from source to new layer
+            AIArtHandle srcLayerArt = nullptr;
+            sAIArt->GetFirstArtOfLayer(srcLayerIt->second, &srcLayerArt);
+            AIArtHandle dstLayerArt = nullptr;
+            sAIArt->GetFirstArtOfLayer(newLayer, &dstLayerArt);
+
+            if (srcLayerArt && dstLayerArt) {
+                AIArtHandle child = nullptr;
+                sAIArt->GetArtFirstChild(srcLayerArt, &child);
+                while (child) {
+                    AIArtHandle next = nullptr;
+                    sAIArt->GetArtSibling(child, &next);
+                    sAIArt->ReorderArt(child, kPlaceInsideOnTop, dstLayerArt);
+                    child = next;
+                }
+            }
+
+            // Delete source layer
+            sAILayer->DeleteLayer(srcLayerIt->second);
+            fTreeDirty = true;
+            InvalidateFullView();
+            fprintf(stderr, "[LayerModule] Moved layer %d to root (top)\n", srcID);
+            return;
+        }
+
+        // Source is art — move into the current layer at the top
+        AIArtHandle srcArt = ResolveArt(srcID);
+        if (srcArt) {
+            AILayerHandle curLayer = nullptr;
+            sAILayer->GetCurrentLayer(&curLayer);
+            AIArtHandle layerArt = nullptr;
+            if (curLayer) {
+                sAIArt->GetFirstArtOfLayer(curLayer, &layerArt);
+            }
+            if (!layerArt) {
+                // Fallback: query with nullptr for current layer group
+                sAIArt->GetFirstArtOfLayer(nullptr, &layerArt);
+            }
+            if (layerArt) {
+                ASErr err = sAIArt->ReorderArt(srcArt, kPlaceInsideOnTop, layerArt);
+                if (err == kNoErr) {
+                    fTreeDirty = true;
+                    InvalidateFullView();
+                    fprintf(stderr, "[LayerModule] Moved art %d to root (top of current layer)\n", srcID);
+                } else {
+                    fprintf(stderr, "[LayerModule] Root reorder art failed: %d\n", (int)err);
+                }
+            } else {
+                fprintf(stderr, "[LayerModule] Root reorder: cannot resolve current layer group\n");
+            }
+            return;
+        }
+
+        fprintf(stderr, "[LayerModule] Root reorder: cannot resolve source %d\n", srcID);
+        return;
+    }
+
     // Art-to-art reorder
     AIArtHandle srcArt = ResolveArt(srcID);
     AIArtHandle dstArt = ResolveArt(dstID);
@@ -565,18 +650,32 @@ void LayerModule::MoveArtToLayer(int artNodeID, int layerNodeID)
         return;
     }
 
+    // GetFirstArtOfLayer returns the layer's group art container.
+    // For empty layers it may return null — fall back to setting
+    // the layer as current and querying with nullptr.
     AIArtHandle layerArt = nullptr;
     sAIArt->GetFirstArtOfLayer(layerIt->second, &layerArt);
-    if (layerArt) {
-        ASErr err = sAIArt->ReorderArt(art, kPlaceInsideOnTop, layerArt);
-        if (err == kNoErr) {
-            RecordMoveForLearning(art, layerNodeID);
-            fTreeDirty = true;
-            InvalidateFullView();
-            fprintf(stderr, "[LayerModule] Moved art %d to layer %d\n", artNodeID, layerNodeID);
-        } else {
-            fprintf(stderr, "[LayerModule] MoveArtToLayer ReorderArt failed: %d\n", (int)err);
-        }
+    if (!layerArt) {
+        // Fallback: temporarily set as current layer, query its group
+        AILayerHandle prevLayer = nullptr;
+        sAILayer->GetCurrentLayer(&prevLayer);
+        sAILayer->SetCurrentLayer(layerIt->second);
+        sAIArt->GetFirstArtOfLayer(nullptr, &layerArt);
+        if (prevLayer) sAILayer->SetCurrentLayer(prevLayer);
+    }
+    if (!layerArt) {
+        fprintf(stderr, "[LayerModule] MoveArtToLayer: cannot get layer group for layer %d\n", layerNodeID);
+        return;
+    }
+
+    ASErr err = sAIArt->ReorderArt(art, kPlaceInsideOnTop, layerArt);
+    if (err == kNoErr) {
+        RecordMoveForLearning(art, layerNodeID);
+        fTreeDirty = true;
+        InvalidateFullView();
+        fprintf(stderr, "[LayerModule] Moved art %d to layer %d\n", artNodeID, layerNodeID);
+    } else {
+        fprintf(stderr, "[LayerModule] MoveArtToLayer ReorderArt failed: %d\n", (int)err);
     }
 }
 
@@ -1087,7 +1186,7 @@ AILayerHandle LayerModule::ResolveLayer(int nodeID)
 //  SelectNode — click-to-select: set current layer or select art
 //========================================================================================
 
-void LayerModule::SelectNode(int nodeID)
+void LayerModule::SelectNode(int nodeID, bool addToSelection)
 {
     // Check if it's a layer
     auto layerIt = fLayerHandleMap.find(nodeID);
@@ -1100,29 +1199,31 @@ void LayerModule::SelectNode(int nodeID)
         return;
     }
 
-    // It's art — deselect all, then select this art
+    // It's art — select it (optionally clearing existing selection first)
     AIArtHandle art = ResolveArt(nodeID);
     if (!art) return;
 
-    // Deselect all currently selected art
-    AIMatchingArtSpec deselectSpec;
-    deselectSpec.type = kAnyArt;
-    deselectSpec.whichAttr = kArtSelected;
-    deselectSpec.attr = kArtSelected;
-    AIArtHandle** matches = nullptr;
-    ai::int32 numMatches = 0;
-    if (sAIMatchingArt->GetMatchingArt(&deselectSpec, 1, &matches, &numMatches) == kNoErr && numMatches > 0) {
-        for (ai::int32 i = 0; i < numMatches; i++) {
-            sAIArt->SetArtUserAttr((*matches)[i], kArtSelected, 0);
+    if (!addToSelection) {
+        // Deselect all currently selected art
+        AIMatchingArtSpec deselectSpec;
+        deselectSpec.type = kAnyArt;
+        deselectSpec.whichAttr = kArtSelected;
+        deselectSpec.attr = kArtSelected;
+        AIArtHandle** matches = nullptr;
+        ai::int32 numMatches = 0;
+        if (sAIMatchingArt->GetMatchingArt(&deselectSpec, 1, &matches, &numMatches) == kNoErr && numMatches > 0) {
+            for (ai::int32 i = 0; i < numMatches; i++) {
+                sAIArt->SetArtUserAttr((*matches)[i], kArtSelected, 0);
+            }
+            sAIMdMemory->MdMemoryDisposeHandle((AIMdMemoryHandle)matches);
         }
-        sAIMdMemory->MdMemoryDisposeHandle((AIMdMemoryHandle)matches);
     }
 
     // Select this art
     sAIArt->SetArtUserAttr(art, kArtSelected, kArtSelected);
     fTreeDirty = true;
     InvalidateFullView();
-    fprintf(stderr, "[LayerModule] Selected art: node %d\n", nodeID);
+    fprintf(stderr, "[LayerModule] Selected art: node %d (additive=%d)\n", nodeID, addToSelection);
 }
 
 //========================================================================================

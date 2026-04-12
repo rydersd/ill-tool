@@ -22,6 +22,21 @@ extern "C" {
     // Returns normalized depth map (0=near, 1=far) at model resolution
     bool ONNX_EstimateDepth(const char* imagePath, float** outDepthMap, int* outWidth, int* outHeight);
     void ONNX_FreeDepthMap(float* depthMap);
+
+    // Metric3D v2 — metric depth + surface normals from a single image
+    // Returns true on success. Caller must free *outDepth, *outNormals, *outConfidence with free().
+    bool ONNX_EstimateMetricDepth(const char* imagePath,
+                                  float** outDepth, int* outW, int* outH,
+                                  float** outNormals,
+                                  float** outConfidence);
+    bool ONNX_HasMetricDepth(void);
+
+    // Visualization helpers
+    bool ONNX_SaveDepthMapPNG(const float* depth, int w, int h,
+                              const char* outPath, float minDepth, float maxDepth);
+    bool ONNX_SaveNormalMapPNG(const float* normals, int w, int h,
+                               const char* outPath,
+                               const float* confidence, float confidenceThreshold);
 }
 
 #endif // __ONNXVISIONBRIDGE_H__

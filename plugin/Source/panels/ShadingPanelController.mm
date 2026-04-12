@@ -11,6 +11,7 @@
 
 #import "ShadingPanelController.h"
 #import "IllToolTheme.h"
+#import "IllToolStrings.h"
 #import "HttpBridge.h"
 #import <cstdio>
 #import <cmath>
@@ -326,7 +327,7 @@ static const CGFloat kSliderH     = 18.0;
     CGFloat y = totalHeight - kPadding;
 
     // --- Title ---
-    NSTextField *title = [IllToolTheme makeLabelWithText:@"Shading" font:[NSFont boldSystemFontOfSize:12] color:[IllToolTheme textColor]];
+    NSTextField *title = [IllToolTheme makeLabelWithText:kITS_Shading font:[NSFont boldSystemFontOfSize:12] color:[IllToolTheme textColor]];
     title.frame = NSMakeRect(kPadding, y - 16, kPanelWidth - 2*kPadding, 16);
     [root addSubview:title];
     y -= 24;
@@ -335,7 +336,7 @@ static const CGFloat kSliderH     = 18.0;
     //  Section 1: Mode Toggle (30pt)
     //==================================================================================
 
-    NSSegmentedControl *modeCtrl = [NSSegmentedControl segmentedControlWithLabels:@[@"Blend", @"Mesh"]
+    NSSegmentedControl *modeCtrl = [NSSegmentedControl segmentedControlWithLabels:@[kITS_Blend, kITS_Mesh]
         trackingMode:NSSegmentSwitchTrackingSelectOne
         target:self action:@selector(onModeChanged:)];
     modeCtrl.frame = NSMakeRect(kPadding, y - kRowHeight, kPanelWidth - 2*kPadding, kRowHeight);
@@ -356,7 +357,7 @@ static const CGFloat kSliderH     = 18.0;
     //==================================================================================
 
     // Highlight row
-    NSTextField *hlLabel = [IllToolTheme makeLabelWithText:@"Highlight:" font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
+    NSTextField *hlLabel = [IllToolTheme makeLabelWithText:kITS_Highlight font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
     hlLabel.frame = NSMakeRect(kPadding, y - 30, 70, 14);
     [root addSubview:hlLabel];
 
@@ -366,7 +367,7 @@ static const CGFloat kSliderH     = 18.0;
     self.highlightColorWell = hlWell;
     [hlWell release];
 
-    NSButton *hlPick = [IllToolTheme makeButtonWithTitle:@"Pick" target:self action:@selector(onPickHighlight:)];
+    NSButton *hlPick = [IllToolTheme makeButtonWithTitle:kITS_Pick target:self action:@selector(onPickHighlight:)];
     hlPick.frame = NSMakeRect(kPadding + 110, y - 30, 40, 22);
     hlPick.toolTip = @"Sample highlight color from selected path";
     [root addSubview:hlPick];
@@ -375,7 +376,7 @@ static const CGFloat kSliderH     = 18.0;
     y -= (34 + 4);
 
     // Shadow row
-    NSTextField *shLabel = [IllToolTheme makeLabelWithText:@"Shadow:" font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
+    NSTextField *shLabel = [IllToolTheme makeLabelWithText:kITS_Shadow font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
     shLabel.frame = NSMakeRect(kPadding, y - 30, 70, 14);
     [root addSubview:shLabel];
 
@@ -385,7 +386,7 @@ static const CGFloat kSliderH     = 18.0;
     self.shadowColorWell = shWell;
     [shWell release];
 
-    NSButton *shPick = [IllToolTheme makeButtonWithTitle:@"Pick" target:self action:@selector(onPickShadow:)];
+    NSButton *shPick = [IllToolTheme makeButtonWithTitle:kITS_Pick target:self action:@selector(onPickShadow:)];
     shPick.frame = NSMakeRect(kPadding + 110, y - 30, 40, 22);
     shPick.toolTip = @"Sample shadow color from selected path";
     [root addSubview:shPick];
@@ -404,7 +405,7 @@ static const CGFloat kSliderH     = 18.0;
     //  Section 3: Light Direction (160pt)
     //==================================================================================
 
-    NSTextField *lightLabel = [IllToolTheme makeLabelWithText:@"Light Direction" font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
+    NSTextField *lightLabel = [IllToolTheme makeLabelWithText:kITS_LightDirection font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
     lightLabel.frame = NSMakeRect(kPadding, y - 14, 120, 14);
     [root addSubview:lightLabel];
     y -= (14 + 4);
@@ -443,7 +444,7 @@ static const CGFloat kSliderH     = 18.0;
     //  Section 4: Intensity (40pt)
     //==================================================================================
 
-    NSTextField *intLabel = [IllToolTheme makeLabelWithText:@"Intensity" font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
+    NSTextField *intLabel = [IllToolTheme makeLabelWithText:kITS_Intensity font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
     intLabel.frame = NSMakeRect(kPadding, y - 14, 60, 14);
     [root addSubview:intLabel];
 
@@ -488,7 +489,7 @@ static const CGFloat kSliderH     = 18.0;
         self.blendControlsView = blendView;
         [blendView release];
 
-        NSTextField *stepLbl = [IllToolTheme makeLabelWithText:@"Steps" font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
+        NSTextField *stepLbl = [IllToolTheme makeLabelWithText:kITS_Steps font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
         stepLbl.frame = NSMakeRect(kPadding, 60 - 14, 60, 14);
         [blendView addSubview:stepLbl];
 
@@ -516,7 +517,7 @@ static const CGFloat kSliderH     = 18.0;
         self.meshControlsView = meshView;
         [meshView release];
 
-        NSTextField *gridLbl = [IllToolTheme makeLabelWithText:@"Grid" font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
+        NSTextField *gridLbl = [IllToolTheme makeLabelWithText:kITS_Grid font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
         gridLbl.frame = NSMakeRect(kPadding, 60 - 14, 60, 14);
         [meshView addSubview:gridLbl];
 
@@ -548,7 +549,7 @@ static const CGFloat kSliderH     = 18.0;
     //  Section 6: Execute (50pt)
     //==================================================================================
 
-    NSButton *applyBtn = [NSButton buttonWithTitle:@"Apply Shading" target:self action:@selector(onApply:)];
+    NSButton *applyBtn = [NSButton buttonWithTitle:kITS_ApplyShading target:self action:@selector(onApply:)];
     applyBtn.font = [NSFont boldSystemFontOfSize:12];
     applyBtn.bezelStyle = NSBezelStyleSmallSquare;
     applyBtn.frame = NSMakeRect(kPadding, y - 30, kPanelWidth - 2*kPadding, 30);
@@ -557,13 +558,13 @@ static const CGFloat kSliderH     = 18.0;
     applyBtn.layer.cornerRadius = 3.0;
 
     NSMutableAttributedString *applyTitle = [[NSMutableAttributedString alloc]
-        initWithString:@"Apply Shading"];
+        initWithString:kITS_ApplyShading];
     [applyTitle addAttribute:NSForegroundColorAttributeName
                        value:[NSColor whiteColor]
-                       range:NSMakeRange(0, 13)];
+                       range:NSMakeRange(0, [kITS_ApplyShading length])];
     [applyTitle addAttribute:NSFontAttributeName
                        value:[NSFont boldSystemFontOfSize:12]
-                       range:NSMakeRange(0, 13)];
+                       range:NSMakeRange(0, [kITS_ApplyShading length])];
     applyBtn.attributedTitle = applyTitle;
     [applyTitle release];
 

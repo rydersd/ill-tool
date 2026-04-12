@@ -9,6 +9,7 @@
 
 #import "CleanupPanelController.h"
 #import "IllToolTheme.h"
+#import "IllToolStrings.h"
 #include "IllToolPlugin.h"
 #include "modules/CleanupModule.h"
 #include "HttpBridge.h"
@@ -176,7 +177,7 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
     }
 
     dispatch_async(dispatch_get_main_queue(), ^{
-        self.pointsCountLabel.stringValue = [NSString stringWithFormat:@"Points: %d", count];
+        self.pointsCountLabel.stringValue = [NSString stringWithFormat:kITS_PointsN, count];
         if (count > 0) {
             self.pointsCountLabel.textColor = [IllToolTheme accentColor];
         } else {
@@ -206,7 +207,7 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
     CGFloat y = kPadding;
 
     // --- Tab segmented control ---
-    NSSegmentedControl *tabs = [NSSegmentedControl segmentedControlWithLabels:@[@"Shape", @"Decompose"]
+    NSSegmentedControl *tabs = [NSSegmentedControl segmentedControlWithLabels:@[kITS_Shape, kITS_Decompose]
                                                                  trackingMode:NSSegmentSwitchTrackingSelectOne
                                                                        target:self
                                                                        action:@selector(onTabChanged:)];
@@ -254,7 +255,7 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
     CGFloat y = kPadding;
 
     // --- Title ---
-    NSTextField *title = [IllToolTheme makeLabelWithText:@"Shape Cleanup" font:[NSFont boldSystemFontOfSize:12] color:[IllToolTheme textColor]];
+    NSTextField *title = [IllToolTheme makeLabelWithText:kITS_ShapeCleanup font:[NSFont boldSystemFontOfSize:12] color:[IllToolTheme textColor]];
     title.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, 16);
     [container addSubview:title];
     y += 24;
@@ -307,7 +308,7 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
     y += (btnH + kPadding);
 
     // --- Detected shape label ---
-    NSTextField *detLbl = [IllToolTheme makeLabelWithText:@"Detected:" font:[IllToolTheme labelFont] color:[IllToolTheme secondaryTextColor]];
+    NSTextField *detLbl = [IllToolTheme makeLabelWithText:kITS_Detected font:[IllToolTheme labelFont] color:[IllToolTheme secondaryTextColor]];
     detLbl.frame = NSMakeRect(kPadding, y, 60, 14);
     [container addSubview:detLbl];
 
@@ -325,7 +326,7 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
     y += (1 + kPadding);
 
     // --- Curve Tension slider ---
-    NSTextField *tensLbl = [IllToolTheme makeLabelWithText:@"Curve Tension" font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
+    NSTextField *tensLbl = [IllToolTheme makeLabelWithText:kITS_CurveTension font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
     tensLbl.frame = NSMakeRect(kPadding, y, 110, 14);
     [container addSubview:tensLbl];
 
@@ -344,7 +345,7 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
     y += (kSliderH + kPadding);
 
     // --- Simplification slider ---
-    NSTextField *simpLbl = [IllToolTheme makeLabelWithText:@"Simplification" font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
+    NSTextField *simpLbl = [IllToolTheme makeLabelWithText:kITS_Simplification font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
     simpLbl.frame = NSMakeRect(kPadding, y, 110, 14);
     [container addSubview:simpLbl];
 
@@ -363,14 +364,14 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
     y += (kSliderH + kPadding);
 
     // --- Points count ---
-    NSTextField *ptsLbl = [IllToolTheme makeLabelWithText:@"Points: 0" font:[IllToolTheme monoFont] color:[IllToolTheme accentColor]];
+    NSTextField *ptsLbl = [IllToolTheme makeLabelWithText:[NSString stringWithFormat:kITS_PointsN, 0] font:[IllToolTheme monoFont] color:[IllToolTheme accentColor]];
     ptsLbl.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, 14);
     [container addSubview:ptsLbl];
     self.pointsCountLabel = ptsLbl;
     y += (14 + kPadding);
 
     // --- Layer name field ---
-    NSTextField *layerLbl = [IllToolTheme makeLabelWithText:@"Layer Name" font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
+    NSTextField *layerLbl = [IllToolTheme makeLabelWithText:kITS_LayerName font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
     layerLbl.frame = NSMakeRect(kPadding, y, 80, 14);
     [container addSubview:layerLbl];
     y += (14 + 2);
@@ -378,7 +379,7 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
     NSTextField *layerField = [[NSTextField alloc] initWithFrame:
         NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kRowHeight)];
     layerField.font = [IllToolTheme labelFont];
-    layerField.placeholderString = @"Layer name...";
+    layerField.placeholderString = kITS_LayerNamePlaceholder;
     layerField.bezelStyle = NSTextFieldSquareBezel;
     layerField.bordered = YES;
     layerField.editable = YES;
@@ -388,19 +389,19 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
     y += (kRowHeight + kPadding);
 
     // --- Average Selection button ---
-    NSButton *avgBtn = [IllToolTheme makeButtonWithTitle:@"Average Selection" target:self action:@selector(onAverageSelection:)];
+    NSButton *avgBtn = [IllToolTheme makeButtonWithTitle:kITS_AverageSelection target:self action:@selector(onAverageSelection:)];
     avgBtn.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kRowHeight);
     [container addSubview:avgBtn];
     y += (kRowHeight + kPadding/2);
 
     // --- Delete Originals checkbox ---
-    NSButton *delOrigCB = [NSButton checkboxWithTitle:@"Delete Originals"
+    NSButton *delOrigCB = [NSButton checkboxWithTitle:kITS_DeleteOriginals
                                                target:self
                                                action:@selector(onDeleteOriginalsChanged:)];
     delOrigCB.font = [IllToolTheme labelFont];
     delOrigCB.state = NSControlStateValueOn;
     NSMutableAttributedString *cbTitle = [[NSMutableAttributedString alloc]
-        initWithString:@"Delete Originals"
+        initWithString:kITS_DeleteOriginals
         attributes:@{
             NSForegroundColorAttributeName: [IllToolTheme textColor],
             NSFontAttributeName: [IllToolTheme labelFont]
@@ -414,11 +415,11 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
 
     // --- Apply / Cancel row ---
     CGFloat halfW = (kPanelWidth - 2*kPadding - 4) / 2.0;
-    NSButton *applyBtn = [IllToolTheme makeButtonWithTitle:@"Apply" target:self action:@selector(onApply:)];
+    NSButton *applyBtn = [IllToolTheme makeButtonWithTitle:kITS_Clean target:self action:@selector(onApply:)];
     applyBtn.frame = NSMakeRect(kPadding, y, halfW, kRowHeight);
     [container addSubview:applyBtn];
 
-    NSButton *cancelBtn = [IllToolTheme makeButtonWithTitle:@"Cancel" target:self action:@selector(onCancel:)];
+    NSButton *cancelBtn = [IllToolTheme makeButtonWithTitle:kITS_Cancel target:self action:@selector(onCancel:)];
     cancelBtn.frame = NSMakeRect(kPadding + halfW + 4, y, halfW, kRowHeight);
     [container addSubview:cancelBtn];
     y += (kRowHeight + kPadding);
@@ -431,7 +432,7 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
     y += (1 + kPadding);
 
     // --- Select Small row ---
-    NSButton *selSmallBtn = [IllToolTheme makeButtonWithTitle:@"Select Small" target:self action:@selector(onSelectSmall:)];
+    NSButton *selSmallBtn = [IllToolTheme makeButtonWithTitle:kITS_SelectSmall target:self action:@selector(onSelectSmall:)];
     selSmallBtn.frame = NSMakeRect(kPadding, y, 100, kRowHeight);
     [container addSubview:selSmallBtn];
 
@@ -452,7 +453,7 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
     [container addSubview:ptLabel];
 
     // Max Points field (point-count threshold for SelectSmall)
-    NSTextField *maxPtsLabel = [IllToolTheme makeLabelWithText:@"Max Pts" font:[IllToolTheme labelFont] color:[IllToolTheme secondaryTextColor]];
+    NSTextField *maxPtsLabel = [IllToolTheme makeLabelWithText:kITS_MaxPts font:[IllToolTheme labelFont] color:[IllToolTheme secondaryTextColor]];
     maxPtsLabel.frame = NSMakeRect(kPadding + 182, y + 3, 50, 14);
     [container addSubview:maxPtsLabel];
 
@@ -479,18 +480,18 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
     CGFloat y = kPadding;
 
     // --- Title ---
-    NSTextField *title = [IllToolTheme makeLabelWithText:@"Auto-Decompose" font:[NSFont boldSystemFontOfSize:12] color:[IllToolTheme textColor]];
+    NSTextField *title = [IllToolTheme makeLabelWithText:kITS_AutoDecompose font:[NSFont boldSystemFontOfSize:12] color:[IllToolTheme textColor]];
     title.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, 16);
     [container addSubview:title];
     y += 24;
 
     // --- Analyze button ---
-    NSButton *analyzeBtn = [IllToolTheme makeButtonWithTitle:@"Analyze" target:self action:@selector(onDecomposeAnalyze:)];
+    NSButton *analyzeBtn = [IllToolTheme makeButtonWithTitle:kITS_Analyze target:self action:@selector(onDecomposeAnalyze:)];
     analyzeBtn.frame = NSMakeRect(kPadding, y, 80, kRowHeight);
     [container addSubview:analyzeBtn];
 
     // --- Sensitivity label + value (same row as Analyze) ---
-    NSTextField *sensLbl = [IllToolTheme makeLabelWithText:@"Sensitivity:" font:[IllToolTheme labelFont] color:[IllToolTheme secondaryTextColor]];
+    NSTextField *sensLbl = [IllToolTheme makeLabelWithText:kITS_Sensitivity font:[IllToolTheme labelFont] color:[IllToolTheme secondaryTextColor]];
     sensLbl.frame = NSMakeRect(kPadding + 88, y + 3, 70, 14);
     [container addSubview:sensLbl];
 
@@ -517,7 +518,7 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
     y += (1 + kPadding);
 
     // --- Clusters readout ---
-    NSTextField *clustersLbl = [IllToolTheme makeLabelWithText:@"Clusters:" font:[IllToolTheme labelFont] color:[IllToolTheme secondaryTextColor]];
+    NSTextField *clustersLbl = [IllToolTheme makeLabelWithText:kITS_Clusters font:[IllToolTheme labelFont] color:[IllToolTheme secondaryTextColor]];
     clustersLbl.frame = NSMakeRect(kPadding, y, 55, 14);
     [container addSubview:clustersLbl];
 
@@ -529,21 +530,21 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
 
     // --- Accept All / Cancel row ---
     CGFloat halfW = (kPanelWidth - 2*kPadding - 4) / 2.0;
-    NSButton *acceptBtn = [IllToolTheme makeButtonWithTitle:@"Accept All" target:self action:@selector(onDecomposeAcceptAll:)];
+    NSButton *acceptBtn = [IllToolTheme makeButtonWithTitle:kITS_AcceptAll target:self action:@selector(onDecomposeAcceptAll:)];
     acceptBtn.frame = NSMakeRect(kPadding, y, halfW, kRowHeight);
     [container addSubview:acceptBtn];
 
-    NSButton *cancelBtn = [IllToolTheme makeButtonWithTitle:@"Cancel" target:self action:@selector(onDecomposeCancel:)];
+    NSButton *cancelBtn = [IllToolTheme makeButtonWithTitle:kITS_Cancel target:self action:@selector(onDecomposeCancel:)];
     cancelBtn.frame = NSMakeRect(kPadding + halfW + 4, y, halfW, kRowHeight);
     [container addSubview:cancelBtn];
     y += (kRowHeight + kPadding / 2);
 
     // --- Split / Merge row ---
-    NSButton *splitBtn = [IllToolTheme makeButtonWithTitle:@"Split" target:self action:@selector(onDecomposeSplit:)];
+    NSButton *splitBtn = [IllToolTheme makeButtonWithTitle:kITS_Split target:self action:@selector(onDecomposeSplit:)];
     splitBtn.frame = NSMakeRect(kPadding, y, halfW, kRowHeight);
     [container addSubview:splitBtn];
 
-    NSButton *mergeBtn = [IllToolTheme makeButtonWithTitle:@"Merge Groups" target:self action:@selector(onDecomposeMerge:)];
+    NSButton *mergeBtn = [IllToolTheme makeButtonWithTitle:kITS_MergeGroups target:self action:@selector(onDecomposeMerge:)];
     mergeBtn.frame = NSMakeRect(kPadding + halfW + 4, y, halfW, kRowHeight);
     [container addSubview:mergeBtn];
 }
@@ -714,7 +715,7 @@ static NSButton* MakeShapeButton(NSString *title, NSInteger tag, id target, SEL 
 
 - (void)updatePointsCount:(NSInteger)count
 {
-    self.pointsCountLabel.stringValue = [NSString stringWithFormat:@"Points: %ld", (long)count];
+    self.pointsCountLabel.stringValue = [NSString stringWithFormat:kITS_PointsNLong, (long)count];
 }
 
 - (void)updateDecomposeReadout:(NSString *)text

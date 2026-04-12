@@ -1,0 +1,265 @@
+/* ==========================================================================
+   IllTool — English Base Localization
+   ==========================================================================
+   Every key below corresponds to a kITS_ macro in IllToolStrings.h.
+   Translators: copy this file to <lang>.lproj/Localizable.strings and
+   replace the right-hand values only.
+   ========================================================================== */
+
+/* --- Common --- */
+"Apply" = "Apply";
+"Cut Out" = "Cut Out";
+"Create" = "Create";
+"Trace" = "Trace";
+"Extract" = "Extract";
+"Correct" = "Correct";
+"Analyze" = "Analyze";
+"Separate" = "Separate";
+"Segment" = "Segment";
+"Scan" = "Scan";
+"Convert" = "Convert";
+"Label" = "Label";
+"Nest" = "Nest";
+"Detect" = "Detect";
+"Clean" = "Clean";
+"Transform" = "Transform";
+"Cancel" = "Cancel";
+"Preview" = "Preview";
+"Clear" = "Clear";
+"Clear Preview" = "Clear Preview";
+"Run" = "Run";
+"Save" = "Save";
+"Load" = "Load";
+"Reset" = "Reset";
+"Confirm" = "Confirm";
+"Undo" = "Undo";
+"Merge" = "Merge";
+"Finalize" = "Finalize";
+"Simplification" = "Simplification";
+"Sensitivity:" = "Sensitivity:";
+
+/* --- Selection Panel --- */
+"Selection Tools" = "Selection Tools";
+"Lasso" = "Lasso";
+"Smart" = "Smart";
+"Click to place points, Enter or double-click to select" = "Click to place points, Enter or double-click to select";
+"Click a path to select related" = "Click a path to select related";
+"Add to Selection" = "Add to Selection";
+"%d anchors selected" = "%d anchors selected";
+"Similarity Threshold" = "Similarity Threshold";
+
+/* --- Cleanup Panel --- */
+"Shape Cleanup" = "Shape Cleanup";
+"Shape" = "Shape";
+"Decompose" = "Decompose";
+"Detected:" = "Detected:";
+"Curve Tension" = "Curve Tension";
+"Points: %d" = "Points: %d";
+"Points: %ld" = "Points: %ld";
+"Layer Name" = "Layer Name";
+"Layer name..." = "Layer name...";
+"Average Selection" = "Average Selection";
+"Delete Originals" = "Delete Originals";
+"Select Small" = "Select Small";
+"Max Pts" = "Max Pts";
+"Auto-Decompose" = "Auto-Decompose";
+"Analyze" = "Analyze";
+"Clusters:" = "Clusters:";
+"Accept All" = "Accept All";
+"Split" = "Split";
+"Merge Groups" = "Merge Groups";
+
+/* --- Grouping Panel --- */
+"Grouping Tools" = "Grouping Tools";
+"Group Name" = "Group Name";
+"Enter group name..." = "Enter group name...";
+"Copy to Group" = "Copy to Group";
+"Untitled Group" = "Untitled Group";
+"Detach from Group" = "Detach from Group";
+"Split to New Group" = "Split to New Group";
+
+/* --- Shading Panel --- */
+"Shading" = "Shading";
+"Blend" = "Blend";
+"Mesh" = "Mesh";
+"Highlight:" = "Highlight:";
+"Shadow:" = "Shadow:";
+"Pick" = "Pick";
+"Light Direction" = "Light Direction";
+"Intensity" = "Intensity";
+"Steps" = "Steps";
+"Grid" = "Grid";
+"Apply Shading" = "Apply Shading";
+
+/* --- Blend Panel --- */
+"Pick A" = "Pick A";
+"Pick B" = "Pick B";
+"No paths selected" = "No paths selected";
+"Ready to blend" = "Ready to blend";
+"Path A set" = "Path A set";
+"Path B set" = "Path B set";
+"Easing" = "Easing";
+"Lin" = "Lin";
+"In" = "In";
+"Out" = "Out";
+"InOut" = "InOut";
+
+/* --- Perspective Panel --- */
+"Set Perspective" = "Set Perspective";
+"Reset Perspective" = "Reset Perspective";
+"Add Vertical" = "Add Vertical";
+"Auto Match" = "Auto Match";
+"Lock" = "Lock";
+"Show" = "Show";
+"Delete Grid" = "Delete Grid";
+"Snap to Perspective" = "Snap to Perspective";
+
+/* Perspective panel — auto-match settings */
+"Adaptive Canny" = "Adaptive Canny";
+"3-Point Perspective" = "3-Point Perspective";
+"Show VP Lines" = "Show VP Lines";
+"Line Colors:" = "Line Colors:";
+"No grid" = "No grid";
+"2-point perspective" = "2-point perspective";
+"3-point perspective" = "3-point perspective";
+"Locked \u2014 2-point" = "Locked \u2014 2-point";
+"Locked \u2014 3-point" = "Locked \u2014 3-point";
+"%d line(s) placed" = "%d line(s) placed";
+"%@ \u2014 Not set" = "%@ \u2014 Not set";
+"Horizon" = "Horizon";
+"Grid Density" = "Grid Density";
+"Preset" = "Preset";
+"Save Preset" = "Save Preset";
+"Load Preset" = "Load Preset";
+"Clear Grid" = "Clear Grid";
+"Mirror" = "Mirror";
+"Duplicate" = "Duplicate";
+"Paste" = "Paste";
+"Axis:" = "Axis:";
+"Vertical" = "Vertical";
+"Horizontal" = "Horizontal";
+"Custom" = "Custom";
+"Replace original (copy by default)" = "Replace original (copy by default)";
+"Count:" = "Count:";
+"Spacing:" = "Spacing:";
+"Equal in Perspective" = "Equal in Perspective";
+"Equal in Screen" = "Equal in Screen";
+"Plane:" = "Plane:";
+"Floor" = "Floor";
+"Left Wall" = "Left Wall";
+"Right Wall" = "Right Wall";
+"Scale:" = "Scale:";
+"Paste in Perspective" = "Paste in Perspective";
+
+/* --- Transform Panel --- */
+"Transform All" = "Transform All";
+"Mode" = "Mode";
+"Absolute" = "Absolute";
+"Relative" = "Relative";
+"Width:" = "Width:";
+"Height:" = "Height:";
+"Rotation:" = "Rotation:";
+"Random (\u00B120% variance)" = "Random (\u00B120% variance)";
+"Lock Aspect Ratio" = "Lock Aspect Ratio";
+"Selected: %ld anchor%s" = "Selected: %ld anchor%s";
+
+/* --- Merge Panel --- */
+"Smart Merge" = "Smart Merge";
+"Tolerance" = "Tolerance";
+"%d pt" = "%d pt";
+"Scan Endpoints" = "Scan Endpoints";
+"0 pairs found, 0 paths" = "0 pairs found, 0 paths";
+"Chain Merge" = "Chain Merge";
+"Preserve Handles" = "Preserve Handles";
+
+/* --- Pen Panel --- */
+"Ill Pen" = "Ill Pen";
+"Pen Mode Active" = "Pen Mode Active";
+"Path Name:" = "Path Name:";
+"Target Group:" = "Target Group:";
+"None" = "None";
+"Chamfer" = "Chamfer";
+"Radius:" = "Radius:";
+"Uniform Edges" = "Uniform Edges";
+"Preset:" = "Preset:";
+"Sharp" = "Sharp";
+"Soft" = "Soft";
+"Round" = "Round";
+"Click to draw, double-click to finish" = "Click to draw, double-click to finish";
+"Enable Pen Mode to draw" = "Enable Pen Mode to draw";
+
+/* --- Surface Panel --- */
+"Surface Extraction" = "Surface Extraction";
+"Click-to-Extract Mode" = "Click-to-Extract Mode";
+"Surface: ---" = "Surface: ---";
+"Enable extract mode, then click on reference" = "Enable extract mode, then click on reference";
+
+/* --- Trace Panel --- */
+"Ill Trace" = "Ill Trace";
+"Outline" = "Outline";
+"Fill" = "Fill";
+"Centerline" = "Centerline";
+"Image" = "Image";
+"Vectors" = "Vectors";
+"Expand a section, adjust params, click Run" = "Expand a section, adjust params, click Run";
+"Preview Preprocessing" = "Preview Preprocessing";
+"Centerline Settings" = "Centerline Settings";
+"Smoothness" = "Smoothness";
+"Click Threshold" = "Click Threshold";
+"Subject Cutout" = "Subject Cutout";
+"Extracting subject..." = "Extracting subject...";
+"No preview to commit \u2014 click Preview first" = "No preview to commit \u2014 click Preview first";
+"Creating cut paths..." = "Creating cut paths...";
+"Recompositing instances..." = "Recompositing instances...";
+"Dark on Light" = "Dark on Light";
+"Include Face Landmarks" = "Include Face Landmarks";
+"Include Hand Pose" = "Include Hand Pose";
+"Layer Count" = "Layer Count";
+"Show Midline" = "Show Midline";
+"Good Side" = "Good Side";
+"Left" = "Left";
+"Right" = "Right";
+
+/* --- Trace Slider Labels --- */
+"Speckle Filter:" = "Speckle Filter:";
+"Color Precision:" = "Color Precision:";
+"Corner Threshold:" = "Corner Threshold:";
+"Length Threshold:" = "Length Threshold:";
+"Splice Angle:" = "Splice Angle:";
+"Curve Fit Iterations:" = "Curve Fit Iterations:";
+"Layer Difference:" = "Layer Difference:";
+"Mode:" = "Mode:";
+"Canny Low:" = "Canny Low:";
+"Canny High:" = "Canny High:";
+"Edge Dilation:" = "Edge Dilation:";
+"Skeleton Threshold:" = "Skeleton Threshold:";
+"Normal Strength:" = "Normal Strength:";
+"Threshold:" = "Threshold:";
+"Min Area:" = "Min Area:";
+"Iterations:" = "Iterations:";
+"Learning Rate:" = "Learning Rate:";
+"Confidence:" = "Confidence:";
+"K Planes:" = "K Planes:";
+"Pre-Blur Sigma:" = "Pre-Blur Sigma:";
+"Clustering Stride:" = "Clustering Stride:";
+"Clustering Iterations:" = "Clustering Iterations:";
+"Num Thresholds:" = "Num Thresholds:";
+"Blur Sigma:" = "Blur Sigma:";
+"Step Size:" = "Step Size:";
+"Color Threshold:" = "Color Threshold:";
+"Tolerance:" = "Tolerance:";
+"Depth:" = "Depth:";
+"Contrast" = "Contrast";
+"Pivot" = "Pivot";
+
+/* --- Layer Panel --- */
+"Ill Layers" = "Ill Layers";
+"No Preset" = "No Preset";
+"Save Preset..." = "Save Preset...";
+"Organize" = "Organize";
+"Save Layer Preset" = "Save Layer Preset";
+"Enter preset name:" = "Enter preset name:";
+"My Preset" = "My Preset";
+"New Layer" = "New Layer";
+"Group" = "Group";
+"%d layers, %d objects" = "%d layers, %d objects";

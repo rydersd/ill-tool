@@ -9,6 +9,7 @@
 
 #import "MergePanelController.h"
 #import "IllToolTheme.h"
+#import "IllToolStrings.h"
 #import "HttpBridge.h"
 #import <cstdio>
 #import <string>
@@ -107,17 +108,17 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     CGFloat y = totalHeight - kPadding;
 
     // --- Title ---
-    NSTextField *title = [IllToolTheme makeLabelWithText:@"Smart Merge" font:[NSFont boldSystemFontOfSize:12] color:[IllToolTheme textColor]];
+    NSTextField *title = [IllToolTheme makeLabelWithText:kITS_SmartMerge font:[NSFont boldSystemFontOfSize:12] color:[IllToolTheme textColor]];
     title.frame = NSMakeRect(kPadding, y - 16, kPanelWidth - 2*kPadding, 16);
     [root addSubview:title];
     y -= 24;
 
     // --- Tolerance slider ---
-    NSTextField *tolLbl = [IllToolTheme makeLabelWithText:@"Tolerance" font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
+    NSTextField *tolLbl = [IllToolTheme makeLabelWithText:kITS_Tolerance font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
     tolLbl.frame = NSMakeRect(kPadding, y - 14, 80, 14);
     [root addSubview:tolLbl];
 
-    NSTextField *tolVal = [IllToolTheme makeLabelWithText:@"5 pt" font:[IllToolTheme monoFont] color:[IllToolTheme accentColor]];
+    NSTextField *tolVal = [IllToolTheme makeLabelWithText:[NSString stringWithFormat:kITS_TolerancePt, 5] font:[IllToolTheme monoFont] color:[IllToolTheme accentColor]];
     tolVal.frame = NSMakeRect(kPanelWidth - kPadding - 40, y - 14, 40, 14);
     tolVal.alignment = NSTextAlignmentRight;
     [root addSubview:tolVal];
@@ -132,13 +133,13 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     y -= (kSliderH + kPadding);
 
     // --- Scan Endpoints button ---
-    NSButton *scanBtn = [IllToolTheme makeButtonWithTitle:@"Scan Endpoints" target:self action:@selector(onScanEndpoints:)];
+    NSButton *scanBtn = [IllToolTheme makeButtonWithTitle:kITS_ScanEndpoints target:self action:@selector(onScanEndpoints:)];
     scanBtn.frame = NSMakeRect(kPadding, y - kRowHeight, kPanelWidth - 2*kPadding, kRowHeight);
     [root addSubview:scanBtn];
     y -= (kRowHeight + kPadding);
 
     // --- Readout label ---
-    NSTextField *readout = [IllToolTheme makeLabelWithText:@"0 pairs found, 0 paths" font:[IllToolTheme monoFont] color:[IllToolTheme secondaryTextColor]];
+    NSTextField *readout = [IllToolTheme makeLabelWithText:kITS_PairsFound font:[IllToolTheme monoFont] color:[IllToolTheme secondaryTextColor]];
     readout.frame = NSMakeRect(kPadding, y - 14, kPanelWidth - 2*kPadding, 14);
     [root addSubview:readout];
     self.readoutLabel = readout;
@@ -152,14 +153,14 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     y -= (1 + kPadding);
 
     // --- Chain Merge checkbox ---
-    NSButton *chainCB = MakeCheckbox(@"Chain Merge", self, @selector(onChainMerge:));
+    NSButton *chainCB = MakeCheckbox(kITS_ChainMerge, self, @selector(onChainMerge:));
     chainCB.frame = NSMakeRect(kPadding, y - kRowHeight, kPanelWidth - 2*kPadding, kRowHeight);
     [root addSubview:chainCB];
     self.chainMergeCheckbox = chainCB;
     y -= (kRowHeight + 4);
 
     // --- Preserve Handles checkbox ---
-    NSButton *handlesCB = MakeCheckbox(@"Preserve Handles", self, @selector(onPreserveHandles:));
+    NSButton *handlesCB = MakeCheckbox(kITS_PreserveHandles, self, @selector(onPreserveHandles:));
     handlesCB.frame = NSMakeRect(kPadding, y - kRowHeight, kPanelWidth - 2*kPadding, kRowHeight);
     [root addSubview:handlesCB];
     self.preserveHandlesCheckbox = handlesCB;
@@ -167,11 +168,11 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
 
     // --- Merge / Undo row ---
     CGFloat halfW = (kPanelWidth - 2*kPadding - 4) / 2.0;
-    NSButton *mergeBtn = [IllToolTheme makeButtonWithTitle:@"Merge" target:self action:@selector(onMerge:)];
+    NSButton *mergeBtn = [IllToolTheme makeButtonWithTitle:kITS_Merge target:self action:@selector(onMerge:)];
     mergeBtn.frame = NSMakeRect(kPadding, y - kRowHeight, halfW, kRowHeight);
     [root addSubview:mergeBtn];
 
-    NSButton *undoBtn = [IllToolTheme makeButtonWithTitle:@"Undo" target:self action:@selector(onUndo:)];
+    NSButton *undoBtn = [IllToolTheme makeButtonWithTitle:kITS_Undo target:self action:@selector(onUndo:)];
     undoBtn.frame = NSMakeRect(kPadding + halfW + 4, y - kRowHeight, halfW, kRowHeight);
     [root addSubview:undoBtn];
 }
@@ -183,7 +184,7 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
 - (void)onToleranceChanged:(NSSlider *)sender
 {
     int value = (int)sender.integerValue;
-    self.toleranceValueLabel.stringValue = [NSString stringWithFormat:@"%d pt", value];
+    self.toleranceValueLabel.stringValue = [NSString stringWithFormat:kITS_TolerancePt, value];
     fprintf(stderr, "[IllTool Panel] Merge Tolerance: %d pt\n", value);
 }
 

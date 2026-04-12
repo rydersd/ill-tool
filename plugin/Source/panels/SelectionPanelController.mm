@@ -9,6 +9,7 @@
 
 #import "SelectionPanelController.h"
 #import "IllToolTheme.h"
+#import "IllToolStrings.h"
 #include "IllToolPlugin.h"
 #include "HttpBridge.h"
 #import <cstdio>
@@ -138,14 +139,14 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     CGFloat y = totalHeight - kPadding;
 
     // --- Title ---
-    NSTextField *title = [IllToolTheme makeLabelWithText:@"Selection Tools" font:[IllToolTheme titleFont] color:[IllToolTheme textColor]];
+    NSTextField *title = [IllToolTheme makeLabelWithText:kITS_SelectionTools font:[IllToolTheme titleFont] color:[IllToolTheme textColor]];
     title.frame = NSMakeRect(kPadding, y - 16, kPanelWidth - 2*kPadding, 16);
     title.autoresizingMask = NSViewWidthSizable;
     [root addSubview:title];
     y -= 24;
 
     // --- Segmented control: Lasso | Smart ---
-    NSSegmentedControl *seg = [NSSegmentedControl segmentedControlWithLabels:@[@"Lasso", @"Smart"]
+    NSSegmentedControl *seg = [NSSegmentedControl segmentedControlWithLabels:@[kITS_Lasso, kITS_Smart]
                                 trackingMode:NSSegmentSwitchTrackingSelectOne
                                       target:self
                                       action:@selector(onModeChanged:)];
@@ -158,7 +159,7 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     y -= (kRowHeight + kPadding);
 
     // --- Status label ---
-    NSTextField *status = [IllToolTheme makeLabelWithText:@"Click to place points, Enter or double-click to select" font:[IllToolTheme labelFont] color:[IllToolTheme secondaryTextColor]];
+    NSTextField *status = [IllToolTheme makeLabelWithText:kITS_LassoHelp font:[IllToolTheme labelFont] color:[IllToolTheme secondaryTextColor]];
     status.frame = NSMakeRect(kPadding, y - 28, kPanelWidth - 2*kPadding, 28);
     status.maximumNumberOfLines = 2;
     status.lineBreakMode = NSLineBreakByWordWrapping;
@@ -168,20 +169,20 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     y -= (28 + kPadding);
 
     // --- Clear button ---
-    NSButton *clearBtn = [IllToolTheme makeButtonWithTitle:@"Clear" target:self action:@selector(onClear:)];
+    NSButton *clearBtn = [IllToolTheme makeButtonWithTitle:kITS_Clear target:self action:@selector(onClear:)];
     clearBtn.frame = NSMakeRect(kPadding, y - kRowHeight, 80, kRowHeight);
     [root addSubview:clearBtn];
     y -= (kRowHeight + kPadding);
 
     // --- Add to Selection checkbox ---
-    NSButton *addCB = MakeCheckbox(@"Add to Selection", self, @selector(onAddToSelection:));
+    NSButton *addCB = MakeCheckbox(kITS_AddToSelection, self, @selector(onAddToSelection:));
     addCB.frame = NSMakeRect(kPadding, y - kRowHeight, kPanelWidth - 2*kPadding, kRowHeight);
     [root addSubview:addCB];
     self.addToSelectionCheckbox = addCB;
     y -= (kRowHeight + kPadding);
 
     // --- Selection count ---
-    NSTextField *countLbl = [IllToolTheme makeLabelWithText:@"0 anchors selected" font:[IllToolTheme monoFont] color:[IllToolTheme accentColor]];
+    NSTextField *countLbl = [IllToolTheme makeLabelWithText:[NSString stringWithFormat:kITS_AnchorsSelected, 0] font:[IllToolTheme monoFont] color:[IllToolTheme accentColor]];
     countLbl.frame = NSMakeRect(kPadding, y - 16, kPanelWidth - 2*kPadding, 16);
     countLbl.autoresizingMask = NSViewWidthSizable;
     [root addSubview:countLbl];
@@ -196,7 +197,7 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     y -= (1 + kPadding);
 
     // --- Threshold slider (Smart mode only) ---
-    NSTextField *threshLbl = [IllToolTheme makeLabelWithText:@"Similarity Threshold" font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
+    NSTextField *threshLbl = [IllToolTheme makeLabelWithText:kITS_SimilarityThresh font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
     threshLbl.frame = NSMakeRect(kPadding, y - 14, 140, 14);
     [root addSubview:threshLbl];
     self.thresholdLabel = threshLbl;
@@ -230,13 +231,13 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
         // Lasso mode
         fprintf(stderr, "[IllTool Panel] Selection mode -> Lasso\n");
         BridgeSetToolMode((BridgeToolMode)0);  // BridgeToolMode::Lasso == 0
-        [self updateStatusText:@"Click to place points, Enter or double-click to select"];
+        [self updateStatusText:kITS_LassoHelp];
         [self updateSmartModeVisible:NO];
     } else {
         // Smart mode
         fprintf(stderr, "[IllTool Panel] Selection mode -> Smart\n");
         BridgeSetToolMode((BridgeToolMode)1);  // BridgeToolMode::Smart == 1
-        [self updateStatusText:@"Click a path to select related"];
+        [self updateStatusText:kITS_SmartHelp];
         [self updateSmartModeVisible:YES];
     }
 }
@@ -290,7 +291,7 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
     self.lastPolledCount = count;
 
     self.selectionCount = count;
-    self.countLabel.stringValue = [NSString stringWithFormat:@"%d anchors selected", count];
+    self.countLabel.stringValue = [NSString stringWithFormat:kITS_AnchorsSelected, count];
     if (count > 0) {
         self.countLabel.textColor = [IllToolTheme accentColor];
     } else {
@@ -306,7 +307,7 @@ static NSButton* MakeCheckbox(NSString *title, id target, SEL action)
 {
     self.selectionCount = count;
     self.lastPolledCount = (int)count;  // sync polling cache with manual updates
-    self.countLabel.stringValue = [NSString stringWithFormat:@"%ld anchors selected", (long)count];
+    self.countLabel.stringValue = [NSString stringWithFormat:kITS_AnchorsSelected, (int)count];
 }
 
 - (void)updateStatusText:(NSString *)text

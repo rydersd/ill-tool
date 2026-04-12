@@ -9,6 +9,7 @@
 
 #import "PenPanelController.h"
 #import "IllToolTheme.h"
+#import "IllToolStrings.h"
 #import "HttpBridge.h"
 #import <cstdio>
 #import <cmath>
@@ -63,7 +64,7 @@
     //  Title
     //------------------------------------------------------------------
     {
-        NSTextField *title = [IllToolTheme makeLabelWithText:@"Ill Pen" font:[IllToolTheme titleFont] color:[IllToolTheme accentColor]];
+        NSTextField *title = [IllToolTheme makeLabelWithText:kITS_IllPen font:[IllToolTheme titleFont] color:[IllToolTheme accentColor]];
         title.frame = NSMakeRect(kPadding, 0, kPanelWidth - 2 * kPadding, kRowHeight);
         [rows addObject:title];
     }
@@ -79,7 +80,7 @@
     //  Pen Mode toggle
     //------------------------------------------------------------------
     {
-        NSButton *cb = [NSButton checkboxWithTitle:@"Pen Mode Active" target:self action:@selector(penModeToggled:)];
+        NSButton *cb = [NSButton checkboxWithTitle:kITS_PenModeActive target:self action:@selector(penModeToggled:)];
         cb.font = [IllToolTheme labelFont];
         [cb setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
         cb.frame = NSMakeRect(kPadding, 0, kPanelWidth - 2 * kPadding, kRowHeight);
@@ -92,7 +93,7 @@
     //  Path Name
     //------------------------------------------------------------------
     {
-        NSTextField *label = [IllToolTheme makeLabelWithText:@"Path Name:" font:[IllToolTheme labelFont] color:[IllToolTheme secondaryTextColor]];
+        NSTextField *label = [IllToolTheme makeLabelWithText:kITS_PathName font:[IllToolTheme labelFont] color:[IllToolTheme secondaryTextColor]];
         label.frame = NSMakeRect(kPadding, 0, 80, kRowHeight);
         [rows addObject:label];
 
@@ -113,13 +114,13 @@
     //  Target Group
     //------------------------------------------------------------------
     {
-        NSTextField *label = [IllToolTheme makeLabelWithText:@"Target Group:" font:[IllToolTheme labelFont] color:[IllToolTheme secondaryTextColor]];
+        NSTextField *label = [IllToolTheme makeLabelWithText:kITS_TargetGroup font:[IllToolTheme labelFont] color:[IllToolTheme secondaryTextColor]];
         label.frame = NSMakeRect(kPadding, 0, 90, kRowHeight);
         [rows addObject:label];
 
         NSPopUpButton *popup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(kPadding + 92, 0, kPanelWidth - 2 * kPadding - 92, kRowHeight) pullsDown:NO];
         popup.font = [IllToolTheme labelFont];
-        [popup addItemWithTitle:@"None"];
+        [popup addItemWithTitle:kITS_None];
         popup.target = self;
         popup.action = @selector(targetGroupChanged:);
         _targetGroupPopup = popup;
@@ -137,7 +138,7 @@
     //  Chamfer section header
     //------------------------------------------------------------------
     {
-        NSTextField *header = [IllToolTheme makeLabelWithText:@"Chamfer" font:[IllToolTheme titleFont] color:[IllToolTheme textColor]];
+        NSTextField *header = [IllToolTheme makeLabelWithText:kITS_Chamfer font:[IllToolTheme titleFont] color:[IllToolTheme textColor]];
         header.frame = NSMakeRect(kPadding, 0, kPanelWidth - 2 * kPadding, kRowHeight);
         [rows addObject:header];
     }
@@ -146,7 +147,7 @@
     //  Chamfer Radius slider
     //------------------------------------------------------------------
     {
-        NSTextField *label = [IllToolTheme makeLabelWithText:@"Radius:" font:[IllToolTheme labelFont] color:[IllToolTheme secondaryTextColor]];
+        NSTextField *label = [IllToolTheme makeLabelWithText:kITS_Radius font:[IllToolTheme labelFont] color:[IllToolTheme secondaryTextColor]];
         label.frame = NSMakeRect(kPadding, 0, 50, kSliderH);
         [rows addObject:label];
 
@@ -171,7 +172,7 @@
     //  Uniform Edges checkbox
     //------------------------------------------------------------------
     {
-        NSButton *cb = [NSButton checkboxWithTitle:@"Uniform Edges" target:self action:@selector(uniformEdgesToggled:)];
+        NSButton *cb = [NSButton checkboxWithTitle:kITS_UniformEdges target:self action:@selector(uniformEdgesToggled:)];
         cb.font = [IllToolTheme labelFont];
         cb.frame = NSMakeRect(kPadding, 0, kPanelWidth - 2 * kPadding, kRowHeight);
         cb.state = NSControlStateValueOn;
@@ -183,16 +184,16 @@
     //  Preset popup
     //------------------------------------------------------------------
     {
-        NSTextField *label = [IllToolTheme makeLabelWithText:@"Preset:" font:[IllToolTheme labelFont] color:[IllToolTheme secondaryTextColor]];
+        NSTextField *label = [IllToolTheme makeLabelWithText:kITS_PresetLabel font:[IllToolTheme labelFont] color:[IllToolTheme secondaryTextColor]];
         label.frame = NSMakeRect(kPadding, 0, 50, kRowHeight);
         [rows addObject:label];
 
         NSPopUpButton *popup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(kPadding + 52, 0, kPanelWidth - 2 * kPadding - 52, kRowHeight) pullsDown:NO];
         popup.font = [IllToolTheme labelFont];
-        [popup addItemWithTitle:@"Sharp"];
-        [popup addItemWithTitle:@"Soft"];
-        [popup addItemWithTitle:@"Round"];
-        [popup addItemWithTitle:@"Custom"];
+        [popup addItemWithTitle:kITS_PresetSharp];
+        [popup addItemWithTitle:kITS_PresetSoft];
+        [popup addItemWithTitle:kITS_PresetRound];
+        [popup addItemWithTitle:kITS_PresetCustom];
         popup.target = self;
         popup.action = @selector(presetChanged:);
         _presetPopup = popup;
@@ -210,11 +211,11 @@
     //  Finalize / Cancel buttons
     //------------------------------------------------------------------
     {
-        NSButton *finalizeBtn = [IllToolTheme makeButtonWithTitle:@"Finalize" target:self action:@selector(finalizeClicked:)];
+        NSButton *finalizeBtn = [IllToolTheme makeButtonWithTitle:kITS_Finalize target:self action:@selector(finalizeClicked:)];
         finalizeBtn.frame = NSMakeRect(kPadding, 0, (kPanelWidth - 3 * kPadding) / 2, 28);
         [rows addObject:finalizeBtn];
 
-        NSButton *cancelBtn = [IllToolTheme makeButtonWithTitle:@"Cancel" target:self action:@selector(cancelClicked:)];
+        NSButton *cancelBtn = [IllToolTheme makeButtonWithTitle:kITS_Cancel target:self action:@selector(cancelClicked:)];
         cancelBtn.frame = NSMakeRect(kPadding + (kPanelWidth - 3 * kPadding) / 2 + kPadding, 0, (kPanelWidth - 3 * kPadding) / 2, 28);
         [rows addObject:cancelBtn];
     }
@@ -223,7 +224,7 @@
     //  Status label
     //------------------------------------------------------------------
     {
-        NSTextField *status = [IllToolTheme makeLabelWithText:@"Click to draw, double-click to finish" font:[IllToolTheme labelFont] color:[IllToolTheme secondaryTextColor]];
+        NSTextField *status = [IllToolTheme makeLabelWithText:kITS_ClickDrawHelp font:[IllToolTheme labelFont] color:[IllToolTheme secondaryTextColor]];
         status.frame = NSMakeRect(kPadding, 0, kPanelWidth - 2 * kPadding, kRowHeight);
         _statusLabel = status;
         [rows addObject:status];
@@ -369,10 +370,10 @@
     _penModeCheckbox.state = penMode ? NSControlStateValueOn : NSControlStateValueOff;
 
     if (!penMode) {
-        _statusLabel.stringValue = @"Enable Pen Mode to draw";
+        _statusLabel.stringValue = kITS_EnablePenHelp;
         _statusLabel.textColor = [IllToolTheme secondaryTextColor];
     } else {
-        _statusLabel.stringValue = @"Click to draw, double-click to finish";
+        _statusLabel.stringValue = kITS_ClickDrawHelp;
         _statusLabel.textColor = [IllToolTheme accentColor];
     }
 }

@@ -733,6 +733,78 @@ void PerspectiveModule::DrawPerspectiveOverlay(AIAnnotatorMessage* message)
         }
     }
 
+    // --- Draw detected Hough lines (VP confidence visualization) ---
+    if (BridgeGetShowVPLines() && !fDetectedLines.empty() &&
+        fAutoMatchImgW > 0 && fAutoMatchImgH > 0)
+    {
+        // Find max votes for opacity scaling
+        int maxVotes = 1;
+        for (auto& dl : fDetectedLines) {
+            if (dl.votes > maxVotes) maxVotes = dl.votes;
+        }
+
+        // Coordinate mapping: pixel -> artwork (same as AutoMatch)
+        double artW = (double)(fAutoMatchArtBounds.right - fAutoMatchArtBounds.left);
+        double artH = (double)(fAutoMatchArtBounds.top - fAutoMatchArtBounds.bottom);
+        double scaleX = artW / (double)fAutoMatchImgW;
+        double scaleY = artH / (double)fAutoMatchImgH;
+
+        auto pixToArt = [&](double px, double py, AIRealPoint& out) {
+            out.h = (AIReal)((double)fAutoMatchArtBounds.left + px * scaleX);
+            out.v = (AIReal)((double)fAutoMatchArtBounds.top  - py * scaleY);
+        };
+
+        // Cluster colors: VP1=blue, VP2=red, VP3=green
+        AIRGBColor clusterColors[3];
+        clusterColors[0] = {0, 0, 65535};         // VP1: blue
+        clusterColors[1] = {65535, 0, 0};          // VP2: red
+        clusterColors[2] = {0, 52428, 0};          // VP3: green
+
+        sAIAnnotatorDrawer->SetLineDashedEx(drawer, nullptr, 0);
+
+        double extLen = 2000.0;  // line extension in pixel space
+
+        for (auto& dl : fDetectedLines) {
+            if (dl.cluster < 0 || dl.cluster > 2) continue;
+
+            // Convert Hough (rho, theta) to two pixel-space endpoints
+            double cosT = std::cos(dl.theta);
+            double sinT = std::sin(dl.theta);
+            double x0 = dl.rho * cosT;
+            double y0 = dl.rho * sinT;
+
+            double px1 = x0 + extLen * (-sinT);
+            double py1 = y0 + extLen * (cosT);
+            double px2 = x0 - extLen * (-sinT);
+            double py2 = y0 - extLen * (cosT);
+
+            // Clamp endpoints to image bounds (sufficient for visualization)
+            px1 = std::max(0.0, std::min((double)fAutoMatchImgW, px1));
+            py1 = std::max(0.0, std::min((double)fAutoMatchImgH, py1));
+            px2 = std::max(0.0, std::min((double)fAutoMatchImgW, px2));
+            py2 = std::max(0.0, std::min((double)fAutoMatchImgH, py2));
+
+            // Convert pixel endpoints to artwork coordinates
+            AIRealPoint artP1, artP2;
+            pixToArt(px1, py1, artP1);
+            pixToArt(px2, py2, artP2);
+
+            // Convert artwork to view coordinates
+            AIPoint vP1, vP2;
+            if (sAIDocumentView->ArtworkPointToViewPoint(NULL, &artP1, &vP1) != kNoErr) continue;
+            if (sAIDocumentView->ArtworkPointToViewPoint(NULL, &artP2, &vP2) != kNoErr) continue;
+
+            // Opacity proportional to votes
+            double opacity = std::min(1.0, (double)dl.votes / (double)maxVotes);
+            opacity = std::max(0.15, opacity * 0.7);  // floor at 15%, scale to 70% max
+
+            sAIAnnotatorDrawer->SetColor(drawer, clusterColors[dl.cluster]);
+            sAIAnnotatorDrawer->SetOpacity(drawer, (AIReal)opacity);
+            sAIAnnotatorDrawer->SetLineWidth(drawer, 1.0);
+            sAIAnnotatorDrawer->DrawLine(drawer, vP1, vP2);
+        }
+    }
+
     // Restore defaults
     sAIAnnotatorDrawer->SetOpacity(drawer, 1.0);
     sAIAnnotatorDrawer->SetLineWidth(drawer, 1.0);

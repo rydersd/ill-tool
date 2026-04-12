@@ -9,6 +9,7 @@
 
 #import "GroupingPanelController.h"
 #import "IllToolTheme.h"
+#import "IllToolStrings.h"
 #import "HttpBridge.h"
 #import <cstdio>
 #import <string>
@@ -71,13 +72,13 @@ static const CGFloat kSliderH     = 18.0;
     CGFloat y = totalHeight - kPadding;
 
     // --- Title ---
-    NSTextField *title = [IllToolTheme makeLabelWithText:@"Grouping Tools" font:[NSFont boldSystemFontOfSize:12] color:[IllToolTheme textColor]];
+    NSTextField *title = [IllToolTheme makeLabelWithText:kITS_GroupingTools font:[NSFont boldSystemFontOfSize:12] color:[IllToolTheme textColor]];
     title.frame = NSMakeRect(kPadding, y - 16, kPanelWidth - 2*kPadding, 16);
     [root addSubview:title];
     y -= 24;
 
     // --- Group name field ---
-    NSTextField *nameLbl = [IllToolTheme makeLabelWithText:@"Group Name" font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
+    NSTextField *nameLbl = [IllToolTheme makeLabelWithText:kITS_GroupName font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
     nameLbl.frame = NSMakeRect(kPadding, y - 14, 80, 14);
     [root addSubview:nameLbl];
     y -= (14 + 2);
@@ -85,7 +86,7 @@ static const CGFloat kSliderH     = 18.0;
     NSTextField *nameField = [[NSTextField alloc] initWithFrame:
         NSMakeRect(kPadding, y - kRowHeight, kPanelWidth - 2*kPadding, kRowHeight)];
     nameField.font = [IllToolTheme labelFont];
-    nameField.placeholderString = @"Enter group name...";
+    nameField.placeholderString = kITS_GroupNamePlaceholder;
     nameField.bezelStyle = NSTextFieldSquareBezel;
     nameField.bordered = YES;
     nameField.editable = YES;
@@ -95,7 +96,7 @@ static const CGFloat kSliderH     = 18.0;
     y -= (kRowHeight + kPadding);
 
     // --- Copy to Group button ---
-    NSButton *copyBtn = [IllToolTheme makeButtonWithTitle:@"Copy to Group" target:self action:@selector(onCopyToGroup:)];
+    NSButton *copyBtn = [IllToolTheme makeButtonWithTitle:kITS_CopyToGroup target:self action:@selector(onCopyToGroup:)];
     copyBtn.frame = NSMakeRect(kPadding, y - kRowHeight, kPanelWidth - 2*kPadding, kRowHeight);
     [root addSubview:copyBtn];
     y -= (kRowHeight + kPadding);
@@ -108,7 +109,7 @@ static const CGFloat kSliderH     = 18.0;
     y -= (1 + kPadding);
 
     // --- Simplification slider ---
-    NSTextField *simpLbl = [IllToolTheme makeLabelWithText:@"Simplification" font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
+    NSTextField *simpLbl = [IllToolTheme makeLabelWithText:kITS_Simplification font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
     simpLbl.frame = NSMakeRect(kPadding, y - 14, 110, 14);
     [root addSubview:simpLbl];
 
@@ -127,7 +128,7 @@ static const CGFloat kSliderH     = 18.0;
     y -= (kSliderH + kPadding);
 
     // --- Points count ---
-    NSTextField *ptsLbl = [IllToolTheme makeLabelWithText:@"Points: 0" font:[IllToolTheme monoFont] color:[IllToolTheme accentColor]];
+    NSTextField *ptsLbl = [IllToolTheme makeLabelWithText:[NSString stringWithFormat:kITS_PointsN, 0] font:[IllToolTheme monoFont] color:[IllToolTheme accentColor]];
     ptsLbl.frame = NSMakeRect(kPadding, y - 14, kPanelWidth - 2*kPadding, 14);
     [root addSubview:ptsLbl];
     self.pointsCountLabel = ptsLbl;
@@ -135,15 +136,15 @@ static const CGFloat kSliderH     = 18.0;
 
     // --- Confirm / Reset / Cancel row ---
     CGFloat thirdW = (kPanelWidth - 2*kPadding - 2*4) / 3.0;
-    NSButton *confirmBtn = [IllToolTheme makeButtonWithTitle:@"Confirm" target:self action:@selector(onConfirm:)];
+    NSButton *confirmBtn = [IllToolTheme makeButtonWithTitle:kITS_Confirm target:self action:@selector(onConfirm:)];
     confirmBtn.frame = NSMakeRect(kPadding, y - kRowHeight, thirdW, kRowHeight);
     [root addSubview:confirmBtn];
 
-    NSButton *resetBtn = [IllToolTheme makeButtonWithTitle:@"Reset" target:self action:@selector(onReset:)];
+    NSButton *resetBtn = [IllToolTheme makeButtonWithTitle:kITS_Reset target:self action:@selector(onReset:)];
     resetBtn.frame = NSMakeRect(kPadding + thirdW + 4, y - kRowHeight, thirdW, kRowHeight);
     [root addSubview:resetBtn];
 
-    NSButton *cancelBtn = [IllToolTheme makeButtonWithTitle:@"Cancel" target:self action:@selector(onCancel:)];
+    NSButton *cancelBtn = [IllToolTheme makeButtonWithTitle:kITS_Cancel target:self action:@selector(onCancel:)];
     cancelBtn.frame = NSMakeRect(kPadding + 2*(thirdW + 4), y - kRowHeight, thirdW, kRowHeight);
     [root addSubview:cancelBtn];
     y -= (kRowHeight + kPadding);
@@ -156,13 +157,13 @@ static const CGFloat kSliderH     = 18.0;
     y -= (1 + kPadding);
 
     // --- In-group controls (hidden by default) ---
-    NSButton *detachBtn = [IllToolTheme makeButtonWithTitle:@"Detach from Group" target:self action:@selector(onDetach:)];
+    NSButton *detachBtn = [IllToolTheme makeButtonWithTitle:kITS_DetachFromGroup target:self action:@selector(onDetach:)];
     detachBtn.frame = NSMakeRect(kPadding, y - kRowHeight, kPanelWidth - 2*kPadding, kRowHeight);
     [root addSubview:detachBtn];
     self.detachButton = detachBtn;
     y -= (kRowHeight + 4);
 
-    NSButton *splitBtn = [IllToolTheme makeButtonWithTitle:@"Split to New Group" target:self action:@selector(onSplit:)];
+    NSButton *splitBtn = [IllToolTheme makeButtonWithTitle:kITS_SplitToNewGroup target:self action:@selector(onSplit:)];
     splitBtn.frame = NSMakeRect(kPadding, y - kRowHeight, kPanelWidth - 2*kPadding, kRowHeight);
     [root addSubview:splitBtn];
     self.splitButton = splitBtn;
@@ -179,7 +180,7 @@ static const CGFloat kSliderH     = 18.0;
 {
     NSString *name = self.groupNameField.stringValue;
     if (name.length == 0) {
-        name = @"Untitled Group";
+        name = kITS_UntitledGroup;
     }
     std::string groupName(name.UTF8String);
     fprintf(stderr, "[IllTool Panel] Copy to Group: '%s' — queuing via bridge\n", groupName.c_str());
@@ -231,7 +232,7 @@ static const CGFloat kSliderH     = 18.0;
 
 - (void)updatePointsCount:(NSInteger)count
 {
-    self.pointsCountLabel.stringValue = [NSString stringWithFormat:@"Points: %ld", (long)count];
+    self.pointsCountLabel.stringValue = [NSString stringWithFormat:kITS_PointsNLong, (long)count];
 }
 
 - (void)setInGroupMode:(BOOL)inGroup

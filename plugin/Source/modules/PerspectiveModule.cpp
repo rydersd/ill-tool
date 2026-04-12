@@ -612,6 +612,7 @@ void PerspectiveModule::ClearGrid()
     BridgeSetPerspectiveLocked(false);
     fNextLineIndex = 0;
     fPlacementMode = false;
+    fDetectedLines.clear();
     fprintf(stderr, "[IllTool PerspModule] Grid cleared\n");
     InvalidateFullView();
 }

@@ -156,6 +156,22 @@ private:
     static constexpr double kHandleHitRadius = 8.0;
 
     //------------------------------------------------------------------------------------
+    //  Detected Hough lines for VP confidence visualization
+    //------------------------------------------------------------------------------------
+
+    struct DetectedLine {
+        double rho, theta;
+        int votes;
+        int cluster;  // 0=VP1, 1=VP2, 2=VP3(vertical), -1=unassigned
+    };
+    std::vector<DetectedLine> fDetectedLines;
+
+    /** Coordinate mapping cached from AutoMatch for pixel->artwork conversion. */
+    AIRealRect fAutoMatchArtBounds = {0, 0, 0, 0};
+    int fAutoMatchImgW = 0;
+    int fAutoMatchImgH = 0;
+
+    //------------------------------------------------------------------------------------
     //  Undo
     //------------------------------------------------------------------------------------
 

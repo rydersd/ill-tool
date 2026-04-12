@@ -85,7 +85,7 @@ private:
     void DeleteNode(int nodeID);
     void MoveArtToLayer(int artNodeID, int layerNodeID);
     void AutoOrganize();
-    void SelectNode(int nodeID);
+    void SelectNode(int nodeID, bool addToSelection = false);
     void GroupSelectedItems(const std::string& groupName);
 
     // Preset system

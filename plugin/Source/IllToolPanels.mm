@@ -434,7 +434,7 @@ ASErr IllToolPlugin::AddPanels()
             fPluginRef, this,
             kIllToolPerspectivePanelID,
             kIllToolPerspectiveMenuItem,
-            530.0,
+            610.0,
             PerspectivePanelVisibilityChanged,
             ctrl, ctrl.rootView,
             fPerspectivePanel, fPerspectiveMenuHandle);

@@ -15,6 +15,7 @@
 
 #include "VisionEngine.h"
 #include "LearningEngine.h"
+#include "OnnxVisionBridge.h"
 
 #include <mutex>
 #include <cstdio>
@@ -1267,7 +1268,8 @@ std::vector<VisionEngine::ContourGroup> VisionEngine::SuggestGroups(
 //========================================================================================
 
 std::vector<VisionEngine::VanishingPointEstimate> VisionEngine::EstimateVanishingPoints(
-    int maxVPs, double cannyLow, double cannyHigh, int houghThreshold)
+    int maxVPs, double cannyLow, double cannyHigh, int houghThreshold,
+    bool adaptiveThresholds)
 {
     std::lock_guard<std::recursive_mutex> lock(mMutex);
     std::vector<VanishingPointEstimate> results;
@@ -1277,8 +1279,40 @@ std::vector<VisionEngine::VanishingPointEstimate> VisionEngine::EstimateVanishin
         return results;
     }
 
+    // Adaptive Canny: compute Otsu threshold from the grayscale histogram
+    if (adaptiveThresholds && !pixels.empty()) {
+        // Otsu's method — find the threshold that maximizes inter-class variance
+        int histogram[256] = {0};
+        int total = imgWidth * imgHeight;
+        for (int i = 0; i < total; i++) histogram[pixels[i]]++;
+
+        double sum = 0;
+        for (int i = 0; i < 256; i++) sum += i * histogram[i];
+
+        double sumB = 0, wB = 0, wF = 0, maxVariance = 0;
+        double otsu = 0;
+        for (int t = 0; t < 256; t++) {
+            wB += histogram[t];
+            if (wB == 0) continue;
+            wF = total - wB;
+            if (wF == 0) break;
+            sumB += t * histogram[t];
+            double mB = sumB / wB;
+            double mF = (sum - sumB) / wF;
+            double variance = wB * wF * (mB - mF) * (mB - mF);
+            if (variance > maxVariance) {
+                maxVariance = variance;
+                otsu = t;
+            }
+        }
+        cannyLow  = 0.33 * otsu;
+        cannyHigh = otsu;
+    }
+
     VE_LOG("EstimateVanishingPoints: image %dx%d, maxVPs=%d, canny=[%.0f,%.0f], hough=%d",
            imgWidth, imgHeight, maxVPs, cannyLow, cannyHigh, houghThreshold);
+    VE_LOG("EstimateVanishingPoints: using %s thresholds [%.0f, %.0f]",
+           adaptiveThresholds ? "adaptive" : "fixed", cannyLow, cannyHigh);
 
     // Step 1: Edge detection
     auto edges = CannyEdges(cannyLow, cannyHigh);
@@ -1304,22 +1338,27 @@ std::vector<VisionEngine::VanishingPointEstimate> VisionEngine::EstimateVanishin
     const double kFilterDeg = 5.0;
     const double kFilterRad = kFilterDeg * M_PI / 180.0;
     std::vector<HoughLine> perspLines;
+    std::vector<HoughLine> verticalLines;  // near-vertical lines for 3-point VP
     for (auto& l : lines) {
         double theta = l.theta;
         // Near-vertical: theta close to 0 or close to pi
-        if (theta < kFilterRad || theta > (M_PI - kFilterRad)) continue;
+        if (theta < kFilterRad || theta > (M_PI - kFilterRad)) {
+            verticalLines.push_back(l);
+            continue;
+        }
         // Near-horizontal: theta close to pi/2
         if (std::abs(theta - M_PI / 2.0) < kFilterRad) continue;
         perspLines.push_back(l);
     }
-    VE_LOG("EstimateVanishingPoints: %d lines after filtering horiz/vert", (int)perspLines.size());
+    VE_LOG("EstimateVanishingPoints: %d lines after filtering horiz/vert, %d vertical lines saved",
+           (int)perspLines.size(), (int)verticalLines.size());
     if (perspLines.size() < 2) {
         VE_LOG("EstimateVanishingPoints: not enough perspective lines after filtering");
         return results;
     }
 
-    // Step 4: Cluster by theta angle using 10-degree bins
-    const double kBinWidth = 10.0 * M_PI / 180.0;  // 10 degrees in radians
+    // Step 4: Cluster by theta angle using 5-degree bins
+    const double kBinWidth = 5.0 * M_PI / 180.0;  // 5 degrees in radians
     const int kNumBins = static_cast<int>(std::ceil(M_PI / kBinWidth));
     std::vector<std::vector<int>> bins(kNumBins);
     for (int i = 0; i < (int)perspLines.size(); i++) {
@@ -1438,6 +1477,76 @@ std::vector<VisionEngine::VanishingPointEstimate> VisionEngine::EstimateVanishin
         results.push_back(vp);
         VE_LOG("EstimateVanishingPoints: VP%d at (%.1f, %.1f) conf=%.2f lines=%d angle=%.1f°",
                ci, medX, medY, vp.confidence, nLines, cluster.avgTheta * 180.0 / M_PI);
+    }
+
+    // --- Second pass: vertical VP from near-vertical lines ---
+    // These lines were filtered out above; if enough exist, compute a 3rd VP.
+    // Only attempt when the caller requested more than 2 VPs (i.e. 3-point mode).
+    if (maxVPs > 2 && (int)verticalLines.size() >= 5) {
+        std::vector<double> vxs, vys;
+        int vPairCount = 0;
+        const int kMaxVPairs = 500;
+        int nVert = (int)verticalLines.size();
+        for (int a = 0; a < nVert && vPairCount < kMaxVPairs; a++) {
+            for (int b = a + 1; b < nVert && vPairCount < kMaxVPairs; b++) {
+                const HoughLine& l1 = verticalLines[a];
+                const HoughLine& l2 = verticalLines[b];
+
+                // Need some angular spread to get a valid intersection
+                double thetaDiff = std::abs(l1.theta - l2.theta);
+                if (thetaDiff < 0.5 * M_PI / 180.0) continue;  // < 0.5° apart = too parallel
+
+                double c1 = std::cos(l1.theta), s1 = std::sin(l1.theta);
+                double c2 = std::cos(l2.theta), s2 = std::sin(l2.theta);
+                double det = c1 * s2 - c2 * s1;
+                if (std::abs(det) < 1e-10) continue;
+
+                double ix = (l1.rho * s2 - l2.rho * s1) / det;
+                double iy = (l2.rho * c1 - l1.rho * c2) / det;
+
+                // Filter absurdly distant intersections (5x image diagonal)
+                double diagLen = std::sqrt((double)(imgWidth * imgWidth + imgHeight * imgHeight));
+                double cx = imgWidth * 0.5, cy = imgHeight * 0.5;
+                double dist = std::sqrt((ix - cx) * (ix - cx) + (iy - cy) * (iy - cy));
+                if (dist > 5.0 * diagLen) continue;
+
+                vxs.push_back(ix);
+                vys.push_back(iy);
+                vPairCount++;
+            }
+        }
+
+        if ((int)vxs.size() >= 3) {
+            std::sort(vxs.begin(), vxs.end());
+            std::sort(vys.begin(), vys.end());
+            double medVX = vxs[vxs.size() / 2];
+            double medVY = vys[vys.size() / 2];
+
+            // Confidence: fraction of vertical line votes relative to all lines
+            int vertVotes = 0;
+            for (auto& vl : verticalLines) vertVotes += vl.votes;
+            int allVotes = 0;
+            for (auto& l : lines) allVotes += l.votes;
+            double vertConf = (allVotes > 0) ?
+                std::min(1.0, (double)vertVotes / (double)allVotes * 2.0) : 0.0;
+
+            if (vertConf > 0.6) {
+                VanishingPointEstimate vertVP;
+                vertVP.x = medVX;
+                vertVP.y = medVY;
+                vertVP.lineCount = nVert;
+                vertVP.dominantAngle = 0.0;  // near-vertical = theta ~0
+                vertVP.confidence = vertConf;
+                results.push_back(vertVP);
+                VE_LOG("EstimateVanishingPoints: vertical VP at (%.1f, %.1f) conf=%.2f lines=%d",
+                       medVX, medVY, vertConf, nVert);
+            } else {
+                VE_LOG("EstimateVanishingPoints: vertical VP rejected (conf=%.2f < 0.6)", vertConf);
+            }
+        } else {
+            VE_LOG("EstimateVanishingPoints: too few vertical intersections (%d) for VP",
+                   (int)vxs.size());
+        }
     }
 
     return results;
@@ -1976,6 +2085,270 @@ std::vector<VisionEngine::VanishingPointEstimate> VisionEngine::EstimateVPsFromN
                (int)result.size(), vpX, vpY, edgeAngle * 180.0 / M_PI, planes[i].strength);
     }
 
+    return result;
+}
+
+//========================================================================================
+//  EstimateVPsFromMLNormals — ML-guided VP estimation using Metric3D surface normals
+//
+//  Strategy: normals give plane orientation priors, NOT VP positions.
+//  1. Get Metric3D normal map via ONNX (CHW float, model resolution)
+//  2. Cluster normal directions into dominant plane families (histogram peaks)
+//  3. For each plane: build a pixel mask, detect edges within it, detect lines
+//  4. Compute VP per plane via median line intersection
+//  5. Weight confidence by plane size × edge density
+//========================================================================================
+
+std::vector<VisionEngine::VanishingPointEstimate> VisionEngine::EstimateVPsFromMLNormals(
+    const char* imagePath, int maxVPs)
+{
+    std::lock_guard<std::recursive_mutex> lock(mMutex);
+    std::vector<VanishingPointEstimate> result;
+
+    if (!IsLoaded()) {
+        VE_LOG("EstimateVPsFromMLNormals: no image loaded");
+        return result;
+    }
+    if (!imagePath || imagePath[0] == '\0') {
+        VE_LOG("EstimateVPsFromMLNormals: null image path");
+        return result;
+    }
+    if (!ONNX_HasMetricDepth()) {
+        VE_LOG("EstimateVPsFromMLNormals: Metric3D model not available");
+        return result;
+    }
+
+    // --- Step 1: Get ML normal map via ONNX ---
+    float* mlDepth = nullptr;
+    float* mlNormals = nullptr;
+    float* mlConf = nullptr;
+    int mlW = 0, mlH = 0;
+
+    if (!ONNX_EstimateMetricDepth(imagePath, &mlDepth, &mlW, &mlH, &mlNormals, &mlConf)) {
+        VE_LOG("EstimateVPsFromMLNormals: ONNX_EstimateMetricDepth failed");
+        return result;
+    }
+    if (!mlNormals || mlW < 2 || mlH < 2) {
+        VE_LOG("EstimateVPsFromMLNormals: no normals returned (w=%d h=%d)", mlW, mlH);
+        if (mlDepth)   free(mlDepth);
+        if (mlNormals) free(mlNormals);
+        if (mlConf)    free(mlConf);
+        return result;
+    }
+
+    VE_LOG("EstimateVPsFromMLNormals: got ML normals %dx%d, image %dx%d",
+           mlW, mlH, imgWidth, imgHeight);
+
+    // --- Step 2: Compute per-pixel gradient angle from ML normals ---
+    // Normals are CHW: channel c at pixel i = mlNormals[c * mlH * mlW + i]
+    int mlPixels = mlW * mlH;
+    std::vector<double> pixelAngle(mlPixels);
+    std::vector<double> pixelMag(mlPixels);
+
+    for (int i = 0; i < mlPixels; i++) {
+        double nx = (double)mlNormals[0 * mlPixels + i];  // channel 0
+        double ny = (double)mlNormals[1 * mlPixels + i];  // channel 1
+        double mag = std::sqrt(nx * nx + ny * ny);
+        pixelMag[i] = mag;
+
+        double angle = std::atan2(ny, nx);
+        if (angle < 0) angle += M_PI;
+        if (angle >= M_PI) angle -= M_PI;
+        pixelAngle[i] = angle;
+    }
+
+    // --- Step 3: Cluster normal angles via histogram peaks ---
+    int numPlanes = std::min(maxVPs + 1, 5);
+    const int NUM_BINS = 36;  // 5 degrees each
+    std::vector<int> histogram(NUM_BINS, 0);
+    int totalGrad = 0;
+    const double magThreshold = 0.1;  // skip near-flat normals (nz dominant)
+
+    for (int i = 0; i < mlPixels; i++) {
+        if (pixelMag[i] < magThreshold) continue;
+        int bin = (int)(pixelAngle[i] / M_PI * NUM_BINS);
+        if (bin >= NUM_BINS) bin = NUM_BINS - 1;
+        histogram[bin]++;
+        totalGrad++;
+    }
+
+    if (totalGrad < 50) {
+        VE_LOG("EstimateVPsFromMLNormals: too few gradient pixels (%d)", totalGrad);
+        free(mlDepth); free(mlNormals);
+        if (mlConf) free(mlConf);
+        return result;
+    }
+
+    // Find histogram peaks (local maxima above average)
+    struct Peak { int bin; int count; double angle; };
+    std::vector<Peak> peaks;
+    for (int i = 0; i < NUM_BINS; i++) {
+        int prev = histogram[(i - 1 + NUM_BINS) % NUM_BINS];
+        int next = histogram[(i + 1) % NUM_BINS];
+        if (histogram[i] > prev && histogram[i] > next && histogram[i] > totalGrad / NUM_BINS) {
+            peaks.push_back({i, histogram[i], (i + 0.5) * M_PI / NUM_BINS});
+        }
+    }
+    std::sort(peaks.begin(), peaks.end(), [](const Peak& a, const Peak& b) {
+        return a.count > b.count;
+    });
+
+    int nClusters = std::min((int)peaks.size(), numPlanes);
+    if (nClusters < 1) {
+        VE_LOG("EstimateVPsFromMLNormals: no angle peaks found");
+        free(mlDepth); free(mlNormals);
+        if (mlConf) free(mlConf);
+        return result;
+    }
+
+    VE_LOG("EstimateVPsFromMLNormals: %d plane clusters from %d gradient pixels",
+           nClusters, totalGrad);
+
+    // --- Step 4: Per-cluster edge detection, line detection, VP via median intersection ---
+    double scaleX = (double)imgWidth / (double)mlW;
+    double scaleY = (double)imgHeight / (double)mlH;
+
+    // Pre-compute full-image Canny edges once (reused per cluster)
+    auto fullEdges = CannyEdges(50.0, 150.0);
+
+    for (int ci = 0; ci < nClusters && (int)result.size() < maxVPs; ci++) {
+        double clusterAngle = peaks[ci].angle;
+        double binWidth = M_PI / NUM_BINS;
+
+        // Build binary mask at loaded image resolution for this plane cluster
+        std::vector<uint8_t> planeMask(imgWidth * imgHeight, 0);
+        int maskPixelCount = 0;
+
+        for (int my = 0; my < mlH; my++) {
+            for (int mx = 0; mx < mlW; mx++) {
+                int mi = my * mlW + mx;
+                if (pixelMag[mi] < magThreshold) continue;
+
+                double angleDiff = std::abs(pixelAngle[mi] - clusterAngle);
+                if (angleDiff > M_PI / 2.0) angleDiff = M_PI - angleDiff;
+                if (angleDiff > binWidth * 1.5) continue;  // within ±1.5 bins
+
+                int ix = (int)(mx * scaleX);
+                int iy = (int)(my * scaleY);
+                if (ix >= imgWidth) ix = imgWidth - 1;
+                if (iy >= imgHeight) iy = imgHeight - 1;
+                planeMask[iy * imgWidth + ix] = 255;
+                maskPixelCount++;
+            }
+        }
+
+        if (maskPixelCount < 20) continue;
+
+        // AND mask with pre-computed edges to get cluster-specific edges
+        std::vector<uint8_t> maskedEdges(imgWidth * imgHeight, 0);
+        int edgeCount = 0;
+        for (int i = 0; i < imgWidth * imgHeight; i++) {
+            if (planeMask[i] && fullEdges[i]) {
+                maskedEdges[i] = 255;
+                edgeCount++;
+            }
+        }
+        if (edgeCount < 10) continue;
+
+        // Detect lines within this plane's edge mask
+        auto lines = DetectLines(maskedEdges, 1.0, M_PI / 180.0, 20);
+        if (lines.size() < 2) continue;
+        if (lines.size() > 150) lines.resize(150);
+
+        // Filter near-horizontal and near-vertical lines
+        const double kFilterRad = 5.0 * M_PI / 180.0;
+        std::vector<HoughLine> perspLines;
+        for (auto& l : lines) {
+            if (l.theta < kFilterRad || l.theta > (M_PI - kFilterRad)) continue;
+            if (std::abs(l.theta - M_PI / 2.0) < kFilterRad) continue;
+            perspLines.push_back(l);
+        }
+        if (perspLines.size() < 2) continue;
+
+        // Median intersection of line pairs
+        std::vector<double> xs, ys;
+        int nLines = (int)perspLines.size();
+        int pairCount = 0;
+        const int maxPairs = 300;
+
+        for (int a = 0; a < nLines && pairCount < maxPairs; a++) {
+            for (int b = a + 1; b < nLines && pairCount < maxPairs; b++) {
+                const HoughLine& l1 = perspLines[a];
+                const HoughLine& l2 = perspLines[b];
+
+                if (std::abs(l1.theta - l2.theta) < 2.0 * M_PI / 180.0) continue;
+
+                double c1 = std::cos(l1.theta), s1 = std::sin(l1.theta);
+                double c2 = std::cos(l2.theta), s2 = std::sin(l2.theta);
+                double det = c1 * s2 - c2 * s1;
+                if (std::abs(det) < 1e-10) continue;
+
+                double ix = (l1.rho * s2 - l2.rho * s1) / det;
+                double iy = (l2.rho * c1 - l1.rho * c2) / det;
+
+                // Reject absurdly distant intersections (>5x image diagonal)
+                double diagLen = std::sqrt((double)(imgWidth * imgWidth + imgHeight * imgHeight));
+                double cx = imgWidth * 0.5, cy = imgHeight * 0.5;
+                double dist = std::sqrt((ix - cx) * (ix - cx) + (iy - cy) * (iy - cy));
+                if (dist > 5.0 * diagLen) continue;
+
+                xs.push_back(ix);
+                ys.push_back(iy);
+                pairCount++;
+            }
+        }
+
+        if (xs.size() < 3) continue;
+
+        std::sort(xs.begin(), xs.end());
+        std::sort(ys.begin(), ys.end());
+        double medX = xs[xs.size() / 2];
+        double medY = ys[ys.size() / 2];
+
+        // Reject VP if too close to an existing one
+        bool tooClose = false;
+        for (auto& existing : result) {
+            double dx = medX - existing.x, dy = medY - existing.y;
+            if (std::sqrt(dx * dx + dy * dy) < imgWidth * 0.1) {
+                tooClose = true;
+                break;
+            }
+        }
+        if (tooClose) continue;
+
+        // Confidence: plane size fraction × edge density, capped at 1.0
+        double planeFrac = (double)maskPixelCount / (double)(imgWidth * imgHeight);
+        double edgeDensity = (maskPixelCount > 0) ? (double)edgeCount / (double)maskPixelCount : 0;
+        double confidence = std::min(1.0, planeFrac * 4.0 + edgeDensity * 2.0);
+
+        // Dominant angle: vote-weighted average theta
+        double sumTheta = 0;
+        int sumVotes = 0;
+        for (auto& l : perspLines) {
+            sumTheta += l.theta * l.votes;
+            sumVotes += l.votes;
+        }
+
+        VanishingPointEstimate vp;
+        vp.x = medX;
+        vp.y = medY;
+        vp.confidence = confidence;
+        vp.lineCount = (int)perspLines.size();
+        vp.dominantAngle = (sumVotes > 0) ? sumTheta / sumVotes : clusterAngle;
+        result.push_back(vp);
+
+        VE_LOG("EstimateVPsFromMLNormals: VP%d at (%.1f, %.1f) conf=%.2f lines=%d "
+               "planeAngle=%.1f° planePx=%d edges=%d",
+               (int)result.size(), medX, medY, confidence, (int)perspLines.size(),
+               clusterAngle * 180.0 / M_PI, maskPixelCount, edgeCount);
+    }
+
+    // Cleanup ONNX allocations
+    free(mlDepth);
+    free(mlNormals);
+    if (mlConf) free(mlConf);
+
+    VE_LOG("EstimateVPsFromMLNormals: returning %d VPs", (int)result.size());
     return result;
 }
 

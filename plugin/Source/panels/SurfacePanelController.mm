@@ -9,6 +9,7 @@
 
 #import "SurfacePanelController.h"
 #import "IllToolTheme.h"
+#import "IllToolStrings.h"
 #include "IllToolPlugin.h"
 #import "HttpBridge.h"
 #import <cstdio>
@@ -59,14 +60,14 @@
     root.layer.backgroundColor = [IllToolTheme panelBackground].CGColor;
 
     // Section title
-    NSTextField *title = [IllToolTheme makeLabelWithText:@"Surface Extraction" font:[IllToolTheme labelFont] color:[IllToolTheme accentColor]];
+    NSTextField *title = [IllToolTheme makeLabelWithText:kITS_SurfaceExtraction font:[IllToolTheme labelFont] color:[IllToolTheme accentColor]];
     title.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kRowHeight);
     title.font = [NSFont boldSystemFontOfSize:12];
     [root addSubview:title];
     y += kRowHeight + 4;
 
     // Extract mode toggle button
-    self.extractToggle = [NSButton checkboxWithTitle:@"Click-to-Extract Mode"
+    self.extractToggle = [NSButton checkboxWithTitle:kITS_ClickToExtract
                                              target:self
                                              action:@selector(extractToggled:)];
     self.extractToggle.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kRowHeight);
@@ -75,7 +76,7 @@
     y += kRowHeight + 8;
 
     // Sensitivity slider
-    NSTextField *sensTitleLabel = [IllToolTheme makeLabelWithText:@"Sensitivity:" font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
+    NSTextField *sensTitleLabel = [IllToolTheme makeLabelWithText:kITS_SensitivityLabel font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
     sensTitleLabel.frame = NSMakeRect(kPadding, y, 80, kRowHeight);
     [root addSubview:sensTitleLabel];
 
@@ -96,13 +97,13 @@
     y += kSliderH + 12;
 
     // Surface type display
-    self.surfaceTypeLabel = [IllToolTheme makeLabelWithText:@"Surface: ---" font:[IllToolTheme labelFont] color:[IllToolTheme greenColor]];
+    self.surfaceTypeLabel = [IllToolTheme makeLabelWithText:kITS_SurfaceDefault font:[IllToolTheme labelFont] color:[IllToolTheme greenColor]];
     self.surfaceTypeLabel.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kRowHeight);
     [root addSubview:self.surfaceTypeLabel];
     y += kRowHeight + 4;
 
     // Status label
-    self.statusLabel = [IllToolTheme makeLabelWithText:@"Enable extract mode, then click on reference" font:[IllToolTheme labelFont] color:[IllToolTheme secondaryTextColor]];
+    self.statusLabel = [IllToolTheme makeLabelWithText:kITS_SurfaceExtractHelp font:[IllToolTheme labelFont] color:[IllToolTheme secondaryTextColor]];
     self.statusLabel.frame = NSMakeRect(kPadding, y, kPanelWidth - 2*kPadding, kRowHeight * 2);
     self.statusLabel.maximumNumberOfLines = 2;
     [root addSubview:self.statusLabel];

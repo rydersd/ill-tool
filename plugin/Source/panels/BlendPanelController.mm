@@ -11,6 +11,7 @@
 
 #import "BlendPanelController.h"
 #import "IllToolTheme.h"
+#import "IllToolStrings.h"
 #import "HttpBridge.h"
 #import <cstdio>
 #import <string>
@@ -441,7 +442,7 @@ static std::vector<std::vector<std::pair<double,double>>> sPresets;
     CGFloat y = totalHeight - kPadding;
 
     // --- Title ---
-    NSTextField *title = [IllToolTheme makeLabelWithText:@"Blend" font:[NSFont boldSystemFontOfSize:12] color:[IllToolTheme textColor]];
+    NSTextField *title = [IllToolTheme makeLabelWithText:kITS_Blend font:[NSFont boldSystemFontOfSize:12] color:[IllToolTheme textColor]];
     title.frame = NSMakeRect(kPadding, y - 16, kPanelWidth - 2*kPadding, 16);
     [root addSubview:title];
     y -= 24;
@@ -452,18 +453,18 @@ static std::vector<std::vector<std::pair<double,double>>> sPresets;
 
     CGFloat halfW = (kPanelWidth - 2*kPadding - 4) / 2.0;
 
-    NSButton *pickABtn = [IllToolTheme makeButtonWithTitle:@"Pick A" target:self action:@selector(onPickA:)];
+    NSButton *pickABtn = [IllToolTheme makeButtonWithTitle:kITS_PickA target:self action:@selector(onPickA:)];
     pickABtn.frame = NSMakeRect(kPadding, y - kRowHeight, halfW, kRowHeight);
     [root addSubview:pickABtn];
     self.pickAButton = pickABtn;
 
-    NSButton *pickBBtn = [IllToolTheme makeButtonWithTitle:@"Pick B" target:self action:@selector(onPickB:)];
+    NSButton *pickBBtn = [IllToolTheme makeButtonWithTitle:kITS_PickB target:self action:@selector(onPickB:)];
     pickBBtn.frame = NSMakeRect(kPadding + halfW + 4, y - kRowHeight, halfW, kRowHeight);
     [root addSubview:pickBBtn];
     self.pickBButton = pickBBtn;
     y -= (kRowHeight + 4);
 
-    NSTextField *status = [IllToolTheme makeLabelWithText:@"No paths selected" font:[IllToolTheme monoFont] color:[IllToolTheme secondaryTextColor]];
+    NSTextField *status = [IllToolTheme makeLabelWithText:kITS_NoPathsSelected font:[IllToolTheme monoFont] color:[IllToolTheme secondaryTextColor]];
     status.frame = NSMakeRect(kPadding, y - 14, kPanelWidth - 2*kPadding, 14);
     [root addSubview:status];
     self.statusLabel = status;
@@ -480,7 +481,7 @@ static std::vector<std::vector<std::pair<double,double>>> sPresets;
     //  Section 2: Step Count (50pt)
     //==================================================================================
 
-    NSTextField *stepsLbl = [IllToolTheme makeLabelWithText:@"Steps" font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
+    NSTextField *stepsLbl = [IllToolTheme makeLabelWithText:kITS_Steps font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
     stepsLbl.frame = NSMakeRect(kPadding, y - 14, 60, 14);
     [root addSubview:stepsLbl];
 
@@ -511,12 +512,12 @@ static std::vector<std::vector<std::pair<double,double>>> sPresets;
     //  Section 3: Easing Presets (60pt)
     //==================================================================================
 
-    NSTextField *easingLbl = [IllToolTheme makeLabelWithText:@"Easing" font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
+    NSTextField *easingLbl = [IllToolTheme makeLabelWithText:kITS_Easing font:[IllToolTheme labelFont] color:[IllToolTheme textColor]];
     easingLbl.frame = NSMakeRect(kPadding, y - 14, 60, 14);
     [root addSubview:easingLbl];
     y -= (14 + 4);
 
-    NSArray<NSString *> *presetNames = @[@"Lin", @"In", @"Out", @"InOut"];
+    NSArray<NSString *> *presetNames = @[kITS_EasingLin, kITS_EasingIn, kITS_EasingOut, kITS_EasingInOut];
     CGFloat btnW = (kPanelWidth - 2*kPadding - 3*4) / 4.0;
     NSMutableArray<NSButton *> *easingBtns = [NSMutableArray array];
     for (int i = 0; i < 4; i++) {
@@ -563,11 +564,11 @@ static std::vector<std::vector<std::pair<double,double>>> sPresets;
     //  Section 5: Presets Save/Load (40pt)
     //==================================================================================
 
-    NSButton *saveBtn = [IllToolTheme makeButtonWithTitle:@"Save" target:self action:@selector(onSavePreset:)];
+    NSButton *saveBtn = [IllToolTheme makeButtonWithTitle:kITS_Save target:self action:@selector(onSavePreset:)];
     saveBtn.frame = NSMakeRect(kPadding, y - kRowHeight, halfW, kRowHeight);
     [root addSubview:saveBtn];
 
-    NSButton *loadBtn = [IllToolTheme makeButtonWithTitle:@"Load" target:self action:@selector(onLoadPreset:)];
+    NSButton *loadBtn = [IllToolTheme makeButtonWithTitle:kITS_Load target:self action:@selector(onLoadPreset:)];
     loadBtn.frame = NSMakeRect(kPadding + halfW + 4, y - kRowHeight, halfW, kRowHeight);
     [root addSubview:loadBtn];
     y -= (kRowHeight + kPadding);
@@ -583,7 +584,7 @@ static std::vector<std::vector<std::pair<double,double>>> sPresets;
     //  Section 6: Execute (50pt)
     //==================================================================================
 
-    NSButton *blendBtn = [NSButton buttonWithTitle:@"Blend" target:self action:@selector(onBlend:)];
+    NSButton *blendBtn = [NSButton buttonWithTitle:kITS_Blend target:self action:@selector(onBlend:)];
     blendBtn.font = [NSFont boldSystemFontOfSize:12];
     blendBtn.bezelStyle = NSBezelStyleSmallSquare;
     blendBtn.frame = NSMakeRect(kPadding, y - 30, kPanelWidth - 2*kPadding, 30);
@@ -593,13 +594,13 @@ static std::vector<std::vector<std::pair<double,double>>> sPresets;
     blendBtn.layer.backgroundColor = [IllToolTheme accentColor].CGColor;
     blendBtn.layer.cornerRadius = 3.0;
     NSMutableAttributedString *blendTitle = [[NSMutableAttributedString alloc]
-        initWithString:@"Blend"];
+        initWithString:kITS_Blend];
     [blendTitle addAttribute:NSForegroundColorAttributeName
                        value:[NSColor whiteColor]
-                       range:NSMakeRange(0, 5)];
+                       range:NSMakeRange(0, [kITS_Blend length])];
     [blendTitle addAttribute:NSFontAttributeName
                        value:[NSFont boldSystemFontOfSize:12]
-                       range:NSMakeRange(0, 5)];
+                       range:NSMakeRange(0, [kITS_Blend length])];
     blendBtn.attributedTitle = blendTitle;
     [blendTitle release];
     [root addSubview:blendBtn];
@@ -658,13 +659,13 @@ static std::vector<std::vector<std::pair<double,double>>> sPresets;
     if (hasA) {
         self.pickAButton.layer.backgroundColor = [IllToolTheme accentColor].CGColor;
         NSMutableAttributedString *attrTitle = [[NSMutableAttributedString alloc]
-            initWithString:@"Pick A"];
+            initWithString:kITS_PickA];
         [attrTitle addAttribute:NSForegroundColorAttributeName
                           value:[NSColor whiteColor]
-                          range:NSMakeRange(0, 6)];
+                          range:NSMakeRange(0, [kITS_PickA length])];
         [attrTitle addAttribute:NSFontAttributeName
                           value:[IllToolTheme labelFont]
-                          range:NSMakeRange(0, 6)];
+                          range:NSMakeRange(0, [kITS_PickA length])];
         self.pickAButton.attributedTitle = attrTitle;
         [attrTitle release];
     } else {
@@ -676,13 +677,13 @@ static std::vector<std::vector<std::pair<double,double>>> sPresets;
     if (hasB) {
         self.pickBButton.layer.backgroundColor = [IllToolTheme accentColor].CGColor;
         NSMutableAttributedString *attrTitle = [[NSMutableAttributedString alloc]
-            initWithString:@"Pick B"];
+            initWithString:kITS_PickB];
         [attrTitle addAttribute:NSForegroundColorAttributeName
                           value:[NSColor whiteColor]
-                          range:NSMakeRange(0, 6)];
+                          range:NSMakeRange(0, [kITS_PickA length])];
         [attrTitle addAttribute:NSFontAttributeName
                           value:[IllToolTheme labelFont]
-                          range:NSMakeRange(0, 6)];
+                          range:NSMakeRange(0, [kITS_PickA length])];
         self.pickBButton.attributedTitle = attrTitle;
         [attrTitle release];
     } else {
@@ -691,16 +692,16 @@ static std::vector<std::vector<std::pair<double,double>>> sPresets;
 
     // Update status label
     if (hasA && hasB) {
-        self.statusLabel.stringValue = @"Ready to blend";
+        self.statusLabel.stringValue = kITS_ReadyToBlend;
         self.statusLabel.textColor = [IllToolTheme accentColor];
     } else if (hasA) {
-        self.statusLabel.stringValue = @"Path A set";
+        self.statusLabel.stringValue = kITS_PathASet;
         self.statusLabel.textColor = [IllToolTheme secondaryTextColor];
     } else if (hasB) {
-        self.statusLabel.stringValue = @"Path B set";
+        self.statusLabel.stringValue = kITS_PathBSet;
         self.statusLabel.textColor = [IllToolTheme secondaryTextColor];
     } else {
-        self.statusLabel.stringValue = @"No paths selected";
+        self.statusLabel.stringValue = kITS_NoPathsSelected;
         self.statusLabel.textColor = [IllToolTheme secondaryTextColor];
     }
 

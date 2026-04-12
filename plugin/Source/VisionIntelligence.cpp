@@ -220,3 +220,34 @@ void VIFreeDepthMap(float* d)
 {
     ONNX_FreeDepthMap(d);
 }
+
+//========================================================================================
+//  Metric Depth + Surface Normals — via ONNX Runtime (Metric3D v2)
+//========================================================================================
+
+bool VIEstimateMetricDepth(const char* imagePath,
+                           float** outDepth, int* outW, int* outH,
+                           float** outNormals,
+                           float** outConfidence)
+{
+    return ONNX_EstimateMetricDepth(imagePath, outDepth, outW, outH, outNormals, outConfidence);
+}
+
+bool VISaveDepthMapPNG(const float* depth, int w, int h,
+                       const char* outPath,
+                       float minDepth, float maxDepth)
+{
+    return ONNX_SaveDepthMapPNG(depth, w, h, outPath, minDepth, maxDepth);
+}
+
+bool VISaveNormalMapPNG(const float* normals, int w, int h,
+                        const char* outPath,
+                        const float* confidence, float confidenceThreshold)
+{
+    return ONNX_SaveNormalMapPNG(normals, w, h, outPath, confidence, confidenceThreshold);
+}
+
+bool VIHasMetricDepth(void)
+{
+    return ONNX_HasMetricDepth();
+}

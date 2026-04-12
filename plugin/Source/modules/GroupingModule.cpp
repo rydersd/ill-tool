@@ -75,11 +75,19 @@ void GroupingModule::CopyToGroup(const std::string& groupName)
             sAIPath->GetPathSegmentCount(art, &segCount);
             if (segCount == 0) continue;
 
-            bool hasSelected = false;
-            for (ai::int16 s = 0; s < segCount; s++) {
-                ai::int16 sel = kSegmentNotSelected;
-                sAIPath->GetPathSegmentSelected(art, s, &sel);
-                if (sel & kSegmentPointSelected) { hasSelected = true; break; }
+            // Check whole-path selection FIRST (Selection tool, marquee, etc.) —
+            // this is how users typically select multiple paths to group.
+            ai::int32 selAttr = 0;
+            sAIArt->GetArtUserAttr(art, kArtSelected, &selAttr);
+            bool hasSelected = (selAttr & kArtSelected) != 0;
+
+            // Fallback: segment-level selection (IllTool working-mode editing).
+            if (!hasSelected) {
+                for (ai::int16 s = 0; s < segCount; s++) {
+                    ai::int16 sel = kSegmentNotSelected;
+                    sAIPath->GetPathSegmentSelected(art, s, &sel);
+                    if (sel & kSegmentPointSelected) { hasSelected = true; break; }
+                }
             }
             if (hasSelected) selectedPaths.push_back(art);
         }

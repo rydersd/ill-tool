@@ -94,6 +94,30 @@ int VIDetectHandPose(const char* imagePath, VIJoint** outJoints);
 bool VIEstimateDepth(const char* imagePath, float** outDepthMap, int* outWidth, int* outHeight);
 void VIFreeDepthMap(float* depthMap);
 
+// --- Metric Depth + Surface Normals (Metric3D v2, ONNX only) ---
+// Returns true on success. Caller must free *outDepth, *outNormals, *outConfidence with free().
+// outDepth:      float array [outH * outW], values in meters
+// outNormals:    float array [outH * outW * 3], CHW layout (x,y,z planes), components -1 to 1
+// outConfidence: float array [outH * outW], per-pixel confidence 0-1 (can be NULL if not needed)
+bool VIEstimateMetricDepth(const char* imagePath,
+                           float** outDepth, int* outW, int* outH,
+                           float** outNormals,
+                           float** outConfidence);
+
+// Convert metric depth to a grayscale PNG for visualization.
+// minDepth/maxDepth: range for normalization (0 = auto-detect from data)
+bool VISaveDepthMapPNG(const float* depth, int w, int h,
+                       const char* outPath,
+                       float minDepth, float maxDepth);
+
+// Convert predicted normals to a standard normal map PNG (128-centered RGB).
+// confidence can be NULL; if non-NULL, pixels below confidenceThreshold are set to flat normal.
+bool VISaveNormalMapPNG(const float* normals, int w, int h,
+                        const char* outPath,
+                        const float* confidence, float confidenceThreshold);
+
+bool VIHasMetricDepth(void);
+
 #ifdef __cplusplus
 }
 #endif
